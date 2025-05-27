@@ -29,3 +29,6 @@ sentry.properties
 
 # Lock files
 pubspec.lock
+
+# Generated files
+example/sw.g.js

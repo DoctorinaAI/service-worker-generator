@@ -1,6 +1,20 @@
 {
   "version": "0.2.0",
   "configurations": [
+    {
+      "name": "[Dart] Example",
+      "request": "launch",
+      "type": "dart",
+      "program": "bin/main.dart",
+      "args": [
+        "--input=example/",
+        "--output=sw.g.js"
+      ],
+      "env": {
+        "ENVIRONMENT": "development"
+      },
+      "console": "debugConsole"
+    },
     // dart test test/unit_test.dart --color --platform=vm
     {
       "name": "[Dart] Unit Test (vm)",
