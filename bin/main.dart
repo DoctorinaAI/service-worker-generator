@@ -4,6 +4,7 @@ import 'dart:io' as io;
 
 import 'package:args/args.dart';
 import 'package:path/path.dart' as path;
+import 'package:sw/sw.dart';
 
 final $log = io.stdout.writeln; // Log to stdout
 final $err = io.stderr.writeln; // Log to stderr
@@ -25,7 +26,7 @@ void main([List<String>? arguments]) => runZonedGuarded<void>(
     final indexDirectory = io.Directory(
       path.normalize($arguments.option('input') ?? 'build/web'),
     );
-    final outputPath = io.File(
+    final outputFile = io.File(
       path.normalize(
         path.join(indexDirectory.path, $arguments.option('output') ?? '.'),
       ),
@@ -45,18 +46,48 @@ void main([List<String>? arguments]) => runZonedGuarded<void>(
       io.exit(1);
     }
 
-    outputPath.parent.createSync(recursive: true);
-    final writer = io.File(
-      outputPath.path,
-    ).openWrite(mode: io.FileMode.write, encoding: utf8);
-    try {} on Object {
-      $err('Error: Failed to open output file: ${outputPath.path}');
-      io.exit(1);
-    } finally {
-      // Ensure the writer is closed properly
-      await writer.flush();
-      await writer.close();
-    }
+    // Find all files in the input directory to include in the service worker
+    $log('Retrieving files from: ${indexDirectory.path}');
+    final files = filesInDirectory(
+      indexDirectory,
+      include:
+          $arguments
+              .option('glob')
+              ?.split(',')
+              .map((e) => e.trim())
+              .where((e) => e.isNotEmpty)
+              .toSet() ??
+          const <String>{'**'},
+      exclude:
+          $arguments
+              .option('no-glob')
+              ?.split(',')
+              .map((e) => e.trim())
+              .where((e) => e.isNotEmpty)
+              .toSet() ??
+          const <String>{'index.html'},
+    );
+
+    // Create a resource map with the relative paths and their MD5 hashes
+    $log('Generating resource map for ${files.length} files...');
+    final resources = <String, String>{
+      for (final MapEntry(key: String url, value: io.File file)
+          in files.entries)
+        url: await md5(file),
+    };
+
+    // Write the service worker file
+    $log('Writing service worker file to: ${outputFile.path}');
+    outputFile.parent.createSync(recursive: true);
+    await io.File(outputFile.path).writeAsString(
+      '\'use strict\';\n'
+      '\n'
+      'const RESOURCES = '
+      '${const JsonEncoder.withIndent('  ').convert(resources)}\n',
+      mode: io.FileMode.writeOnly,
+      encoding: utf8,
+      flush: true,
+    );
   },
   (e, s) {
     $err('An error occurred: $e');
@@ -69,7 +100,7 @@ ArgParser buildArgumentsParser() => ArgParser()
   ..addFlag(
     'help',
     abbr: 'h',
-    aliases: ['readme', 'usage'],
+    aliases: const <String>['readme', 'usage'],
     negatable: false,
     defaultsTo: false,
     help: 'Print this usage information',
@@ -77,7 +108,14 @@ ArgParser buildArgumentsParser() => ArgParser()
   ..addOption(
     'input',
     abbr: 'i',
-    aliases: ['dir', 'directory', 'project', 'build', 'web', 'index'],
+    aliases: const <String>[
+      'dir',
+      'directory',
+      'project',
+      'build',
+      'web',
+      'index',
+    ],
     mandatory: false,
     defaultsTo: 'build/web',
     valueHelp: 'path/to/build/web',
@@ -87,7 +125,7 @@ ArgParser buildArgumentsParser() => ArgParser()
   ..addOption(
     'output',
     abbr: 'o',
-    aliases: [
+    aliases: const <String>[
       'out',
       'file',
       'out-file',
@@ -100,6 +138,24 @@ ArgParser buildArgumentsParser() => ArgParser()
     defaultsTo: 'sw.js',
     valueHelp: 'path/to/output/service_worker.js',
     help: 'Output path for generated file relative to the input directory',
+  )
+  ..addOption(
+    'glob',
+    abbr: 'g',
+    aliases: const <String>['pattern', 'files', 'assets', 'include'],
+    mandatory: false,
+    defaultsTo: '**',
+    valueHelp: 'assets/**/*.json, assets/**/*.png, **/*.js',
+    help: 'Glob pattern to include files in the service worker',
+  )
+  ..addOption(
+    'no-glob',
+    abbr: 'e',
+    aliases: const <String>['no-pattern', 'no-files', 'no-assets', 'exclude'],
+    mandatory: false,
+    defaultsTo: 'index.html',
+    valueHelp: 'index.html, assets/NOTICES, sw.js, **/node_modules/**',
+    help: 'Glob pattern to exclude files from the service worker',
   );
 
 /// Help message for the command line arguments

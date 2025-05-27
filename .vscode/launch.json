@@ -8,7 +8,9 @@
       "program": "bin/main.dart",
       "args": [
         "--input=example/",
-        "--output=sw.g.js"
+        "--output=sw.g.js",
+        "--glob=**/*.js, **/*.json, assets/**",
+        "--no-glob=sw.g.js, assets/NOTICES",
       ],
       "env": {
         "ENVIRONMENT": "development"

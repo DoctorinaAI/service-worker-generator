@@ -1,5 +1,8 @@
 include: package:lints/recommended.yaml
 
+formatter:
+  page_width: 80
+
 analyzer:
   exclude:
     - "example/**"
@@ -41,6 +44,10 @@ linter:
     # Enabling rules
     prefer_relative_imports: true
     avoid_relative_lib_imports: true
+    prefer_const_constructors: true
+    prefer_const_literals_to_create_immutables: true
+    prefer_const_declarations: true
+    prefer_const_constructors_in_immutables: true
 
     # Disable rules
     sort_pub_dependencies: false
@@ -92,10 +99,6 @@ linter:
     parameter_assignments: true
     prefer_asserts_in_initializer_lists: true
     prefer_asserts_with_message: true
-    prefer_const_constructors: true
-    prefer_const_constructors_in_immutables: true
-    prefer_const_declarations: true
-    prefer_const_literals_to_create_immutables: true
     prefer_constructors_over_static_methods: true
     prefer_expression_function_bodies: true
     prefer_final_in_for_each: true
