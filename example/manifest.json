@@ -1,0 +1,14 @@
+{
+    "name": "Service Worker",
+    "short_name": "SW",
+    "description": "A simple service worker example",
+    "id": "/",
+    "start_url": "/?source=pwa",
+    "display": "standalone",
+    "background_color": "#ffffff",
+    "theme_color": "#ffffff",
+    "orientation": "portrait-primary",
+    "prefer_related_applications": false,
+    "icons": [],
+    "screenshots": []
+}
