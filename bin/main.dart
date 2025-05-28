@@ -65,7 +65,7 @@ void main([List<String>? arguments]) => runZonedGuarded<void>(
               .map((e) => e.trim())
               .where((e) => e.isNotEmpty)
               .toSet() ??
-          const <String>{'index.html'},
+          const <String>{},
     );
 
     // Create a resource map with the relative paths and their MD5 hashes
@@ -94,7 +94,10 @@ void main([List<String>? arguments]) => runZonedGuarded<void>(
     var serviceWorkerText = buildServiceWorker(
       cachePrefix: cachePrefix,
       cacheVersion: cacheVersion,
-      resources: resources,
+      resources: <String, String>{
+        if (resources['index.html'] case String md5) '/': md5,
+        ...resources,
+      },
     );
     if (!$arguments.flag('comments'))
       serviceWorkerText = serviceWorkerText.replaceAll(
@@ -198,8 +201,8 @@ ArgParser buildArgumentsParser() => ArgParser()
     abbr: 'e',
     aliases: const <String>['no-pattern', 'no-files', 'no-assets', 'exclude'],
     mandatory: false,
-    defaultsTo: 'index.html',
-    valueHelp: 'index.html, assets/NOTICES, sw.js, **/node_modules/**',
+    defaultsTo: '',
+    valueHelp: 'assets/NOTICES, sw.js, **/node_modules/**',
     help: 'Glob pattern to exclude files from the service worker',
   )
   ..addFlag(

@@ -36,7 +36,7 @@ String buildServiceWorker({
 
 const String _serviceWorkerBody = '''
 // ---------------------------
-// Install: Precache TEMP
+// Install: Pre-cache CORE into TEMP
 // ---------------------------
 self.addEventListener('install', event => {
   // Activate new SW immediately without waiting for clients to close
@@ -50,7 +50,7 @@ self.addEventListener('install', event => {
 });
 
 // ---------------------------
-// Activate: Populate & Clean Caches
+// Activate: Populate content cache & clean up old caches
 // ---------------------------
 self.addEventListener('activate', event => {
   event.waitUntil((async () => {
@@ -122,9 +122,10 @@ self.addEventListener('fetch', event => {
       return fetch(request);
     }
 
-    // 2) Strip query params like '?v=HASH' for consistent lookups
+    // 2) Normalize URL: strip origin, leading slash, and ignore query params
     const url = new URL(request.url);
-    let key = normalizeUrl(url);
+    let key = url.pathname.startsWith('/') ? url.pathname.slice(1) : url.pathname;
+    if (key === '') key = '/';
 
     // 3) Cache-first strategy for known static resources
     if (RESOURCES[key]) {
@@ -163,7 +164,9 @@ self.addEventListener('message', event => {
 // ---------------------------
 
 /**
- * Cache-first: return cache or fetch/update cache
+ * Cache-first strategy:
+ *  - Return cached response if available
+ *  - Otherwise fetch from network, cache it, and return it
  */
 async function cacheFirst(request) {
   try {
@@ -188,7 +191,9 @@ async function cacheFirst(request) {
 }
 
 /**
- * Online-first (for navigation shell)
+ * Online-first strategy (for SPA navigation):
+ *  - Attempt network fetch and cache the result
+ *  - On failure, fall back to cache.match(request) or to index.html
  */
 async function onlineFirst(request) {
   try {
@@ -201,7 +206,7 @@ async function onlineFirst(request) {
     throw new Error('Network failed');
   } catch (err) {
     const cache = await caches.open(CACHE_NAME);
-    return await cache.match(request);
+    return (await cache.match(request)) || (await cache.match('index.html'));
   }
 }
 
@@ -218,7 +223,10 @@ async function trimCache(cacheName, maxEntries) {
 }
 
 /**
- * Runtime cache: fetch, cache & return
+ * Runtime caching with TTL and entry trimming:
+ *  - Expire entries older than CACHE_TTL
+ *  - Return cached if available
+ *  - Otherwise fetch, cache, trim cache size, and return
  */
 async function runtimeCache(request) {
   try {
@@ -248,7 +256,7 @@ async function runtimeCache(request) {
 }
 
 /**
- * Downloads all RESOURCES not yet in CACHE_NAME
+ * Downloads all CORE resources that are not yet cached
  */
 async function downloadOffline() {
   const contentCache = await caches.open(CACHE_NAME);
@@ -260,14 +268,7 @@ async function downloadOffline() {
 }
 
 /**
- * Normalizes a URL by removing query parameters like ?v=HASH
- */
-function normalizeUrl(url) {
-  return url.split('?v=')[0].substring(self.location.origin.length + 1) || '/';
-}
-
-/**
- * Expires cache entries older than ttl (in milliseconds)
+ * Expire cache entries older than the given TTL (in milliseconds).
  */
 async function expireCache(cacheName, ttl) {
   const cache = await caches.open(cacheName);
