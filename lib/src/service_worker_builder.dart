@@ -22,8 +22,12 @@ String buildServiceWorker({
     'const RUNTIME_ENTRIES = 50; // max entries in runtime cache\n'
     'const CACHE_TTL       = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds\n'
     'const MEDIA_EXT       = /\\.(png|jpe?g|svg|gif|webp|ico|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|pdf|json|jsonp)\$/i\n'
-    'const RESOURCES_SIZE  = ${resources.values.fold<int>(0, (total, obj) => switch (obj) {
-      <String, Object?>{'size': int size} when size > 0 => total + size,
+    'const RESOURCES_SIZE  = ${resources.entries.fold<int>(0, (total, obj) => switch (obj) {
+      // Exclude the root path from size calculation, as it represents the app itself
+      MapEntry<String, Object?>(key: '/') => total,
+      // For other entries, sum their sizes if they are valid and greater than zero
+      MapEntry<String, Object?>(value: <String, Object?>{'size': int size}) when size > 0 => total + size,
+      // Otherwise, just return the accumulated total as is
       _ => total,
     })}; // total size of all resources in bytes\n'
     '\n'
