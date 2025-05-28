@@ -25,7 +25,7 @@ String buildServiceWorker({
     'const RESOURCES_SIZE  = ${resources.values.fold<int>(0, (total, obj) => switch (obj) {
       <String, Object?>{'size': int size} when size > 0 => total + size,
       _ => total,
-    })}; // total number of resources to cache\n'
+    })}; // total size of all resources in bytes\n'
     '\n'
     '// ---------------------------\n'
     '// Resource Manifest with MD5 hash \n'
