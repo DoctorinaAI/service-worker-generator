@@ -70,10 +70,14 @@ void main([List<String>? arguments]) => runZonedGuarded<void>(
 
     // Create a resource map with the relative paths and their MD5 hashes
     $log('Generating resource map for ${files.length} files...');
-    final resources = <String, String>{
+    final resources = <String, Object?>{
       for (final MapEntry(key: String url, value: io.File file)
           in files.entries)
-        url: await md5(file),
+        url: <String, Object?>{
+          'name': path.basename(url),
+          'size': await file.length(),
+          'hash': await md5(file),
+        },
     };
 
     // Cache prefix for the service worker
@@ -94,8 +98,8 @@ void main([List<String>? arguments]) => runZonedGuarded<void>(
     var serviceWorkerText = buildServiceWorker(
       cachePrefix: cachePrefix,
       cacheVersion: cacheVersion,
-      resources: <String, String>{
-        if (resources['index.html'] case String md5) '/': md5,
+      resources: <String, Object?>{
+        if (resources['index.html'] case Object obj) '/': obj,
         ...resources,
       },
     );

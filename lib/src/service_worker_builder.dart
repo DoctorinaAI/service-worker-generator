@@ -6,7 +6,7 @@ import 'dart:convert' show JsonEncoder;
 String buildServiceWorker({
   String cachePrefix = 'app-cache',
   String cacheVersion = '1.0.0',
-  Map<String, String> resources = const <String, String>{},
+  Map<String, Object?> resources = const <String, Object?>{},
 }) =>
     '\'use strict\';\n'
     '\n'
@@ -22,9 +22,13 @@ String buildServiceWorker({
     'const RUNTIME_ENTRIES = 50; // max entries in runtime cache\n'
     'const CACHE_TTL       = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds\n'
     'const MEDIA_EXT       = /\\.(png|jpe?g|svg|gif|webp|ico|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|pdf|json|jsonp)\$/i\n'
+    'const RESOURCES_SIZE  = ${resources.values.fold<int>(0, (total, obj) => switch (obj) {
+      <String, Object?>{'size': int size} when size > 0 => total + size,
+      _ => total,
+    })}; // total number of resources to cache\n'
     '\n'
     '// ---------------------------\n'
-    '// Resource Manifest ⇒ MD5 hash \n'
+    '// Resource Manifest with MD5 hash \n'
     '// ---------------------------\n'
     'const RESOURCES = '
     '${const JsonEncoder.withIndent('  ').convert(resources)}\n'
@@ -87,7 +91,7 @@ self.addEventListener('activate', event => {
       (await contentCache.keys())
         .filter(request => {
           const key = request.url.replace(origin, '') || '/';
-          return RESOURCES[key] !== oldManifest[key];
+          return RESOURCES[key]?.hash !== oldManifest[key]?.hash;
         })
         .map(request => contentCache.delete(request))
     );
@@ -128,7 +132,7 @@ self.addEventListener('fetch', event => {
     if (key === '') key = '/';
 
     // 3) Cache-first strategy for known static resources
-    if (RESOURCES[key]) {
+    if (RESOURCES[key]?.hash) {
       return cacheFirst(request);
     }
 
