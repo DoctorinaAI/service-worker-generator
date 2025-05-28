@@ -100,10 +100,7 @@ void main([List<String>? arguments]) => runZonedGuarded<void>(
       },
     );
     if (!$arguments.flag('comments'))
-      serviceWorkerText = serviceWorkerText.replaceAll(
-        RegExp(r'\s*//.*\n'),
-        '',
-      );
+      serviceWorkerText = removeComments(serviceWorkerText);
 
     // Write the service worker file
     $log('Writing service worker file to: ${outputFile.path}');
