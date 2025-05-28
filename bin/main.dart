@@ -76,14 +76,37 @@ void main([List<String>? arguments]) => runZonedGuarded<void>(
         url: await md5(file),
     };
 
+    // Cache prefix for the service worker
+    // This can be used to differentiate between different service workers
+    final cachePrefix =
+        $arguments
+            .option('prefix')
+            ?.replaceAll(RegExp('[^A-Za-z0-9_-]'), '-')
+            .replaceAll(RegExp('-{2,}'), '-') ??
+        'app-cache';
+    final cacheVersion =
+        $arguments
+            .option('version')
+            ?.replaceAll(RegExp('[^A-Za-z0-9_-]'), '-')
+            .replaceAll(RegExp('-{2,}'), '-') ??
+        DateTime.now().millisecondsSinceEpoch.toString();
+
+    var serviceWorkerText = buildServiceWorker(
+      cachePrefix: cachePrefix,
+      cacheVersion: cacheVersion,
+      resources: resources,
+    );
+    if (!$arguments.flag('comments'))
+      serviceWorkerText = serviceWorkerText.replaceAll(
+        RegExp(r'\s*//.*\n'),
+        '',
+      );
+
     // Write the service worker file
     $log('Writing service worker file to: ${outputFile.path}');
     outputFile.parent.createSync(recursive: true);
     await io.File(outputFile.path).writeAsString(
-      '\'use strict\';\n'
-      '\n'
-      'const RESOURCES = '
-      '${const JsonEncoder.withIndent('  ').convert(resources)}\n',
+      serviceWorkerText,
       mode: io.FileMode.writeOnly,
       encoding: utf8,
       flush: true,
@@ -140,6 +163,28 @@ ArgParser buildArgumentsParser() => ArgParser()
     help: 'Output path for generated file relative to the input directory',
   )
   ..addOption(
+    'prefix',
+    abbr: 'p',
+    aliases: const <String>['prefixes', 'cache-prefix'],
+    mandatory: false,
+    defaultsTo: 'app-cache',
+    valueHelp: 'app-cache',
+    help:
+        'Prefix for the service worker cache name. '
+        'This can be used to differentiate between different service workers '
+        'or versions of the same service worker.',
+  )
+  ..addOption(
+    'version',
+    abbr: 'v',
+    aliases: const <String>['cache', 'cache-version'],
+    mandatory: false,
+    valueHelp: '1.0.0, 20231001, v1.2.3',
+    help:
+        'Version of the service worker cache. '
+        'This can be used to bust the cache when deploying updates.',
+  )
+  ..addOption(
     'glob',
     abbr: 'g',
     aliases: const <String>['pattern', 'files', 'assets', 'include'],
@@ -156,6 +201,16 @@ ArgParser buildArgumentsParser() => ArgParser()
     defaultsTo: 'index.html',
     valueHelp: 'index.html, assets/NOTICES, sw.js, **/node_modules/**',
     help: 'Glob pattern to exclude files from the service worker',
+  )
+  ..addFlag(
+    'comments',
+    abbr: 'c',
+    aliases: const <String>['comment', 'comments', 'with-comments'],
+    negatable: true,
+    defaultsTo: false,
+    help:
+        'Include comments in the generated service worker file. '
+        'This is useful for debugging and understanding the generated code.',
   );
 
 /// Help message for the command line arguments

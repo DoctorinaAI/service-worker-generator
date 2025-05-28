@@ -11,6 +11,7 @@
         "--output=sw.g.js",
         "--glob=**/*.js, **/*.json, assets/**",
         "--no-glob=sw.g.js, assets/NOTICES",
+        "--comments",
       ],
       "env": {
         "ENVIRONMENT": "development"
