@@ -175,6 +175,13 @@ self.addEventListener('message', event => {
  * Cache-first strategy:
  *  - Return cached response if available
  *  - Otherwise fetch from network, cache it, and return it
+ * This is used for static resources
+ * to ensure fast loading and offline availability.
+ * If the network fetch fails,
+ * it returns a 503 response indicating a network error.
+ *
+ * @param {Request} request - The request to handle.
+ * @returns {Promise<Response>} - The cached response or fetched response.
  */
 async function cacheFirst(request) {
   try {
@@ -202,6 +209,11 @@ async function cacheFirst(request) {
  * Online-first strategy (for SPA navigation):
  *  - Attempt network fetch and cache the result
  *  - On failure, fall back to cache.match(request) or to index.html
+ * This is used for navigation requests
+ * to ensure the latest version is served when online.
+ * If the network fails, it falls back to the cached version.
+ * @param {Request} request - The request to handle.
+ * @returns {Promise<Response>} - The response from the network or cache.
  */
 async function onlineFirst(request) {
   try {
@@ -220,6 +232,11 @@ async function onlineFirst(request) {
 
 /**
  * Trim cache to a maximum number of entries
+ * This function removes the oldest entries
+ * until the cache size is within the specified limit.
+ * @param {string} cacheName - The name of the cache to trim.
+ * @param {number} maxEntries - The maximum number of entries to keep in the cache.
+ * @returns {Promise<void>}
  */
 async function trimCache(cacheName, maxEntries) {
   const cache = await caches.open(cacheName);
@@ -235,6 +252,8 @@ async function trimCache(cacheName, maxEntries) {
  *  - Expire entries older than CACHE_TTL
  *  - Return cached if available
  *  - Otherwise fetch, cache, trim cache size, and return
+ * This is used for dynamic content like images, API responses, etc.
+ * @param {Request} request - The request to handle.
  */
 async function runtimeCache(request) {
   try {
@@ -265,6 +284,9 @@ async function runtimeCache(request) {
 
 /**
  * Downloads all CORE resources that are not yet cached
+ * This is used to ensure that the app can work offline
+ * by pre-caching essential resources.
+ * @returns {Promise<void>}
  */
 async function downloadOffline() {
   const contentCache = await caches.open(CACHE_NAME);
@@ -277,6 +299,11 @@ async function downloadOffline() {
 
 /**
  * Expire cache entries older than the given TTL (in milliseconds).
+ * This function checks the 'date' header of each cached response
+ * and removes entries that are older than the specified TTL.
+ * @param {string} cacheName - The name of the cache to expire entries from.
+ * @param {number} ttl - The time-to-live in milliseconds.
+ * @return {Promise<void>}
  */
 async function expireCache(cacheName, ttl) {
   const cache = await caches.open(cacheName);
@@ -303,6 +330,12 @@ async function expireCache(cacheName, ttl) {
 
 /**
  * Fetch with timeout support
+ * This function wraps the fetch API to allow for a timeout.
+ * If the request takes longer than the specified timeout,
+ * it will abort the request and throw an error.
+ * @param {Request} request - The request to fetch.
+ * @param {number} timeout - The timeout in milliseconds (default: 8000).
+ * @return {Promise<Response>} - The response from the fetch.
  */
 async function fetchWithTimeout(request, timeout = 8000) {
   const controller = new AbortController();
@@ -321,5 +354,21 @@ async function fetchWithTimeout(request, timeout = 8000) {
     }
     throw error;
   }
+}
+
+/**
+ * Send progress notification to all clients
+ * @param {Object} data - Progress notification data
+ * @returns {Promise<void>}
+ */
+async function notifyClients(data) {
+  const clients = await self.clients.matchAll({ includeUncontrolled: true });
+  clients.forEach(client => {
+    client.postMessage({
+      type: 'progress',
+      timestamp: Date.now(),
+      ...data
+    });
+  });
 }
 ''';
