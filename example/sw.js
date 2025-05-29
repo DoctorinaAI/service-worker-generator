@@ -4,7 +4,7 @@
 // Version & Cache Names
 // ---------------------------
 const CACHE_PREFIX    = 'app-cache'; // Prefix for all caches
-const CACHE_VERSION   = '1748525960064'; // Bump this on every release
+const CACHE_VERSION   = '1748526746646'; // Bump this on every release
 const CACHE_NAME      = `${CACHE_PREFIX}-${CACHE_VERSION}`; // Primary content cache
 const TEMP_CACHE      = `${CACHE_PREFIX}-temp-${CACHE_VERSION}`; // Temporary cache for atomic updates
 const MANIFEST_CACHE  = `${CACHE_PREFIX}-manifest`; // Stores previous manifest (no version suffix)
@@ -12,7 +12,7 @@ const RUNTIME_CACHE   = `${CACHE_PREFIX}-runtime-${CACHE_VERSION}`; // Cache for
 const RUNTIME_ENTRIES = 50; // Max entries in runtime cache
 const CACHE_TTL       = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
 const MEDIA_EXT       = /\.(png|jpe?g|svg|gif|webp|ico|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|pdf|json|jsonp)$/i;
-const RESOURCES_SIZE  = 15783; // total size of all resources in bytes
+const RESOURCES_SIZE  = 16974; // total size of all resources in bytes
 const MAX_RETRIES     = 3; // Number of retry attempts
 const RETRY_DELAY     = 500; // Delay between retries in milliseconds
 
@@ -72,8 +72,8 @@ const RESOURCES = {
   },
   "sw.js": {
     "name": "sw.js",
-    "size": 10850,
-    "hash": "9b485ec25a6d237a924de7337e679c33"
+    "size": 12041,
+    "hash": "12c1c79947fba3a29bd8f7559bb9b2d6"
   },
   "version.json": {
     "name": "version.json",
@@ -256,7 +256,7 @@ async function runtimeCache(request) {
   const cached = await cache.match(request);
   if (cached) {
     notifyClients({ resource: { path: key, ...meta }, source: 'cache', progress: 100 });
-    return fromCache;
+    return cached;
   }
   const response = await fetchWithProgress(request, meta);
   if (response.ok) {
@@ -306,10 +306,8 @@ async function fetchWithProgress(request, meta) {
       return newResp;
     } catch (err) {
       attempt++;
-      console.warn(`Fetch attempt $attempt failed, retrying in ${RETRY_DELAY}ms...`, err);
-      if (attempt >= MAX_RETRIES) {
-        throw err;
-      }
+      console.warn(`Fetch ${request.url}: attempt ${attempt} failed, retrying in ${RETRY_DELAY}ms...`, err);
+      if (attempt >= MAX_RETRIES) throw err;
       await new Promise(res => setTimeout(res, RETRY_DELAY));
     }
   }
@@ -334,11 +332,12 @@ async function downloadOffline() {
 async function expireCache(name, ttl) {
   const c = await caches.open(name);
   const now = Date.now();
-  (await c.keys()).forEach(async req => {
+  const keys = await c.keys();
+  for (const req of keys) {
     const r = await c.match(req);
     const dh = r.headers.get('Date');
-    if (dh && now - new Date(dh).getTime() > ttl) c.delete(req);
-  });
+    if (dh && now - new Date(dh).getTime() > ttl) await c.delete(req);
+  }
 }
 
 /**
@@ -363,7 +362,15 @@ async function trimCache(name, max) {
  */
 function getResourceKey(request) {
   const url = new URL(request.url);
-  let key = url.pathname.startsWith('/') ? url.pathname.slice(1) : url.pathname;
+  // Strip query parameters and hash fragments
+  let key = url.pathname;
+  // Remove leading slash for consistency with resource keys
+  key = key.startsWith('/') ? key.slice(1) : key;
+  // Remove trailing slash except for root path
+  if (key.endsWith('/') && key !== '/') {
+    key = key.slice(0, -1);
+  }
+  // Handle empty path as root
   return key === '' ? '/' : key;
 }
 

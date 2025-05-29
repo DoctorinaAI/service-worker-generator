@@ -218,7 +218,7 @@ async function runtimeCache(request) {
   const cached = await cache.match(request);
   if (cached) {
     notifyClients({ resource: { path: key, ...meta }, source: 'cache', progress: 100 });
-    return fromCache;
+    return cached;
   }
   const response = await fetchWithProgress(request, meta);
   if (response.ok) {
@@ -268,10 +268,8 @@ async function fetchWithProgress(request, meta) {
       return newResp;
     } catch (err) {
       attempt++;
-      console.warn(`Fetch attempt $attempt failed, retrying in ${RETRY_DELAY}ms...`, err);
-      if (attempt >= MAX_RETRIES) {
-        throw err;
-      }
+      console.warn(`Fetch ${request.url}: attempt ${attempt} failed, retrying in ${RETRY_DELAY}ms...`, err);
+      if (attempt >= MAX_RETRIES) throw err;
       await new Promise(res => setTimeout(res, RETRY_DELAY));
     }
   }
@@ -296,11 +294,12 @@ async function downloadOffline() {
 async function expireCache(name, ttl) {
   const c = await caches.open(name);
   const now = Date.now();
-  (await c.keys()).forEach(async req => {
+  const keys = await c.keys();
+  for (const req of keys) {
     const r = await c.match(req);
     const dh = r.headers.get('Date');
-    if (dh && now - new Date(dh).getTime() > ttl) c.delete(req);
-  });
+    if (dh && now - new Date(dh).getTime() > ttl) await c.delete(req);
+  }
 }
 
 /**
@@ -325,7 +324,15 @@ async function trimCache(name, max) {
  */
 function getResourceKey(request) {
   const url = new URL(request.url);
-  let key = url.pathname.startsWith('/') ? url.pathname.slice(1) : url.pathname;
+  // Strip query parameters and hash fragments
+  let key = url.pathname;
+  // Remove leading slash for consistency with resource keys
+  key = key.startsWith('/') ? key.slice(1) : key;
+  // Remove trailing slash except for root path
+  if (key.endsWith('/') && key !== '/') {
+    key = key.slice(0, -1);
+  }
+  // Handle empty path as root
   return key === '' ? '/' : key;
 }
 
