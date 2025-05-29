@@ -4,7 +4,7 @@
 // Version & Cache Names
 // ---------------------------
 const CACHE_PREFIX    = 'app-cache'; // Prefix for all caches
-const CACHE_VERSION   = '1748523575473'; // Bump this on every release
+const CACHE_VERSION   = '1748524085106'; // Bump this on every release
 const CACHE_NAME      = `${CACHE_PREFIX}-${CACHE_VERSION}`; // Primary content cache
 const TEMP_CACHE      = `${CACHE_PREFIX}-temp-${CACHE_VERSION}`; // Temporary cache for atomic updates
 const MANIFEST_CACHE  = `${CACHE_PREFIX}-manifest`; // Stores previous manifest (no version suffix)
@@ -12,7 +12,7 @@ const RUNTIME_CACHE   = `${CACHE_PREFIX}-runtime-${CACHE_VERSION}`; // Cache for
 const RUNTIME_ENTRIES = 50; // Max entries in runtime cache
 const CACHE_TTL       = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
 const MEDIA_EXT       = /\.(png|jpe?g|svg|gif|webp|ico|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|pdf|json|jsonp)$/i;
-const RESOURCES_SIZE  = 16062; // total size of all resources in bytes
+const RESOURCES_SIZE  = 17240; // total size of all resources in bytes
 
 // ---------------------------
 // Resource Manifest with MD5 hash
@@ -70,8 +70,8 @@ const RESOURCES = {
   },
   "sw.js": {
     "name": "sw.js",
-    "size": 11129,
-    "hash": "e80b3a633c6320a0aa88ba8ad479912d"
+    "size": 12307,
+    "hash": "ed4134af47cc61305ae5778f67a36f70"
   },
   "version.json": {
     "name": "version.json",
@@ -196,12 +196,20 @@ self.addEventListener('fetch', event => {
 // Handles custom messages from clients.
 // ---------------------------
 self.addEventListener('message', event => {
-  if (event.data === 'skipWaiting') {
-    // Force this SW to activate immediately
-    self.skipWaiting();
-  } else if (event.data === 'downloadOffline') {
-    // Pre-cache all CORE resources for offline use
-    downloadOffline();
+  switch (event.data) {
+    case 'sw-skip-waiting':
+      // Force this SW to activate immediately
+      self.skipWaiting();
+      break;
+
+    case 'sw-download-offline':
+      // Pre-cache all CORE resources for offline use
+      downloadOffline();
+      break;
+
+    default:
+      // Unknown message type; no action
+      break;
   }
 });
 
@@ -399,6 +407,6 @@ function getResourceKey(request) {
 async function notifyClients(data) {
   const allClients = await self.clients.matchAll({ includeUncontrolled: true });
   allClients.forEach(client => {
-    client.postMessage({ type: 'progress', timestamp: Date.now(), ...data });
+    client.postMessage({ type: 'sw-progress', timestamp: Date.now(), ...data });
   });
 }

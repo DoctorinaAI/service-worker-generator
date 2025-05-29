@@ -156,12 +156,20 @@ self.addEventListener('fetch', event => {
 // Handles custom messages from clients.
 // ---------------------------
 self.addEventListener('message', event => {
-  if (event.data === 'skipWaiting') {
-    // Force this SW to activate immediately
-    self.skipWaiting();
-  } else if (event.data === 'downloadOffline') {
-    // Pre-cache all CORE resources for offline use
-    downloadOffline();
+  switch (event.data) {
+    case 'sw-skip-waiting':
+      // Force this SW to activate immediately
+      self.skipWaiting();
+      break;
+
+    case 'sw-download-offline':
+      // Pre-cache all CORE resources for offline use
+      downloadOffline();
+      break;
+
+    default:
+      // Unknown message type; no action
+      break;
   }
 });
 
@@ -359,7 +367,7 @@ function getResourceKey(request) {
 async function notifyClients(data) {
   const allClients = await self.clients.matchAll({ includeUncontrolled: true });
   allClients.forEach(client => {
-    client.postMessage({ type: 'progress', timestamp: Date.now(), ...data });
+    client.postMessage({ type: 'sw-progress', timestamp: Date.now(), ...data });
   });
 }
 ''';
