@@ -24,6 +24,8 @@ const RETRY_DELAY     = 500; // Delay between retries in milliseconds
 // Patterns
 // ---------------------------
 const MEDIA_EXT       = /\.(png|jpe?g|svg|gif|webp|ico|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|pdf|json|jsonp)$/i;
+const NETWORK_ONLY    = /\.(php|ashx|api)$/i; // Always fetch from network
+const RANGE_REQUEST   = /bytes=/i; // Range request pattern
 
 // ---------------------------
 // Resource Manifest with MD5 hash and file sizes
@@ -183,11 +185,23 @@ self.addEventListener('fetch', event => {
   const { request } = event;
   if (request.method !== 'GET') return;
 
+  // Handle Range requests (for media playback)
+  if (request.headers.has('range')) {
+    // Don't use cache for range requests, go to network
+    event.respondWith(fetch(request));
+    return;
+  }
+
   // Throttled expiration of runtime cache
   maybeExpire();
 
   event.respondWith((async () => {
     const key = getResourceKey(request);
+
+    // 0) Network-only resources: always fetch from network
+    if (NETWORK_ONLY.test(key)) {
+      return fetch(request);
+    }
 
     // 1) Pre-cached resources: cache-first
     if (RESOURCES[key]) {
@@ -274,7 +288,15 @@ async function onlineFirst(request) {
     const response = await fetch(request);
     if (response.ok) {
       const cache = await caches.open(CACHE_NAME);
-      cache.put(request, response.clone());
+      // Add timestamp header when caching navigation responses
+      const headers = new Headers(response.headers);
+      headers.set('SW-Fetched-At', Date.now().toString());
+      const timestampedResponse = new Response(response.body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: headers
+      });
+      cache.put(request, timestampedResponse.clone());
     }
     return response;
   } catch {
@@ -311,21 +333,38 @@ async function runtimeCache(request) {
 async function fetchWithProgress(request, cacheName) {
   let attempt = 0;
   const cache = await caches.open(cacheName);
+  const timestamp = Date.now();
+
   while (attempt < MAX_RETRIES) {
     attempt++;
     let reader = null;
     try {
       const response = await fetch(request);
       if (response.type === 'opaque') {
-        // Always cache opaque responses
-        cache.put(request, response.clone());
+        // Always cache opaque responses with timestamp
+        const headers = new Headers(response.headers);
+        headers.set('SW-Fetched-At', timestamp.toString());
+        const timestampedResponse = new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: headers
+        });
+        cache.put(request, timestampedResponse.clone());
         return response;
       }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
       const contentLength = parseInt(response.headers.get('content-length') || '0', 10);
       if (!response.body || !contentLength) {
-        cache.put(request, response.clone());
+        // Add timestamp header for non-streaming responses
+        const headers = new Headers(response.headers);
+        headers.set('SW-Fetched-At', timestamp.toString());
+        const timestampedResponse = new Response(response.body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: headers
+        });
+        cache.put(request, timestampedResponse.clone());
         return response;
       }
 
@@ -351,7 +390,15 @@ async function fetchWithProgress(request, cacheName) {
           read();
         }
       });
-      const newResp = new Response(stream, response);
+
+      // Add timestamp header for streaming responses
+      const headers = new Headers(response.headers);
+      headers.set('SW-Fetched-At', timestamp.toString());
+      const newResp = new Response(stream, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: headers
+      });
       cache.put(request, newResp.clone());
       return newResp;
     } catch (err) {
@@ -367,11 +414,41 @@ async function fetchWithProgress(request, cacheName) {
  * Pre-cache all CORE resources for offline usage.
  */
 async function downloadOffline() {
-  const cache = await caches.open(CACHE_NAME);
-  const cachedKeys = (await cache.keys()).map(r => getResourceKey(r));
-  const missing = CORE.filter(path => !cachedKeys.includes(path));
-  const requests = missing.map(path => new Request(path));
-  await cache.addAll(requests);
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    const cachedKeys = (await cache.keys()).map(r => getResourceKey(r));
+    const missing = CORE.filter(path => !cachedKeys.includes(path));
+
+    if (missing.length === 0) {
+      console.log('All resources already cached');
+      return true;
+    }
+
+    // Handle batches to avoid large atomic operations
+    const BATCH_SIZE = 10;
+    for (let i = 0; i < missing.length; i += BATCH_SIZE) {
+      const batch = missing.slice(i, i + BATCH_SIZE);
+      const requests = batch.map(path => new Request(path));
+
+      // Use Promise.allSettled for better error handling
+      const results = await Promise.allSettled(
+        requests.map(request => cache.add(request))
+      );
+
+      // Log any failures
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          console.error(`Failed to cache ${batch[index]}:`, result.reason);
+        }
+      });
+    }
+
+    console.log(`Downloaded ${missing.length} resources for offline use`);
+    return true;
+  } catch (error) {
+    console.error('Failed to download offline resources:', error);
+    return false;
+  }
 }
 
 /**
@@ -398,10 +475,23 @@ async function expireCache(cacheName, ttl) {
  */
 async function trimCache(cacheName, maxEntries) {
   const cache = await caches.open(cacheName);
-  const keys  = await cache.keys();
-  if (keys.length <= maxEntries) return;
-  const toDelete = keys.slice(0, keys.length - maxEntries);
-  await Promise.all(toDelete.map(r => cache.delete(r)));
+  const entries = await cache.keys();
+
+  if (entries.length <= maxEntries) return;
+
+  // Get all entries with their timestamps
+  const entriesWithTime = await Promise.all(
+    entries.map(async request => {
+      const response = await cache.match(request);
+      const fetched = parseInt(response.headers.get('SW-Fetched-At') || '0', 10);
+      return { request, fetched };
+    })
+  );
+
+  // Sort by timestamp (oldest first) and delete oldest
+  entriesWithTime.sort((a, b) => a.fetched - b.fetched);
+  const toDelete = entriesWithTime.slice(0, entriesWithTime.length - maxEntries);
+  await Promise.all(toDelete.map(entry => cache.delete(entry.request)));
 }
 
 /**
