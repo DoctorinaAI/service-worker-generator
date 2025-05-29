@@ -186,6 +186,7 @@
     let currentProgress = 0;
     let isServiceWorkerAvailable = false;
     let totalResourcesSize = 30459398; // Default from sw.js
+    let loadedFiles = new Map(); // Track loaded files: URL -> size
 
     const progressCircle = document.getElementById('progress-circle');
     const progressText = document.getElementById('progress-text');
