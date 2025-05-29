@@ -32,43 +32,137 @@
 
   <title>sw_example</title>
   <link rel="manifest" href="manifest.json">
-
   <style type="text/css">
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
     #loading {
-      position: absolute;
-      width: 400px;
-      height: 300px;
-      top: 50%;
-      left: 50%;
-      margin: -200px 0 0 -200px;
       text-align: center;
-      font-family: sans-serif
+      color: white;
+      max-width: 90vw;
+      animation: fadeIn 0.6s ease-in;
     }
 
-    #progress {
-      margin-top: 20px;
-      height: 10px;
-      background-color: #ebebeb;
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
     }
 
-    #progress div {
-      background-color: #08a5d7;
-      height: 100%;
-      width: 0;
-      transition: width ease-out 300ms;
+    .logo-container {
+      position: relative;
+      display: inline-block;
+      margin-bottom: 2rem;
+    }
+
+    .logo-image {
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+      transition: transform 0.3s ease;
+    }
+
+    .logo-image:hover {
+      transform: scale(1.05);
+    }
+
+    .progress-ring {
+      position: absolute;
+      top: -10px;
+      left: -10px;
+      width: 140px;
+      height: 140px;
+      transform: rotate(-90deg);
+    }
+
+    .progress-ring-circle {
+      fill: none;
+      stroke: rgba(255, 255, 255, 0.2);
+      stroke-width: 4;
+    }
+
+    .progress-ring-progress {
+      fill: none;
+      stroke: #00ff88;
+      stroke-width: 4;
+      stroke-linecap: round;
+      stroke-dasharray: 439.823;
+      stroke-dashoffset: 439.823;
+      transition: stroke-dashoffset 0.3s ease;
+      filter: drop-shadow(0 0 8px rgba(0, 255, 136, 0.5));
+    }
+
+    h1 {
+      font-size: 2.5rem;
+      font-weight: 300;
+      margin: 0 0 1rem 0;
+      letter-spacing: 0.5px;
+      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    }
+
+    .progress-text {
+      font-size: 1.1rem;
+      opacity: 0.9;
+      margin-top: 1rem;
+      font-weight: 500;
+    }
+
+    .progress-percentage {
+      font-size: 0.9rem;
+      opacity: 0.7;
+      margin-top: 0.5rem;
+    }
+
+    .loading-dots {
+      display: inline-block;
+      margin-left: 5px;
+    }
+
+    .loading-dots::after {
+      content: '';
+      animation: dots 1.5s infinite;
+    }
+
+    @keyframes dots {
+      0%, 20% { content: ''; }
+      40% { content: '.'; }
+      60% { content: '..'; }
+      80%, 100% { content: '...'; }
     }
 
     @media (prefers-color-scheme: dark) {
       body {
-        background-color: black;
+        background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+      }
+    }
+
+    @media (max-width: 480px) {
+      .logo-image {
+        width: 100px;
+        height: 100px;
       }
 
-      #loading {
-        color: white;
+      .progress-ring {
+        width: 120px;
+        height: 120px;
+        top: -10px;
+        left: -10px;
       }
 
-      #progress {
-        background-color: #393939;
+      h1 {
+        font-size: 2rem;
+      }
+
+      .progress-text {
+        font-size: 1rem;
       }
     }
   </style>
@@ -76,42 +170,149 @@
 
 <body>
   <div id="loading">
-    <img src="icons/Icon-192.png" width="192" height="192" alt="">
-    <h1>Example</h1>
-    <div id="progress">
-      <div></div>
+    <div class="logo-container">
+      <svg class="progress-ring" viewBox="0 0 140 140">
+        <circle class="progress-ring-circle" cx="70" cy="70" r="65"></circle>
+        <circle class="progress-ring-progress" cx="70" cy="70" r="65" id="progress-circle"></circle>
+      </svg>
+      <img src="icons/Icon-192.png" class="logo-image" alt="App Logo">
     </div>
-  </div>
-  <script>
+    <h1>Example</h1>
+    <div class="progress-text" id="progress-text">Initializing<span class="loading-dots"></span></div>
+    <div class="progress-percentage" id="progress-percentage">0%</div>
+  </div>  <script>
     {{flutter_js}}
-    {{flutter_build_config}}
+    {{flutter_build_config}}    // Progress management
+    let currentProgress = 0;
+    let isServiceWorkerAvailable = false;
+    let totalResourcesSize = 30459398; // Default from sw.js
 
-    // Loading indicator
-    function progress(value) {
-      let el = document.getElementById("progress");
-      if (el) el.firstElementChild.style.width = value + "%";
+    const progressCircle = document.getElementById('progress-circle');
+    const progressText = document.getElementById('progress-text');
+    const progressPercentage = document.getElementById('progress-percentage');
+    const circumference = 2 * Math.PI * 65; // radius = 65
+
+    // Initialize progress ring
+    progressCircle.style.strokeDasharray = circumference;
+    progressCircle.style.strokeDashoffset = circumference;
+
+    function updateProgress(value, text = '') {
+      currentProgress = Math.min(Math.max(value, 0), 100);
+
+      // Update circular progress
+      const offset = circumference - (currentProgress / 100) * circumference;
+      progressCircle.style.strokeDashoffset = offset;
+
+      // Update text
+      progressPercentage.textContent = `${Math.round(currentProgress)}%`;
+      if (text) {
+        progressText.innerHTML = text + '<span class="loading-dots"></span>';
+      }
+
+      // Console logging
+      console.log(`Loading progress: ${Math.round(currentProgress)}% - ${text || 'Loading'}`);
     }
 
-    window.addEventListener('load', function (ev) {
-      progress(10);
-    });
-    window.addEventListener('flutter-first-frame', function () {
-      let el = document.getElementById("loading");
-      if (el) el.remove();
+    // Service Worker registration and message handling
+    async function registerServiceWorker() {
+      if ('serviceWorker' in navigator) {
+        try {
+          const registration = await navigator.serviceWorker.register('/sw.js');
+          console.log('Service Worker registered successfully');
+          isServiceWorkerAvailable = true;
+
+          // Listen for service worker messages
+          navigator.serviceWorker.addEventListener('message', (event) => {
+            if (event.data && event.data.type === 'sw-progress') {
+              const { loaded = 0, total = totalResourcesSize } = event.data;
+              totalResourcesSize = total;
+
+              // Map SW progress from 10% to 90% (leaving 10% for dart logic)
+              const swProgress = Math.min((loaded / total) * 100, 100);
+              const mappedProgress = 10 + (swProgress * 0.8); // 10% + (0-100% * 80%)
+
+              let progressText = 'Loading resources';
+              if (loaded > 0) {
+                const loadedMB = (loaded / 1024 / 1024).toFixed(1);
+                const totalMB = (total / 1024 / 1024).toFixed(1);
+                progressText = `Loading resources (${loadedMB}/${totalMB} MB)`;
+              }
+
+              updateProgress(mappedProgress, progressText);
+            }
+          });
+
+          return registration;
+        } catch (error) {
+          console.warn('Service Worker registration failed:', error);
+          isServiceWorkerAvailable = false;
+          return null;
+        }
+      } else {
+        console.warn('Service Workers are not supported');
+        isServiceWorkerAvailable = false;
+        return null;
+      }
+    }
+
+    // Initialize the application
+    async function initializeApp() {
+      // Register service worker first
+      await registerServiceWorker();
+
+      // Initial progress
+      updateProgress(10, 'Loading application');
+
+      const searchParams = new URLSearchParams(window.location.search);
+      const renderer = searchParams.get('renderer');
+      const userConfig = renderer ? { 'renderer': renderer } : {};
+
+      try {
+        await _flutter.loader.load({
+          config: userConfig,
+          onEntrypointLoaded: async function(engineInitializer) {
+            if (!isServiceWorkerAvailable) {
+              // Fallback progress without service worker
+              updateProgress(30, 'Initializing Flutter engine');
+            }
+
+            const appRunner = await engineInitializer.initializeEngine();
+            updateProgress(90, 'Starting application');
+            await appRunner.runApp();
+          }
+        });
+      } catch (error) {
+        console.error('Failed to initialize Flutter app:', error);
+        updateProgress(0, 'Failed to load application');
+      }
+    }
+
+    // Event listeners
+    window.addEventListener('load', function () {
+      initializeApp();
     });
 
-    const searchParams = new URLSearchParams(window.location.search);
-    const renderer = searchParams.get('renderer');
-    const userConfig = renderer ? { 'renderer': renderer } : {};
-    _flutter.loader.load({
-      config: userConfig,
-      onEntrypointLoaded: async function(engineInitializer) {
-        progress(30);
-        const appRunner = await engineInitializer.initializeEngine();
-        progress(90);
-        await appRunner.runApp();
-      }
+    window.addEventListener('flutter-first-frame', function () {
+      updateProgress(100, 'Ready');
+
+      // Fade out loading screen after a short delay
+      setTimeout(() => {
+        const loadingEl = document.getElementById("loading");
+        if (loadingEl) {
+          loadingEl.style.transition = 'opacity 0.5s ease-out';
+          loadingEl.style.opacity = '0';
+          setTimeout(() => loadingEl.remove(), 500);
+        }
+      }, 300);
     });
+
+    // Handle service worker updates
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        console.log('Service Worker updated, reloading page...');
+        window.location.reload();
+      });
+    }
   </script>
 </body>
 </html>

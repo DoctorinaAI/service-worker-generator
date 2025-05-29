@@ -78,11 +78,35 @@ self.addEventListener('install', event => {
    */
   self.skipWaiting();
   event.waitUntil((async () => {
+    await notifyClients({ loaded: 0, status: 'installing' });
+
     const cache = await caches.open(TEMP_CACHE);
     const requests = CORE.map(path =>
       new Request(new URL(path, self.location.origin), { cache: 'reload' })
     );
-    await cache.addAll(requests);
+
+    // Pre-cache with progress tracking
+    let loadedCount = 0;
+    for (const request of requests) {
+      try {
+        await cache.add(request);
+        loadedCount++;
+
+        const resourceKey = getResourceKey(request);
+        const resourceInfo = RESOURCES[resourceKey];
+        if (resourceInfo) {
+          await notifyClients({
+            loaded: Math.floor((loadedCount / requests.length) * RESOURCES_SIZE / 10), // Rough estimate for install phase
+            status: 'installing',
+            url: request.url
+          });
+        }
+      } catch (error) {
+        console.warn(`Failed to pre-cache ${request.url}:`, error);
+      }
+    }
+
+    await notifyClients({ loaded: Math.floor(RESOURCES_SIZE / 10), status: 'installed' });
   })());
 });
 
@@ -318,6 +342,14 @@ async function fetchWithProgress(request, cacheName) {
           headers: headers
         });
         cache.put(request, timestampedResponse.clone());
+
+        // Notify progress for opaque responses
+        const resourceKey = getResourceKey(request);
+        const resourceInfo = RESOURCES[resourceKey];
+        if (resourceInfo) {
+          await notifyClients({ loaded: resourceInfo.size, url: request.url });
+        }
+
         return response;
       }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -333,10 +365,16 @@ async function fetchWithProgress(request, cacheName) {
           headers: headers
         });
         cache.put(request, timestampedResponse.clone());
-        return response;
-      }
 
-      // Stream response and cache chunks
+        // Notify progress for non-streaming responses
+        const resourceKey = getResourceKey(request);
+        const resourceInfo = RESOURCES[resourceKey];
+        if (resourceInfo) {
+          await notifyClients({ loaded: resourceInfo.size, url: request.url });
+        }
+
+        return response;
+      }      // Stream response and cache chunks
       const stream = new ReadableStream({
         start(controller) {
           reader = response.body.getReader();
@@ -345,10 +383,16 @@ async function fetchWithProgress(request, cacheName) {
             reader.read().then(({ done, value }) => {
               if (done) {
                 controller.close();
+                // Final progress notification
+                notifyClients({ loaded: contentLength, url: request.url });
                 return;
               }
               loaded += value.byteLength;
               controller.enqueue(value);
+
+              // Progress notification during streaming
+              notifyClients({ loaded, url: request.url });
+
               read();
             }).catch(err => {
               reader.cancel();
@@ -389,29 +433,58 @@ async function downloadOffline() {
 
     if (missing.length === 0) {
       console.log('All resources already cached');
+      await notifyClients({ loaded: RESOURCES_SIZE });
       return true;
     }
 
+    console.log(`Downloading ${missing.length} missing resources...`);
+    let totalLoaded = 0;
+
+    // Calculate already loaded size
+    for (const path of CORE) {
+      if (cachedKeys.includes(path)) {
+        const resourceInfo = RESOURCES[path];
+        if (resourceInfo) {
+          totalLoaded += resourceInfo.size;
+        }
+      }
+    }
+
+    // Initial progress notification
+    await notifyClients({ loaded: totalLoaded });
+
     // Handle batches to avoid large atomic operations
-    const BATCH_SIZE = 10;
+    const BATCH_SIZE = 5;
     for (let i = 0; i < missing.length; i += BATCH_SIZE) {
       const batch = missing.slice(i, i + BATCH_SIZE);
-      const requests = batch.map(path => new Request(path));
 
       // Use Promise.allSettled for better error handling
       const results = await Promise.allSettled(
-        requests.map(request => cache.add(request))
+        batch.map(async path => {
+          try {
+            const request = new Request(path);
+            await fetchWithProgress(request, CACHE_NAME);
+            return { success: true, path };
+          } catch (error) {
+            console.error(`Failed to cache ${path}:`, error);
+            return { success: false, path, error };
+          }
+        })
       );
 
-      // Log any failures
-      results.forEach((result, index) => {
-        if (result.status === 'rejected') {
-          console.error(`Failed to cache ${batch[index]}:`, result.reason);
+      // Process results
+      results.forEach(result => {
+        if (result.status === 'fulfilled' && result.value.success) {
+          const resourceInfo = RESOURCES[result.value.path];
+          if (resourceInfo) {
+            totalLoaded += resourceInfo.size;
+          }
         }
       });
     }
 
     console.log(`Downloaded ${missing.length} resources for offline use`);
+    await notifyClients({ loaded: totalLoaded });
     return true;
   } catch (error) {
     console.error('Failed to download offline resources:', error);
