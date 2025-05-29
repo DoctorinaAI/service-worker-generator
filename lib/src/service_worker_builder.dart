@@ -13,15 +13,15 @@ String buildServiceWorker({
     '// ---------------------------\n'
     '// Version & Cache Names\n'
     '// ---------------------------\n'
-    'const CACHE_PREFIX    = \'$cachePrefix\'; // prefix for all caches\n'
-    'const CACHE_VERSION   = \'$cacheVersion\'; // bump this on every release\n'
-    'const CACHE_NAME      = `\${CACHE_PREFIX}-\${CACHE_VERSION}`; // primary content cache\n'
-    'const TEMP_CACHE      = `\${CACHE_PREFIX}-temp-\${CACHE_VERSION}`; // temporary cache for atomic updates\n'
-    'const MANIFEST_CACHE  = `\${CACHE_PREFIX}-manifest`; // stores previous manifest (no version suffix)\n'
-    'const RUNTIME_CACHE   = `\${CACHE_PREFIX}-runtime-\${CACHE_VERSION}`; // cache for runtime/dynamic content\n'
-    'const RUNTIME_ENTRIES = 50; // max entries in runtime cache\n'
+    'const CACHE_PREFIX    = \'$cachePrefix\'; // Prefix for all caches\n'
+    'const CACHE_VERSION   = \'$cacheVersion\'; // Bump this on every release\n'
+    'const CACHE_NAME      = `\${CACHE_PREFIX}-\${CACHE_VERSION}`; // Primary content cache\n'
+    'const TEMP_CACHE      = `\${CACHE_PREFIX}-temp-\${CACHE_VERSION}`; // Temporary cache for atomic updates\n'
+    'const MANIFEST_CACHE  = `\${CACHE_PREFIX}-manifest`; // Stores previous manifest (no version suffix)\n'
+    'const RUNTIME_CACHE   = `\${CACHE_PREFIX}-runtime-\${CACHE_VERSION}`; // Cache for runtime/dynamic content\n'
+    'const RUNTIME_ENTRIES = 50; // Max entries in runtime cache\n'
     'const CACHE_TTL       = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds\n'
-    'const MEDIA_EXT       = /\\.(png|jpe?g|svg|gif|webp|ico|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|pdf|json|jsonp)\$/i\n'
+    'const MEDIA_EXT       = /\\.(png|jpe?g|svg|gif|webp|ico|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|pdf|json|jsonp)\$/i;\n'
     'const RESOURCES_SIZE  = ${resources.entries.fold<int>(0, (total, obj) => switch (obj) {
       // Exclude the root path from size calculation, as it represents the app itself
       MapEntry<String, Object?>(key: '/') => total,
@@ -44,10 +44,11 @@ String buildServiceWorker({
 
 const String _serviceWorkerBody = '''
 // ---------------------------
-// Install: Pre-cache CORE into TEMP
+// Install Event: Pre-cache CORE into TEMP_CACHE
+// Triggered when the service worker is installed.
 // ---------------------------
 self.addEventListener('install', event => {
-  // Activate new SW immediately without waiting for clients to close
+  // Activate this SW immediately, bypassing waiting phase
   self.skipWaiting();
   event.waitUntil(
     caches.open(TEMP_CACHE)
@@ -58,162 +59,159 @@ self.addEventListener('install', event => {
 });
 
 // ---------------------------
-// Activate: Populate content cache & clean up old caches
+// Activate Event: Populate content cache & clean up old caches
+// Triggered when the SW takes over control (after installation).
 // ---------------------------
 self.addEventListener('activate', event => {
   event.waitUntil((async () => {
     const origin = self.location.origin + '/';
-    const validCaches = [
-      CACHE_NAME,
-      TEMP_CACHE,
-      MANIFEST_CACHE,
-      RUNTIME_CACHE
-    ];
+    const validCaches = [ CACHE_NAME, TEMP_CACHE, MANIFEST_CACHE, RUNTIME_CACHE ];
 
-    // 1) Delete any old caches not in our allowlist
+    // 1) Delete old caches not in allowlist
+    const keys = await caches.keys();
     await Promise.all(
-      (await caches.keys())
-        .filter(key => !validCaches.includes(key))
-        .map(key => caches.delete(key))
+      keys.filter(key => !validCaches.includes(key))
+          .map(key => caches.delete(key))
     );
 
-    // 2) Open all needed caches in parallel
+    // 2) Open needed caches in parallel
     const [contentCache, tempCache, manifestCache] = await Promise.all([
       caches.open(CACHE_NAME),
       caches.open(TEMP_CACHE),
       caches.open(MANIFEST_CACHE)
     ]);
 
-    // 3) Read the old manifest (if any)
-    const manifestResponse = await manifestCache.match('manifest');
-    const oldManifest = manifestResponse
-      ? await manifestResponse.json()
-      : {};
+    // 3) Read previous manifest (if exists)
+    const manifestResp = await manifestCache.match('manifest');
+    const oldManifest = manifestResp ? await manifestResp.json() : {};
 
-    // 4) Remove outdated entries from content cache
+    // 4) Remove outdated entries from contentCache
+    const contentKeys = await contentCache.keys();
     await Promise.all(
-      (await contentCache.keys())
-        .filter(request => {
-          const key = request.url.replace(origin, '') || '/';
+      contentKeys
+        .filter(req => {
+          const key = req.url.replace(origin, '') || '/';
           return RESOURCES[key]?.hash !== oldManifest[key]?.hash;
         })
-        .map(request => contentCache.delete(request))
+        .map(req => contentCache.delete(req))
     );
 
-    // 5) Populate content cache with files from TEMP
+
+    // 5) Populate contentCache with TEMP_CACHE entries
+    const tempKeys = await tempCache.keys();
     await Promise.all(
-      (await tempCache.keys())
-        .map(async request => {
-          const response = await tempCache.match(request);
-          return contentCache.put(request, response.clone());
-        })
+      tempKeys.map(async req => {
+        const resp = await tempCache.match(req);
+        return contentCache.put(req, resp.clone());
+      })
     );
 
-    // 6) Save the new manifest and clean up TEMP
+    // 6) Save new manifest and remove TEMP_CACHE
     await manifestCache.put('manifest', new Response(JSON.stringify(RESOURCES)));
     await caches.delete(TEMP_CACHE);
 
-    // 7) Immediately take control of all clients
+    // 7) Take control of uncontrolled clients immediately
     self.clients.claim();
   })());
 });
 
 // ---------------------------
-// Fetch: Routing & Caching Strategies
+// Fetch Event: Routing & Caching Strategies
+// Determines response strategy for each request.
 // ---------------------------
 self.addEventListener('fetch', event => {
   event.respondWith((async () => {
     const request = event.request;
 
-    // 1) Bypass non-GET requests
+    // Bypass non-GET requests entirely
     if (request.method !== 'GET') {
       return fetch(request);
     }
 
-    // 2) Normalize URL: strip origin, leading slash, and ignore query params
-    const url = new URL(request.url);
-    let key = url.pathname.startsWith('/') ? url.pathname.slice(1) : url.pathname;
-    if (key === '') key = '/';
+    // Normalize URL to resource key
+    const key = getResourceKey(request);
 
-    // 3) Cache-first strategy for known static resources
+    // 1) Cache-first for known static RESOURCES
     if (RESOURCES[key]?.hash) {
       return cacheFirst(request);
     }
 
-    // 4) Online-first strategy for navigation requests (SPA shell)
+    // 2) Online-first for navigation requests (SPA shell)
     if (request.mode === 'navigate') {
       return onlineFirst(request);
     }
 
-    // 5) Runtime cache for images and JSON responses
+    // 3) Runtime caching for media (images, JSON, etc.)
     if (MEDIA_EXT.test(key)) {
       return runtimeCache(request);
     }
 
-    // 6) Default: fetch from network
+    // 4) Default: fetch from network
     return fetch(request);
   })());
 });
 
 // ---------------------------
-// Message: skipWaiting & downloadOffline
+// Message Event: skipWaiting & downloadOffline
+// Handles custom messages from clients.
 // ---------------------------
 self.addEventListener('message', event => {
   if (event.data === 'skipWaiting') {
+    // Force this SW to activate immediately
     self.skipWaiting();
-  }
-  if (event.data === 'downloadOffline') {
+  } else if (event.data === 'downloadOffline') {
+    // Pre-cache all CORE resources for offline use
     downloadOffline();
   }
 });
 
 // ---------------------------
-// Helpers
+// Helpers and Utility Functions
 // ---------------------------
 
 /**
  * Cache-first strategy:
  *  - Return cached response if available
  *  - Otherwise fetch from network, cache it, and return it
- * This is used for static resources
- * to ensure fast loading and offline availability.
- * If the network fetch fails,
- * it returns a 503 response indicating a network error.
- *
- * @param {Request} request - The request to handle.
- * @returns {Promise<Response>} - The cached response or fetched response.
+ * Notifies clients about cache hits and network fetch stages.
+ * @param {Request} request
+ * @returns {Promise<Response>}
  */
 async function cacheFirst(request) {
+  const key = getResourceKey(request);
+  const meta = RESOURCES[key] || {};
   try {
     const cache = await caches.open(CACHE_NAME);
     const cached = await cache.match(request);
-    if (cached) return cached;
-
-    try {
-      const response = await fetchWithTimeout(request);
-      if (response && response.ok) {
-        cache.put(request, response.clone());
-      }
-      return response;
-    } catch (fetchErr) {
-      console.error('Fetch failed:', fetchErr);
-      return new Response('Network error', { status: 503 });
+    if (cached) {
+      // Notify clients: resource served from cache
+      notifyClients({ resource: { path: key, ...meta }, source: 'cache' });
+      return cached;
     }
+
+    // Notify clients: starting network fetch
+    notifyClients({ resource: { path: key, ...meta }, source: 'network-start' });
+
+    const response = await fetchWithTimeout(request);
+    if (response && response.ok) {
+      await cache.put(request, response.clone());
+      // Notify clients: network fetch completed
+      notifyClients({ resource: { path: key, ...meta }, source: 'network-end' });
+    }
+    return response;
   } catch (err) {
-    console.error('Cache error:', err);
+    console.error('cacheFirst error:', err);
+    // Fallback to network if cache logic fails
     return fetch(request);
   }
 }
 
 /**
  * Online-first strategy (for SPA navigation):
- *  - Attempt network fetch and cache the result
- *  - On failure, fall back to cache.match(request) or to index.html
- * This is used for navigation requests
- * to ensure the latest version is served when online.
- * If the network fails, it falls back to the cached version.
- * @param {Request} request - The request to handle.
- * @returns {Promise<Response>} - The response from the network or cache.
+ *  - Attempt network fetch and cache result
+ *  - On failure, fall back to cache or index.html
+ * @param {Request} request
+ * @returns {Promise<Response>}
  */
 async function onlineFirst(request) {
   try {
@@ -231,12 +229,10 @@ async function onlineFirst(request) {
 }
 
 /**
- * Trim cache to a maximum number of entries
- * This function removes the oldest entries
- * until the cache size is within the specified limit.
- * @param {string} cacheName - The name of the cache to trim.
- * @param {number} maxEntries - The maximum number of entries to keep in the cache.
- * @returns {Promise<void>}
+ * Trim cache to a maximum number of entries.
+ * Removes oldest entries when limit exceeded.
+ * @param {string} cacheName
+ * @param {number} maxEntries
  */
 async function trimCache(cacheName, maxEntries) {
   const cache = await caches.open(cacheName);
@@ -252,58 +248,55 @@ async function trimCache(cacheName, maxEntries) {
  *  - Expire entries older than CACHE_TTL
  *  - Return cached if available
  *  - Otherwise fetch, cache, trim cache size, and return
- * This is used for dynamic content like images, API responses, etc.
- * @param {Request} request - The request to handle.
+ * Notifies clients about network fetch stages.
+ * @param {Request} request
  */
 async function runtimeCache(request) {
+  const key = getResourceKey(request);
+  const meta = RESOURCES[key] || {};
   try {
     const cache = await caches.open(RUNTIME_CACHE);
 
-    await expireCache(RUNTIME_CACHE, CACHE_TTL); // Check expiration first
+    // Expire old entries before new request
+    await expireCache(RUNTIME_CACHE, CACHE_TTL);
 
     const cached = await cache.match(request);
-    if (cached) return cached;
-
-    try {
-      const response = await fetch(request);
-      if (response && response.ok) {
-        cache.put(request, response.clone());
-        // Optionally trim cache to a max number of entries
-        await trimCache(RUNTIME_CACHE, RUNTIME_ENTRIES);
-      }
-      return response;
-    } catch (fetchErr) {
-      console.error('Runtime cache fetch failed:', fetchErr);
-      return new Response('Network error', { status: 503 });
+    if (cached) {
+      notifyClients({ resource: { path: key, ...meta }, source: 'cache' });
+      return cached;
     }
+
+    notifyClients({ resource: { path: key, ...meta }, source: 'network-start' });
+    const response = await fetch(request);
+    if (response && response.ok) {
+      await cache.put(request, response.clone());
+      await trimCache(RUNTIME_CACHE, RUNTIME_ENTRIES);
+      notifyClients({ resource: { path: key, ...meta }, source: 'network-end' });
+    }
+    return response;
   } catch (err) {
-    console.error('Runtime cache error:', err);
+    console.error('runtimeCache error:', err);
     return fetch(request);
   }
 }
 
 /**
- * Downloads all CORE resources that are not yet cached
- * This is used to ensure that the app can work offline
- * by pre-caching essential resources.
- * @returns {Promise<void>}
+ * Downloads all CORE resources that are not yet cached.
+ * Used to ensure full offline support.
  */
 async function downloadOffline() {
   const contentCache = await caches.open(CACHE_NAME);
-  const currentKeys = (await contentCache.keys()).map(req =>
+  const current = (await contentCache.keys()).map(req =>
     req.url.substring(self.location.origin.length + 1) || '/'
   );
-  const toDownload = CORE.filter(key => !currentKeys.includes(key));
-  return contentCache.addAll(toDownload);
+  const missing = CORE.filter(key => !current.includes(key));
+  return contentCache.addAll(missing);
 }
 
 /**
- * Expire cache entries older than the given TTL (in milliseconds).
- * This function checks the 'date' header of each cached response
- * and removes entries that are older than the specified TTL.
- * @param {string} cacheName - The name of the cache to expire entries from.
- * @param {number} ttl - The time-to-live in milliseconds.
- * @return {Promise<void>}
+ * Expire cache entries older than TTL based on "Date" header.
+ * @param {string} cacheName
+ * @param {number} ttl
  */
 async function expireCache(cacheName, ttl) {
   const cache = await caches.open(cacheName);
@@ -311,16 +304,12 @@ async function expireCache(cacheName, ttl) {
   const now = Date.now();
 
   return Promise.all(
-    keys.map(async (request) => {
-      // Get the response to check its timestamp
+    keys.map(async request => {
       const response = await cache.match(request);
-      const responseHeaders = new Headers(response.headers);
-      const dateHeader = responseHeaders.get('date') || responseHeaders.get('Date');
-
-      // If we can't determine age, or if it's too old, remove it
+      const dateHeader = response.headers.get('date') || response.headers.get('Date');
       if (dateHeader) {
-        const timestamp = new Date(dateHeader).getTime();
-        if (now - timestamp > ttl) {
+        const age = now - new Date(dateHeader).getTime();
+        if (age > ttl) {
           return cache.delete(request);
         }
       }
@@ -329,26 +318,21 @@ async function expireCache(cacheName, ttl) {
 }
 
 /**
- * Fetch with timeout support
- * This function wraps the fetch API to allow for a timeout.
- * If the request takes longer than the specified timeout,
- * it will abort the request and throw an error.
- * @param {Request} request - The request to fetch.
- * @param {number} timeout - The timeout in milliseconds (default: 8000).
- * @return {Promise<Response>} - The response from the fetch.
+ * Fetch with timeout support.
+ * @param {Request} request
+ * @param {number} timeout Timeout in ms (default: 8000)
+ * @throws {Error} on timeout or fetch error
  */
 async function fetchWithTimeout(request, timeout = 8000) {
   const controller = new AbortController();
   const signal = controller.signal;
-
-  const timeoutId = setTimeout(() => controller.abort(), timeout);
-
+  const id = setTimeout(() => controller.abort(), timeout);
   try {
     const response = await fetch(request, { signal });
-    clearTimeout(timeoutId);
+    clearTimeout(id);
     return response;
   } catch (error) {
-    clearTimeout(timeoutId);
+    clearTimeout(id);
     if (error.name === 'AbortError') {
       throw new Error('Request timed out');
     }
@@ -357,18 +341,25 @@ async function fetchWithTimeout(request, timeout = 8000) {
 }
 
 /**
- * Send progress notification to all clients
- * @param {Object} data - Progress notification data
- * @returns {Promise<void>}
+ * Normalize request URL to a key that matches RESOURCES entries.
+ * @param {Request} request
+ * @returns {string} Normalized resource key (e.g. '/', 'index.html')
+ */
+function getResourceKey(request) {
+  const url = new URL(request.url);
+  let key = url.pathname.startsWith('/') ? url.pathname.slice(1) : url.pathname;
+  return key === '' ? '/' : key;
+}
+
+/**
+ * Send progress notification to all connected clients.
+ * Clients should listen for 'message' events and handle 'progress' type.
+ * @param {Object} data - Details about download progress
  */
 async function notifyClients(data) {
-  const clients = await self.clients.matchAll({ includeUncontrolled: true });
-  clients.forEach(client => {
-    client.postMessage({
-      type: 'progress',
-      timestamp: Date.now(),
-      ...data
-    });
+  const allClients = await self.clients.matchAll({ includeUncontrolled: true });
+  allClients.forEach(client => {
+    client.postMessage({ type: 'progress', timestamp: Date.now(), ...data });
   });
 }
 ''';
