@@ -82,7 +82,7 @@
       <div></div>
     </div>
   </div>
-  <script async>
+  <script>
     {{flutter_js}}
     {{flutter_build_config}}
 
@@ -91,8 +91,9 @@
       let el = document.getElementById("progress");
       if (el) el.firstElementChild.style.width = value + "%";
     }
+
     window.addEventListener('load', function (ev) {
-      progress(30);
+      progress(10);
     });
     window.addEventListener('flutter-first-frame', function () {
       let el = document.getElementById("loading");
@@ -105,9 +106,9 @@
     _flutter.loader.load({
       config: userConfig,
       onEntrypointLoaded: async function(engineInitializer) {
-        progress(60);
+        progress(50);
         const appRunner = await engineInitializer.initializeEngine();
-        progress(100);
+        progress(80);
         await appRunner.runApp();
       }
     });
