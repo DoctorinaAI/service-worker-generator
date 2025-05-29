@@ -32,17 +32,72 @@
 
   <title>sw_example</title>
   <link rel="manifest" href="manifest.json">
+
+  <style type="text/css">
+    #loading {
+      position: absolute;
+      width: 400px;
+      height: 300px;
+      top: 50%;
+      left: 50%;
+      margin: -200px 0 0 -200px;
+      text-align: center;
+      font-family: sans-serif
+    }
+
+    #progress {
+      margin-top: 20px;
+      height: 10px;
+      background-color: #ebebeb;
+    }
+
+    #progress div {
+      background-color: #08a5d7;
+      height: 100%;
+      width: 0;
+      transition: width ease-out 300ms;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      body {
+        background-color: black;
+      }
+
+      #loading {
+        color: white;
+      }
+
+      #progress {
+        background-color: #393939;
+      }
+    }
+  </style>
 </head>
 
 <body>
+  <div id="loading">
+    <img src="icons/Icon-192.png" width="192" height="192" alt="">
+    <h1>Example</h1>
+    <div id="progress">
+      <div></div>
+    </div>
+  </div>
   <script async>
     {{flutter_js}}
     {{flutter_build_config}}
 
     // Loading indicator
-    const loading = document.createElement('div');
-    document.body.appendChild(loading);
-    loading.textContent = "Loading Entrypoint...";
+    function progress(value) {
+      let el = document.getElementById("progress");
+      if (el) el.firstElementChild.style.width = value + "%";
+    }
+    window.addEventListener('load', function (ev) {
+      progress(30);
+    });
+    window.addEventListener('flutter-first-frame', function () {
+      let el = document.getElementById("loading");
+      if (el) el.remove();
+    });
 
     const searchParams = new URLSearchParams(window.location.search);
     const renderer = searchParams.get('renderer');
@@ -50,9 +105,9 @@
     _flutter.loader.load({
       config: userConfig,
       onEntrypointLoaded: async function(engineInitializer) {
-        loading.textContent = "Initializing engine...";
+        progress(60);
         const appRunner = await engineInitializer.initializeEngine();
-        loading.textContent = "Running app...";
+        progress(100);
         await appRunner.runApp();
       }
     });
