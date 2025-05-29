@@ -32,7 +32,7 @@ String buildServiceWorker({
     })}; // total size of all resources in bytes\n'
     '\n'
     '// ---------------------------\n'
-    '// Resource Manifest with MD5 hash \n'
+    '// Resource Manifest with MD5 hash and file sizes\n'
     '// ---------------------------\n'
     'const RESOURCES = '
     '${const JsonEncoder.withIndent('  ').convert(resources)}\n'
@@ -96,7 +96,6 @@ self.addEventListener('activate', event => {
         .map(req => contentCache.delete(req))
     );
 
-
     // 5) Populate contentCache with TEMP_CACHE entries
     const tempKeys = await tempCache.keys();
     await Promise.all(
@@ -152,8 +151,7 @@ self.addEventListener('fetch', event => {
 });
 
 // ---------------------------
-// Message Event: skipWaiting & downloadOffline
-// Handles custom messages from clients.
+// Message Event: Handles custom messages from clients.
 // ---------------------------
 self.addEventListener('message', event => {
   switch (event.data) {
@@ -181,7 +179,8 @@ self.addEventListener('message', event => {
  * Cache-first strategy:
  *  - Return cached response if available
  *  - Otherwise fetch from network, cache it, and return it
- * Notifies clients about cache hits and network fetch stages.
+ * Sends a single notification with progress: 100 for cache,
+ * or file size for network.
  * @param {Request} request
  * @returns {Promise<Response>}
  */
@@ -198,13 +197,13 @@ async function cacheFirst(request) {
     }
 
     // Notify clients: starting network fetch
-    notifyClients({ resource: { path: key, ...meta }, source: 'network-start' });
+    notifyClients({ resource: { path: key, ...meta }, source: 'network', progress: 0 });
 
     const response = await fetchWithTimeout(request);
     if (response && response.ok) {
       await cache.put(request, response.clone());
       // Notify clients: network fetch completed
-      notifyClients({ resource: { path: key, ...meta }, source: 'network-end' });
+      notifyClients({ resource: { path: key, ...meta }, source: 'network', progress: 100 });
     }
     return response;
   } catch (err) {
@@ -230,7 +229,7 @@ async function onlineFirst(request) {
       return response;
     }
     throw new Error('Network failed');
-  } catch (err) {
+  } catch {
     const cache = await caches.open(CACHE_NAME);
     return (await cache.match(request)) || (await cache.match('index.html'));
   }
@@ -270,16 +269,16 @@ async function runtimeCache(request) {
 
     const cached = await cache.match(request);
     if (cached) {
-      notifyClients({ resource: { path: key, ...meta }, source: 'cache' });
+      notifyClients({ resource: { path: key, ...meta }, source: 'cache', progress: 100 });
       return cached;
     }
 
-    notifyClients({ resource: { path: key, ...meta }, source: 'network-start' });
+    notifyClients({ resource: { path: key, ...meta }, source: 'network', progress: 0 });
     const response = await fetch(request);
     if (response && response.ok) {
       await cache.put(request, response.clone());
       await trimCache(RUNTIME_CACHE, RUNTIME_ENTRIES);
-      notifyClients({ resource: { path: key, ...meta }, source: 'network-end' });
+      notifyClients({ resource: { path: key, ...meta }, source: 'network', progress: 100 });
     }
     return response;
   } catch (err) {
@@ -310,16 +309,12 @@ async function expireCache(cacheName, ttl) {
   const cache = await caches.open(cacheName);
   const keys = await cache.keys();
   const now = Date.now();
-
-  return Promise.all(
+  await Promise.all(
     keys.map(async request => {
       const response = await cache.match(request);
       const dateHeader = response.headers.get('date') || response.headers.get('Date');
-      if (dateHeader) {
-        const age = now - new Date(dateHeader).getTime();
-        if (age > ttl) {
-          return cache.delete(request);
-        }
+      if (dateHeader && now - new Date(dateHeader).getTime() > ttl) {
+        await cache.delete(request);
       }
     })
   );
@@ -341,9 +336,7 @@ async function fetchWithTimeout(request, timeout = 8000) {
     return response;
   } catch (error) {
     clearTimeout(id);
-    if (error.name === 'AbortError') {
-      throw new Error('Request timed out');
-    }
+    if (error.name === 'AbortError') throw new Error('Request timed out');
     throw error;
   }
 }
@@ -360,9 +353,9 @@ function getResourceKey(request) {
 }
 
 /**
- * Send progress notification to all connected clients.
- * Clients should listen for 'message' events and handle 'progress' type.
- * @param {Object} data - Details about download progress
+ * Send notification to all connected clients.
+ * Clients should listen for 'message' events and handle 'sw-progress'.
+ * @param {Object} data - { resource, source, progress, timestamp }
  */
 async function notifyClients(data) {
   const allClients = await self.clients.matchAll({ includeUncontrolled: true });

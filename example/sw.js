@@ -4,7 +4,7 @@
 // Version & Cache Names
 // ---------------------------
 const CACHE_PREFIX    = 'app-cache'; // Prefix for all caches
-const CACHE_VERSION   = '1748524260732'; // Bump this on every release
+const CACHE_VERSION   = '1748524806187'; // Bump this on every release
 const CACHE_NAME      = `${CACHE_PREFIX}-${CACHE_VERSION}`; // Primary content cache
 const TEMP_CACHE      = `${CACHE_PREFIX}-temp-${CACHE_VERSION}`; // Temporary cache for atomic updates
 const MANIFEST_CACHE  = `${CACHE_PREFIX}-manifest`; // Stores previous manifest (no version suffix)
@@ -12,10 +12,10 @@ const RUNTIME_CACHE   = `${CACHE_PREFIX}-runtime-${CACHE_VERSION}`; // Cache for
 const RUNTIME_ENTRIES = 50; // Max entries in runtime cache
 const CACHE_TTL       = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
 const MEDIA_EXT       = /\.(png|jpe?g|svg|gif|webp|ico|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|pdf|json|jsonp)$/i;
-const RESOURCES_SIZE  = 17343; // total size of all resources in bytes
+const RESOURCES_SIZE  = 14341; // total size of all resources in bytes
 
 // ---------------------------
-// Resource Manifest with MD5 hash
+// Resource Manifest with MD5 hash and file sizes
 // ---------------------------
 const RESOURCES = {
   "/": {
@@ -70,8 +70,8 @@ const RESOURCES = {
   },
   "sw.js": {
     "name": "sw.js",
-    "size": 12410,
-    "hash": "9c25dbe1fe3a3b3c942e2b13e5988770"
+    "size": 9408,
+    "hash": "a7f17089e7c356de3718b29fb6c6adbe"
   },
   "version.json": {
     "name": "version.json",
@@ -136,7 +136,6 @@ self.addEventListener('activate', event => {
         .map(req => contentCache.delete(req))
     );
 
-
     // 5) Populate contentCache with TEMP_CACHE entries
     const tempKeys = await tempCache.keys();
     await Promise.all(
@@ -192,8 +191,7 @@ self.addEventListener('fetch', event => {
 });
 
 // ---------------------------
-// Message Event: skipWaiting & downloadOffline
-// Handles custom messages from clients.
+// Message Event: Handles custom messages from clients.
 // ---------------------------
 self.addEventListener('message', event => {
   switch (event.data) {
@@ -221,7 +219,8 @@ self.addEventListener('message', event => {
  * Cache-first strategy:
  *  - Return cached response if available
  *  - Otherwise fetch from network, cache it, and return it
- * Notifies clients about cache hits and network fetch stages.
+ * Sends a single notification with progress: 100 for cache,
+ * or file size for network.
  * @param {Request} request
  * @returns {Promise<Response>}
  */
@@ -238,13 +237,13 @@ async function cacheFirst(request) {
     }
 
     // Notify clients: starting network fetch
-    notifyClients({ resource: { path: key, ...meta }, source: 'network-start' });
+    notifyClients({ resource: { path: key, ...meta }, source: 'network', progress: 0 });
 
     const response = await fetchWithTimeout(request);
     if (response && response.ok) {
       await cache.put(request, response.clone());
       // Notify clients: network fetch completed
-      notifyClients({ resource: { path: key, ...meta }, source: 'network-end' });
+      notifyClients({ resource: { path: key, ...meta }, source: 'network', progress: 100 });
     }
     return response;
   } catch (err) {
@@ -270,7 +269,7 @@ async function onlineFirst(request) {
       return response;
     }
     throw new Error('Network failed');
-  } catch (err) {
+  } catch {
     const cache = await caches.open(CACHE_NAME);
     return (await cache.match(request)) || (await cache.match('index.html'));
   }
@@ -310,16 +309,16 @@ async function runtimeCache(request) {
 
     const cached = await cache.match(request);
     if (cached) {
-      notifyClients({ resource: { path: key, ...meta }, source: 'cache' });
+      notifyClients({ resource: { path: key, ...meta }, source: 'cache', progress: 100 });
       return cached;
     }
 
-    notifyClients({ resource: { path: key, ...meta }, source: 'network-start' });
+    notifyClients({ resource: { path: key, ...meta }, source: 'network', progress: 0 });
     const response = await fetch(request);
     if (response && response.ok) {
       await cache.put(request, response.clone());
       await trimCache(RUNTIME_CACHE, RUNTIME_ENTRIES);
-      notifyClients({ resource: { path: key, ...meta }, source: 'network-end' });
+      notifyClients({ resource: { path: key, ...meta }, source: 'network', progress: 100 });
     }
     return response;
   } catch (err) {
@@ -350,16 +349,12 @@ async function expireCache(cacheName, ttl) {
   const cache = await caches.open(cacheName);
   const keys = await cache.keys();
   const now = Date.now();
-
-  return Promise.all(
+  await Promise.all(
     keys.map(async request => {
       const response = await cache.match(request);
       const dateHeader = response.headers.get('date') || response.headers.get('Date');
-      if (dateHeader) {
-        const age = now - new Date(dateHeader).getTime();
-        if (age > ttl) {
-          return cache.delete(request);
-        }
+      if (dateHeader && now - new Date(dateHeader).getTime() > ttl) {
+        await cache.delete(request);
       }
     })
   );
@@ -381,9 +376,7 @@ async function fetchWithTimeout(request, timeout = 8000) {
     return response;
   } catch (error) {
     clearTimeout(id);
-    if (error.name === 'AbortError') {
-      throw new Error('Request timed out');
-    }
+    if (error.name === 'AbortError') throw new Error('Request timed out');
     throw error;
   }
 }
@@ -400,9 +393,9 @@ function getResourceKey(request) {
 }
 
 /**
- * Send progress notification to all connected clients.
- * Clients should listen for 'message' events and handle 'progress' type.
- * @param {Object} data - Details about download progress
+ * Send notification to all connected clients.
+ * Clients should listen for 'message' events and handle 'sw-progress'.
+ * @param {Object} data - { resource, source, progress, timestamp }
  */
 async function notifyClients(data) {
   const allClients = await self.clients.matchAll({ includeUncontrolled: true });
