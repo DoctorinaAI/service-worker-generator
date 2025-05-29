@@ -4,7 +4,7 @@
 // Version & Cache Names
 // ---------------------------
 const CACHE_PREFIX    = 'app-cache'; // Prefix for all caches
-const CACHE_VERSION   = '1748524806187'; // Bump this on every release
+const CACHE_VERSION   = '1748525960064'; // Bump this on every release
 const CACHE_NAME      = `${CACHE_PREFIX}-${CACHE_VERSION}`; // Primary content cache
 const TEMP_CACHE      = `${CACHE_PREFIX}-temp-${CACHE_VERSION}`; // Temporary cache for atomic updates
 const MANIFEST_CACHE  = `${CACHE_PREFIX}-manifest`; // Stores previous manifest (no version suffix)
@@ -12,7 +12,9 @@ const RUNTIME_CACHE   = `${CACHE_PREFIX}-runtime-${CACHE_VERSION}`; // Cache for
 const RUNTIME_ENTRIES = 50; // Max entries in runtime cache
 const CACHE_TTL       = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
 const MEDIA_EXT       = /\.(png|jpe?g|svg|gif|webp|ico|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|pdf|json|jsonp)$/i;
-const RESOURCES_SIZE  = 14341; // total size of all resources in bytes
+const RESOURCES_SIZE  = 15783; // total size of all resources in bytes
+const MAX_RETRIES     = 3; // Number of retry attempts
+const RETRY_DELAY     = 500; // Delay between retries in milliseconds
 
 // ---------------------------
 // Resource Manifest with MD5 hash and file sizes
@@ -70,8 +72,8 @@ const RESOURCES = {
   },
   "sw.js": {
     "name": "sw.js",
-    "size": 9408,
-    "hash": "a7f17089e7c356de3718b29fb6c6adbe"
+    "size": 10850,
+    "hash": "9b485ec25a6d237a924de7337e679c33"
   },
   "version.json": {
     "name": "version.json",
@@ -92,9 +94,7 @@ self.addEventListener('install', event => {
   self.skipWaiting();
   event.waitUntil(
     caches.open(TEMP_CACHE)
-      .then(cache => cache.addAll(
-        CORE.map(path => new Request(path, { cache: 'reload' }))
-      ))
+      .then(cache => cache.addAll(CORE.map(path => new Request(path, { cache: 'reload' }))))
   );
 });
 
@@ -105,51 +105,40 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil((async () => {
     const origin = self.location.origin + '/';
-    const validCaches = [ CACHE_NAME, TEMP_CACHE, MANIFEST_CACHE, RUNTIME_CACHE ];
-
-    // 1) Delete old caches not in allowlist
-    const keys = await caches.keys();
-    await Promise.all(
-      keys.filter(key => !validCaches.includes(key))
-          .map(key => caches.delete(key))
-    );
-
-    // 2) Open needed caches in parallel
-    const [contentCache, tempCache, manifestCache] = await Promise.all([
+    const keep = [CACHE_NAME, TEMP_CACHE, MANIFEST_CACHE, RUNTIME_CACHE];
+    // Delete outdated caches
+    (await caches.keys())
+      .filter(key => !keep.includes(key))
+      .forEach(key => caches.delete(key));
+    // Open needed caches in parallel
+    const [content, temp, manifest] = await Promise.all([
       caches.open(CACHE_NAME),
       caches.open(TEMP_CACHE),
       caches.open(MANIFEST_CACHE)
     ]);
 
-    // 3) Read previous manifest (if exists)
-    const manifestResp = await manifestCache.match('manifest');
-    const oldManifest = manifestResp ? await manifestResp.json() : {};
+    // Read previous manifest (if exists), or initialize empty
+    const oldMan = (await manifest.match('manifest'))
+      ? await (await manifest.match('manifest')).json()
+      : {};
 
-    // 4) Remove outdated entries from contentCache
-    const contentKeys = await contentCache.keys();
-    await Promise.all(
-      contentKeys
-        .filter(req => {
-          const key = req.url.replace(origin, '') || '/';
-          return RESOURCES[key]?.hash !== oldManifest[key]?.hash;
-        })
-        .map(req => contentCache.delete(req))
-    );
-
-    // 5) Populate contentCache with TEMP_CACHE entries
-    const tempKeys = await tempCache.keys();
-    await Promise.all(
-      tempKeys.map(async req => {
-        const resp = await tempCache.match(req);
-        return contentCache.put(req, resp.clone());
+    // Remove outdated entries from contentCache
+    (await content.keys())
+      .filter(req => {
+        const k = req.url.replace(origin, '') || '/';
+        return RESOURCES[k]?.hash !== oldMan[k]?.hash;
       })
-    );
+      .forEach(req => content.delete(req));
 
-    // 6) Save new manifest and remove TEMP_CACHE
-    await manifestCache.put('manifest', new Response(JSON.stringify(RESOURCES)));
+    // Populate content with TEMP_CACHE entries
+    (await temp.keys())
+      .forEach(async req => content.put(req, (await temp.match(req)).clone()));
+
+    // Save new manifest and remove TEMP_CACHE
+    await manifest.put('manifest', new Response(JSON.stringify(RESOURCES)));
     await caches.delete(TEMP_CACHE);
 
-    // 7) Take control of uncontrolled clients immediately
+    // Take control of uncontrolled clients immediately
     self.clients.claim();
   })());
 });
@@ -160,30 +149,22 @@ self.addEventListener('activate', event => {
 // ---------------------------
 self.addEventListener('fetch', event => {
   event.respondWith((async () => {
-    const request = event.request;
+    const { request } = event;
 
     // Bypass non-GET requests entirely
-    if (request.method !== 'GET') {
-      return fetch(request);
-    }
+    if (request.method !== 'GET') return fetch(request);
 
     // Normalize URL to resource key
     const key = getResourceKey(request);
 
     // 1) Cache-first for known static RESOURCES
-    if (RESOURCES[key]?.hash) {
-      return cacheFirst(request);
-    }
+    if (RESOURCES[key]?.hash) return cacheFirst(request);
 
     // 2) Online-first for navigation requests (SPA shell)
-    if (request.mode === 'navigate') {
-      return onlineFirst(request);
-    }
+    if (request.mode === 'navigate') return onlineFirst(request);
 
     // 3) Runtime caching for media (images, JSON, etc.)
-    if (MEDIA_EXT.test(key)) {
-      return runtimeCache(request);
-    }
+    if (MEDIA_EXT.test(key)) return runtimeCache(request);
 
     // 4) Default: fetch from network
     return fetch(request);
@@ -199,12 +180,10 @@ self.addEventListener('message', event => {
       // Force this SW to activate immediately
       self.skipWaiting();
       break;
-
     case 'sw-download-offline':
       // Pre-cache all CORE resources for offline use
       downloadOffline();
       break;
-
     default:
       // Unknown message type; no action
       break;
@@ -227,30 +206,15 @@ self.addEventListener('message', event => {
 async function cacheFirst(request) {
   const key = getResourceKey(request);
   const meta = RESOURCES[key] || {};
-  try {
-    const cache = await caches.open(CACHE_NAME);
-    const cached = await cache.match(request);
-    if (cached) {
-      // Notify clients: resource served from cache
-      notifyClients({ resource: { path: key, ...meta }, source: 'cache' });
-      return cached;
-    }
-
-    // Notify clients: starting network fetch
-    notifyClients({ resource: { path: key, ...meta }, source: 'network', progress: 0 });
-
-    const response = await fetchWithTimeout(request);
-    if (response && response.ok) {
-      await cache.put(request, response.clone());
-      // Notify clients: network fetch completed
-      notifyClients({ resource: { path: key, ...meta }, source: 'network', progress: 100 });
-    }
-    return response;
-  } catch (err) {
-    console.error('cacheFirst error:', err);
-    // Fallback to network if cache logic fails
-    return fetch(request);
+  const cache = await caches.open(CACHE_NAME);
+  const fromCache = await cache.match(request);
+  if (fromCache) {
+    // Notify clients: resource served from cache
+    notifyClients({ resource: { path: key, ...meta }, source: 'cache', progress: 100 });
+    return fromCache;
   }
+  // Fetch from network, cache it, and notify clients with progress
+  return fetchWithProgress(request, meta);
 }
 
 /**
@@ -262,31 +226,15 @@ async function cacheFirst(request) {
  */
 async function onlineFirst(request) {
   try {
-    const response = await fetch(request);
-    if (response && response.ok) {
-      const cache = await caches.open(CACHE_NAME);
-      cache.put(request, response.clone());
-      return response;
+    const res = await fetch(request);
+    if (res.ok) {
+      caches.open(CACHE_NAME).then(c => c.put(request, res.clone()));
+      return res;
     }
-    throw new Error('Network failed');
+    throw new Error('Network fetch failed');
   } catch {
-    const cache = await caches.open(CACHE_NAME);
-    return (await cache.match(request)) || (await cache.match('index.html'));
-  }
-}
-
-/**
- * Trim cache to a maximum number of entries.
- * Removes oldest entries when limit exceeded.
- * @param {string} cacheName
- * @param {number} maxEntries
- */
-async function trimCache(cacheName, maxEntries) {
-  const cache = await caches.open(cacheName);
-  let keys = await cache.keys();
-  while (keys.length > maxEntries) {
-    await cache.delete(keys[0]);
-    keys = await cache.keys();
+    const c = await caches.open(CACHE_NAME);
+    return (await c.match(request)) || (await c.match('/'));
   }
 }
 
@@ -301,29 +249,69 @@ async function trimCache(cacheName, maxEntries) {
 async function runtimeCache(request) {
   const key = getResourceKey(request);
   const meta = RESOURCES[key] || {};
-  try {
-    const cache = await caches.open(RUNTIME_CACHE);
+  const cache = await caches.open(RUNTIME_CACHE);
 
-    // Expire old entries before new request
-    await expireCache(RUNTIME_CACHE, CACHE_TTL);
+  // Expire old entries before new request
+  await expireCache(RUNTIME_CACHE, CACHE_TTL);
+  const cached = await cache.match(request);
+  if (cached) {
+    notifyClients({ resource: { path: key, ...meta }, source: 'cache', progress: 100 });
+    return fromCache;
+  }
+  const response = await fetchWithProgress(request, meta);
+  if (response.ok) {
+    cache.put(request, response.clone());
+    trimCache(RUNTIME_CACHE, RUNTIME_ENTRIES);
+  }
+  return response;
+}
 
-    const cached = await cache.match(request);
-    if (cached) {
-      notifyClients({ resource: { path: key, ...meta }, source: 'cache', progress: 100 });
-      return cached;
+/**
+ * Fetch with byte-stream, progress & retries
+ * @param {Request} request
+ * @param {Object} meta - Resource metadata (size, hash)
+ */
+async function fetchWithProgress(request, meta) {
+  let attempt = 0;
+  while (attempt < MAX_RETRIES) {
+    try {
+      const response = await fetch(request);
+      const total = meta.size || parseInt(response.headers.get('content-length')) || 0;
+      if (!response.body || !total) {
+        notifyClients({ resource: { ...meta }, source: 'network', progress: 100 });
+        return response;
+      }
+      const reader = response.body.getReader();
+      let loaded = 0;
+      const stream = new ReadableStream({
+        start(controller) {
+          function read() {
+            reader.read().then(({ done, value }) => {
+              if (done) {
+                controller.close();
+                return;
+              }
+              loaded += value.byteLength;
+              const pct = Math.round((loaded / total) * 100);
+              notifyClients({ resource: { ...meta }, source: 'network', progress: pct });
+              controller.enqueue(value);
+              read();
+            }).catch(err => controller.error(err));
+          }
+          read();
+        }
+      });
+      const newResp = new Response(stream, { headers: response.headers });
+      caches.open(CACHE_NAME).then(c => c.put(request, newResp.clone()));
+      return newResp;
+    } catch (err) {
+      attempt++;
+      console.warn(`Fetch attempt $attempt failed, retrying in ${RETRY_DELAY}ms...`, err);
+      if (attempt >= MAX_RETRIES) {
+        throw err;
+      }
+      await new Promise(res => setTimeout(res, RETRY_DELAY));
     }
-
-    notifyClients({ resource: { path: key, ...meta }, source: 'network', progress: 0 });
-    const response = await fetch(request);
-    if (response && response.ok) {
-      await cache.put(request, response.clone());
-      await trimCache(RUNTIME_CACHE, RUNTIME_ENTRIES);
-      notifyClients({ resource: { path: key, ...meta }, source: 'network', progress: 100 });
-    }
-    return response;
-  } catch (err) {
-    console.error('runtimeCache error:', err);
-    return fetch(request);
   }
 }
 
@@ -332,52 +320,39 @@ async function runtimeCache(request) {
  * Used to ensure full offline support.
  */
 async function downloadOffline() {
-  const contentCache = await caches.open(CACHE_NAME);
-  const current = (await contentCache.keys()).map(req =>
-    req.url.substring(self.location.origin.length + 1) || '/'
-  );
-  const missing = CORE.filter(key => !current.includes(key));
-  return contentCache.addAll(missing);
+  const c = await caches.open(CACHE_NAME);
+  const keys = (await c.keys()).map(r => r.url.replace(self.location.origin + '/', ''));
+  const missing = CORE.filter(k => !keys.includes(k));
+  return c.addAll(missing);
 }
 
 /**
  * Expire cache entries older than TTL based on "Date" header.
- * @param {string} cacheName
+ * @param {string} name
  * @param {number} ttl
  */
-async function expireCache(cacheName, ttl) {
-  const cache = await caches.open(cacheName);
-  const keys = await cache.keys();
+async function expireCache(name, ttl) {
+  const c = await caches.open(name);
   const now = Date.now();
-  await Promise.all(
-    keys.map(async request => {
-      const response = await cache.match(request);
-      const dateHeader = response.headers.get('date') || response.headers.get('Date');
-      if (dateHeader && now - new Date(dateHeader).getTime() > ttl) {
-        await cache.delete(request);
-      }
-    })
-  );
+  (await c.keys()).forEach(async req => {
+    const r = await c.match(req);
+    const dh = r.headers.get('Date');
+    if (dh && now - new Date(dh).getTime() > ttl) c.delete(req);
+  });
 }
 
 /**
- * Fetch with timeout support.
- * @param {Request} request
- * @param {number} timeout Timeout in ms (default: 8000)
- * @throws {Error} on timeout or fetch error
+ * Trim cache to a maximum number of entries.
+ * Removes oldest entries when limit exceeded.
+ * @param {string} name - Cache name to trim
+ * @param {number} max - Maximum number of entries to keep
  */
-async function fetchWithTimeout(request, timeout = 8000) {
-  const controller = new AbortController();
-  const signal = controller.signal;
-  const id = setTimeout(() => controller.abort(), timeout);
-  try {
-    const response = await fetch(request, { signal });
-    clearTimeout(id);
-    return response;
-  } catch (error) {
-    clearTimeout(id);
-    if (error.name === 'AbortError') throw new Error('Request timed out');
-    throw error;
+async function trimCache(name, max) {
+  const c = await caches.open(name);
+  let ks = await c.keys();
+  while (ks.length > max) {
+    await c.delete(ks.shift());
+    ks = await c.keys();
   }
 }
 
@@ -398,8 +373,6 @@ function getResourceKey(request) {
  * @param {Object} data - { resource, source, progress, timestamp }
  */
 async function notifyClients(data) {
-  const allClients = await self.clients.matchAll({ includeUncontrolled: true });
-  allClients.forEach(client => {
-    client.postMessage({ type: 'sw-progress', timestamp: Date.now(), ...data });
-  });
+  const clients = await self.clients.matchAll({ includeUncontrolled: true });
+  clients.forEach(client => client.postMessage({ type: 'sw-progress', timestamp: Date.now(), ...data }));
 }
