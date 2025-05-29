@@ -60,6 +60,38 @@
         "clear": false,
         "group": "dart"
       }
+    },
+    {
+      "label": "example:flutter:build:web",
+      "detail": "Build the example Flutter web application",
+      "icon": {
+        "color": "terminal.ansiBlue",
+        "id": "github-action"
+      },
+      "type": "shell",
+      "command": [
+        "flutter pub get",
+        " && flutter build web --wasm --release --no-tree-shake-icons --no-web-resources-cdn --base-href=/ -o build/web"
+      ],
+      "dependsOn": [],
+      "args": [],
+      "group": {
+        "kind": "none",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}/example"
+      },
+      "isBackground": false,
+      "presentation": {
+        "reveal": "silent",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false,
+        "group": "dart"
+      }
     }
   ]
 }

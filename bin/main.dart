@@ -6,10 +6,6 @@ import 'package:args/args.dart';
 import 'package:path/path.dart' as path;
 import 'package:sw/sw.dart';
 
-// TODO(plugfox): Add postMessage with current
-// progress during the initialization.
-// Mike Matiunin <plugfox@gmail.com>, 28 May 2025
-
 // TODO(plugfox): Add demo progress bar
 // with current progress during the initialization.
 // Mike Matiunin <plugfox@gmail.com>, 28 May 2025

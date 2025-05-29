@@ -7,7 +7,7 @@
       "type": "dart",
       "program": "bin/main.dart",
       "args": [
-        "--input=example/",
+        "--input=example/build/web",
         "--output=sw.js",
         "--glob=*, **/*.js, **/*.json, assets/**",
         "--no-glob=sw.js, assets/NOTICES",
@@ -16,6 +16,7 @@
       "env": {
         "ENVIRONMENT": "development"
       },
+      "preLaunchTask": "example:flutter:build:web",
       "console": "debugConsole"
     },
     // dart test test/unit_test.dart --color --platform=vm

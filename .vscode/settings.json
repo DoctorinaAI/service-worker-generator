@@ -27,8 +27,9 @@
   },
   "dart.lineLength": 80,
   "dart.doNotFormat": [
-    "**.g.dart",
+    "**.g.dart"
   ],
+  "html.format.enable": false,
   "search.exclude": {
     ".dart_tool": true,
     "coverage": true,

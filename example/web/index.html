@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="Service Worker Example">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="sw_example">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png" />
+
+  <title>sw_example</title>
+  <link rel="manifest" href="manifest.json">
+</head>
+
+<body>
+  <script async>
+    {{flutter_js}}
+    {{flutter_build_config}}
+
+    // Loading indicator
+    const loading = document.createElement('div');
+    document.body.appendChild(loading);
+    loading.textContent = "Loading Entrypoint...";
+
+    const searchParams = new URLSearchParams(window.location.search);
+    const renderer = searchParams.get('renderer');
+    const userConfig = renderer ? { 'renderer': renderer } : {};
+    _flutter.loader.load({
+      config: userConfig,
+      onEntrypointLoaded: async function(engineInitializer) {
+        loading.textContent = "Initializing engine...";
+        const appRunner = await engineInitializer.initializeEngine();
+        loading.textContent = "Running app...";
+        await appRunner.runApp();
+      }
+    });
+  </script>
+</body>
+</html>
