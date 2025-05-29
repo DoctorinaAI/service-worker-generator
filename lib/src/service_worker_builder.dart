@@ -193,9 +193,12 @@ async function onlineFirst(request) {
   try {
     const res = await fetch(request);
     if (res.ok) {
-      await caches.open(CACHE_NAME)
-        .then(c => c.put(request, res.clone()))
-        .catch(err => console.error('Cache put error:', err));
+      try {
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(request, res.clone());
+      } catch (err) {
+        console.error('Cache put error:', err);
+      }
       return res;
     }
     throw new Error('Network fetch failed');
@@ -318,6 +321,7 @@ async function expireCache(name, ttl) {
   const keys = await c.keys();
   for (const req of keys) {
     const r = await c.match(req);
+    if (!r) continue; // Skip if no response found
     const dh = r.headers.get('Date') || r.headers.get('Last-Modified') || r.headers.get('Expires');
     // If no date header, skip expiration check
     if (dh && now - new Date(dh).getTime() > ttl) await c.delete(req);
