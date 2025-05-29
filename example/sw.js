@@ -4,7 +4,7 @@
 // Version & Cache Names
 // ---------------------------
 const CACHE_PREFIX    = 'app-cache'; // Prefix for all caches
-const CACHE_VERSION   = '1748527669757'; // Bump this on every release
+const CACHE_VERSION   = '1748527840183'; // Bump this on every release
 const CACHE_NAME      = `${CACHE_PREFIX}-${CACHE_VERSION}`; // Primary content cache
 const TEMP_CACHE      = `${CACHE_PREFIX}-temp-${CACHE_VERSION}`; // Temporary cache for atomic updates
 const MANIFEST_CACHE  = `${CACHE_PREFIX}-manifest`; // Stores previous manifest (no version suffix)
@@ -12,7 +12,7 @@ const RUNTIME_CACHE   = `${CACHE_PREFIX}-runtime-${CACHE_VERSION}`; // Cache for
 const RUNTIME_ENTRIES = 50; // Max entries in runtime cache
 const CACHE_TTL       = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
 const MEDIA_EXT       = /\.(png|jpe?g|svg|gif|webp|ico|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|pdf|json|jsonp)$/i;
-const RESOURCES_SIZE  = 18362; // total size of all resources in bytes
+const RESOURCES_SIZE  = 18589; // total size of all resources in bytes
 const MAX_RETRIES     = 3; // Number of retry attempts
 const RETRY_DELAY     = 500; // Delay between retries in milliseconds
 
@@ -72,8 +72,8 @@ const RESOURCES = {
   },
   "sw.js": {
     "name": "sw.js",
-    "size": 13429,
-    "hash": "eb7c003755352aeca0e78b37b19387c7"
+    "size": 13656,
+    "hash": "3945ea848d779301a58dec5d81ffc41a"
   },
   "version.json": {
     "name": "version.json",
@@ -231,9 +231,12 @@ async function onlineFirst(request) {
   try {
     const res = await fetch(request);
     if (res.ok) {
-      await caches.open(CACHE_NAME)
-        .then(c => c.put(request, res.clone()))
-        .catch(err => console.error('Cache put error:', err));
+      try {
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(request, res.clone());
+      } catch (err) {
+        console.error('Cache put error:', err);
+      }
       return res;
     }
     throw new Error('Network fetch failed');
@@ -356,6 +359,7 @@ async function expireCache(name, ttl) {
   const keys = await c.keys();
   for (const req of keys) {
     const r = await c.match(req);
+    if (!r) continue; // Skip if no response found
     const dh = r.headers.get('Date') || r.headers.get('Last-Modified') || r.headers.get('Expires');
     // If no date header, skip expiration check
     if (dh && now - new Date(dh).getTime() > ttl) await c.delete(req);
