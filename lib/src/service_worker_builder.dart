@@ -227,8 +227,8 @@ async function runtimeCache(request) {
   }
   const response = await fetchWithProgress(request, meta);
   if (response.ok) {
-    cache.put(request, response.clone());
-    trimCache(RUNTIME_CACHE, RUNTIME_ENTRIES);
+    await cache.put(request, response.clone());
+    await trimCache(RUNTIME_CACHE, RUNTIME_ENTRIES);
   }
   return response;
 }
@@ -249,19 +249,19 @@ async function fetchWithProgress(request, meta) {
         // For opaque responses, we can't read the body or headers
         notifyClients({ resource: { path: getResourceKey(request), ...meta }, source: 'network', progress: 100 });
         // Still cache the response even though we can't examine it
-        caches.open(CACHE_NAME).then(c => c.put(request, response.clone()));
+        await caches.open(CACHE_NAME).then(c => c.put(request, response.clone()));
         return response;
       }
 
       const total = meta.size || parseInt(response.headers.get('content-length')) || 0;
       if (!response.body || !total) {
         // If no body or size, just return the response and notify clients
-        notifyClients({ resource: { ...meta }, source: 'network', progress: 100 });
+        notifyClients({ resource: { path: getResourceKey(request), ...meta }, source: 'network', progress: 100 });
         return response;
       }
 
       // Notify clients about the start of the download
-      notifyClients({ resource: { ...meta }, source: 'network', progress: 0 });
+      notifyClients({ resource: { path: getResourceKey(request), ...meta }, source: 'network', progress: 0 });
 
       // Create a stream to read the response body
       const reader = response.body.getReader();
@@ -276,7 +276,7 @@ async function fetchWithProgress(request, meta) {
               }
               loaded += value.byteLength;
               const pct = Math.round((loaded / total) * 100);
-              notifyClients({ resource: { ...meta }, source: 'network', progress: pct });
+              notifyClients({ resource: { path: getResourceKey(request), ...meta }, source: 'network', progress: pct });
               controller.enqueue(value);
               read();
             }).catch(err => controller.error(err));
@@ -285,7 +285,7 @@ async function fetchWithProgress(request, meta) {
         }
       });
       const newResp = new Response(stream, { headers: response.headers });
-      caches.open(CACHE_NAME).then(c => c.put(request, newResp.clone()));
+      await caches.open(CACHE_NAME).then(c => c.put(request, newResp.clone()));
       return newResp;
     } catch (err) {
       attempt++;
@@ -318,7 +318,8 @@ async function expireCache(name, ttl) {
   const keys = await c.keys();
   for (const req of keys) {
     const r = await c.match(req);
-    const dh = r.headers.get('Date');
+    const dh = r.headers.get('Date') || r.headers.get('Last-Modified') || r.headers.get('Expires');
+    // If no date header, skip expiration check
     if (dh && now - new Date(dh).getTime() > ttl) await c.delete(req);
   }
 }

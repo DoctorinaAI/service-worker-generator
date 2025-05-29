@@ -4,7 +4,7 @@
 // Version & Cache Names
 // ---------------------------
 const CACHE_PREFIX    = 'app-cache'; // Prefix for all caches
-const CACHE_VERSION   = '1748527191446'; // Bump this on every release
+const CACHE_VERSION   = '1748527669757'; // Bump this on every release
 const CACHE_NAME      = `${CACHE_PREFIX}-${CACHE_VERSION}`; // Primary content cache
 const TEMP_CACHE      = `${CACHE_PREFIX}-temp-${CACHE_VERSION}`; // Temporary cache for atomic updates
 const MANIFEST_CACHE  = `${CACHE_PREFIX}-manifest`; // Stores previous manifest (no version suffix)
@@ -12,7 +12,7 @@ const RUNTIME_CACHE   = `${CACHE_PREFIX}-runtime-${CACHE_VERSION}`; // Cache for
 const RUNTIME_ENTRIES = 50; // Max entries in runtime cache
 const CACHE_TTL       = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
 const MEDIA_EXT       = /\.(png|jpe?g|svg|gif|webp|ico|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|pdf|json|jsonp)$/i;
-const RESOURCES_SIZE  = 17248; // total size of all resources in bytes
+const RESOURCES_SIZE  = 18362; // total size of all resources in bytes
 const MAX_RETRIES     = 3; // Number of retry attempts
 const RETRY_DELAY     = 500; // Delay between retries in milliseconds
 
@@ -72,8 +72,8 @@ const RESOURCES = {
   },
   "sw.js": {
     "name": "sw.js",
-    "size": 12315,
-    "hash": "7d2f135bd5d88c3a40a1fdc523d14337"
+    "size": 13429,
+    "hash": "eb7c003755352aeca0e78b37b19387c7"
   },
   "version.json": {
     "name": "version.json",
@@ -265,8 +265,8 @@ async function runtimeCache(request) {
   }
   const response = await fetchWithProgress(request, meta);
   if (response.ok) {
-    cache.put(request, response.clone());
-    trimCache(RUNTIME_CACHE, RUNTIME_ENTRIES);
+    await cache.put(request, response.clone());
+    await trimCache(RUNTIME_CACHE, RUNTIME_ENTRIES);
   }
   return response;
 }
@@ -287,19 +287,19 @@ async function fetchWithProgress(request, meta) {
         // For opaque responses, we can't read the body or headers
         notifyClients({ resource: { path: getResourceKey(request), ...meta }, source: 'network', progress: 100 });
         // Still cache the response even though we can't examine it
-        caches.open(CACHE_NAME).then(c => c.put(request, response.clone()));
+        await caches.open(CACHE_NAME).then(c => c.put(request, response.clone()));
         return response;
       }
 
       const total = meta.size || parseInt(response.headers.get('content-length')) || 0;
       if (!response.body || !total) {
         // If no body or size, just return the response and notify clients
-        notifyClients({ resource: { ...meta }, source: 'network', progress: 100 });
+        notifyClients({ resource: { path: getResourceKey(request), ...meta }, source: 'network', progress: 100 });
         return response;
       }
 
       // Notify clients about the start of the download
-      notifyClients({ resource: { ...meta }, source: 'network', progress: 0 });
+      notifyClients({ resource: { path: getResourceKey(request), ...meta }, source: 'network', progress: 0 });
 
       // Create a stream to read the response body
       const reader = response.body.getReader();
@@ -314,7 +314,7 @@ async function fetchWithProgress(request, meta) {
               }
               loaded += value.byteLength;
               const pct = Math.round((loaded / total) * 100);
-              notifyClients({ resource: { ...meta }, source: 'network', progress: pct });
+              notifyClients({ resource: { path: getResourceKey(request), ...meta }, source: 'network', progress: pct });
               controller.enqueue(value);
               read();
             }).catch(err => controller.error(err));
@@ -323,7 +323,7 @@ async function fetchWithProgress(request, meta) {
         }
       });
       const newResp = new Response(stream, { headers: response.headers });
-      caches.open(CACHE_NAME).then(c => c.put(request, newResp.clone()));
+      await caches.open(CACHE_NAME).then(c => c.put(request, newResp.clone()));
       return newResp;
     } catch (err) {
       attempt++;
@@ -356,7 +356,8 @@ async function expireCache(name, ttl) {
   const keys = await c.keys();
   for (const req of keys) {
     const r = await c.match(req);
-    const dh = r.headers.get('Date');
+    const dh = r.headers.get('Date') || r.headers.get('Last-Modified') || r.headers.get('Expires');
+    // If no date header, skip expiration check
     if (dh && now - new Date(dh).getTime() > ttl) await c.delete(req);
   }
 }
