@@ -182,10 +182,12 @@
     <div class="progress-percentage" id="progress-percentage">0%</div>
   </div>  <script>
     {{flutter_js}}
-    {{flutter_build_config}}    // Progress management
+    {{flutter_build_config}}
+
+    // Progress management
     let currentProgress = 0;
     let isServiceWorkerAvailable = false;
-    let totalResourcesSize = 30459398; // Default from sw.js
+    let totalResourcesSize = 0; // Default from sw.js
     let loadedFiles = new Map(); // Track loaded files: URL -> size
 
     const progressCircle = document.getElementById('progress-circle');
