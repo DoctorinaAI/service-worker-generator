@@ -93,8 +93,11 @@ self.addEventListener('activate', event => {
       .forEach(req => content.delete(req));
 
     // Populate content with TEMP_CACHE entries
-    (await temp.keys())
-      .forEach(async req => content.put(req, (await temp.match(req)).clone()));
+    await Promise.all(
+      (await temp.keys()).map(async (req) => {
+        content.put(req, (await temp.match(req)).clone())
+      })
+    );
 
     // Save new manifest and remove TEMP_CACHE
     await manifest.put('manifest', new Response(JSON.stringify(RESOURCES)));
@@ -190,7 +193,9 @@ async function onlineFirst(request) {
   try {
     const res = await fetch(request);
     if (res.ok) {
-      caches.open(CACHE_NAME).then(c => c.put(request, res.clone()));
+      await caches.open(CACHE_NAME)
+        .then(c => c.put(request, res.clone()))
+        .catch(err => console.error('Cache put error:', err));
       return res;
     }
     throw new Error('Network fetch failed');
@@ -238,11 +243,27 @@ async function fetchWithProgress(request, meta) {
   while (attempt < MAX_RETRIES) {
     try {
       const response = await fetch(request);
+
+      // Handling for opaque responses (cross-origin without CORS)
+      if (response.type === 'opaque') {
+        // For opaque responses, we can't read the body or headers
+        notifyClients({ resource: { path: getResourceKey(request), ...meta }, source: 'network', progress: 100 });
+        // Still cache the response even though we can't examine it
+        caches.open(CACHE_NAME).then(c => c.put(request, response.clone()));
+        return response;
+      }
+
       const total = meta.size || parseInt(response.headers.get('content-length')) || 0;
       if (!response.body || !total) {
+        // If no body or size, just return the response and notify clients
         notifyClients({ resource: { ...meta }, source: 'network', progress: 100 });
         return response;
       }
+
+      // Notify clients about the start of the download
+      notifyClients({ resource: { ...meta }, source: 'network', progress: 0 });
+
+      // Create a stream to read the response body
       const reader = response.body.getReader();
       let loaded = 0;
       const stream = new ReadableStream({
@@ -309,12 +330,21 @@ async function expireCache(name, ttl) {
  * @param {number} max - Maximum number of entries to keep
  */
 async function trimCache(name, max) {
-  const c = await caches.open(name);
-  let ks = await c.keys();
-  while (ks.length > max) {
-    await c.delete(ks.shift());
-    ks = await c.keys();
+  const cache = await caches.open(name);
+  const keys = await cache.keys();
+  const deleteOps = [];
+
+  if (keys.length <= max) return; // Early return if no trimming needed
+
+  // Calculate how many to delete
+  const toDelete = keys.length - max;
+
+  // Delete oldest entries (at beginning of array)
+  for (let i = 0; i < toDelete; i++) {
+    deleteOps.push(cache.delete(keys[i]));
   }
+
+  await Promise.all(deleteOps);
 }
 
 /**

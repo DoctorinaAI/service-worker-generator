@@ -4,7 +4,7 @@
 // Version & Cache Names
 // ---------------------------
 const CACHE_PREFIX    = 'app-cache'; // Prefix for all caches
-const CACHE_VERSION   = '1748526746646'; // Bump this on every release
+const CACHE_VERSION   = '1748527191446'; // Bump this on every release
 const CACHE_NAME      = `${CACHE_PREFIX}-${CACHE_VERSION}`; // Primary content cache
 const TEMP_CACHE      = `${CACHE_PREFIX}-temp-${CACHE_VERSION}`; // Temporary cache for atomic updates
 const MANIFEST_CACHE  = `${CACHE_PREFIX}-manifest`; // Stores previous manifest (no version suffix)
@@ -12,7 +12,7 @@ const RUNTIME_CACHE   = `${CACHE_PREFIX}-runtime-${CACHE_VERSION}`; // Cache for
 const RUNTIME_ENTRIES = 50; // Max entries in runtime cache
 const CACHE_TTL       = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
 const MEDIA_EXT       = /\.(png|jpe?g|svg|gif|webp|ico|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|pdf|json|jsonp)$/i;
-const RESOURCES_SIZE  = 16974; // total size of all resources in bytes
+const RESOURCES_SIZE  = 17248; // total size of all resources in bytes
 const MAX_RETRIES     = 3; // Number of retry attempts
 const RETRY_DELAY     = 500; // Delay between retries in milliseconds
 
@@ -72,8 +72,8 @@ const RESOURCES = {
   },
   "sw.js": {
     "name": "sw.js",
-    "size": 12041,
-    "hash": "12c1c79947fba3a29bd8f7559bb9b2d6"
+    "size": 12315,
+    "hash": "7d2f135bd5d88c3a40a1fdc523d14337"
   },
   "version.json": {
     "name": "version.json",
@@ -131,8 +131,11 @@ self.addEventListener('activate', event => {
       .forEach(req => content.delete(req));
 
     // Populate content with TEMP_CACHE entries
-    (await temp.keys())
-      .forEach(async req => content.put(req, (await temp.match(req)).clone()));
+    await Promise.all(
+      (await temp.keys()).map(async (req) => {
+        content.put(req, (await temp.match(req)).clone())
+      })
+    );
 
     // Save new manifest and remove TEMP_CACHE
     await manifest.put('manifest', new Response(JSON.stringify(RESOURCES)));
@@ -228,7 +231,9 @@ async function onlineFirst(request) {
   try {
     const res = await fetch(request);
     if (res.ok) {
-      caches.open(CACHE_NAME).then(c => c.put(request, res.clone()));
+      await caches.open(CACHE_NAME)
+        .then(c => c.put(request, res.clone()))
+        .catch(err => console.error('Cache put error:', err));
       return res;
     }
     throw new Error('Network fetch failed');
@@ -276,11 +281,27 @@ async function fetchWithProgress(request, meta) {
   while (attempt < MAX_RETRIES) {
     try {
       const response = await fetch(request);
+
+      // Handling for opaque responses (cross-origin without CORS)
+      if (response.type === 'opaque') {
+        // For opaque responses, we can't read the body or headers
+        notifyClients({ resource: { path: getResourceKey(request), ...meta }, source: 'network', progress: 100 });
+        // Still cache the response even though we can't examine it
+        caches.open(CACHE_NAME).then(c => c.put(request, response.clone()));
+        return response;
+      }
+
       const total = meta.size || parseInt(response.headers.get('content-length')) || 0;
       if (!response.body || !total) {
+        // If no body or size, just return the response and notify clients
         notifyClients({ resource: { ...meta }, source: 'network', progress: 100 });
         return response;
       }
+
+      // Notify clients about the start of the download
+      notifyClients({ resource: { ...meta }, source: 'network', progress: 0 });
+
+      // Create a stream to read the response body
       const reader = response.body.getReader();
       let loaded = 0;
       const stream = new ReadableStream({
@@ -347,12 +368,21 @@ async function expireCache(name, ttl) {
  * @param {number} max - Maximum number of entries to keep
  */
 async function trimCache(name, max) {
-  const c = await caches.open(name);
-  let ks = await c.keys();
-  while (ks.length > max) {
-    await c.delete(ks.shift());
-    ks = await c.keys();
+  const cache = await caches.open(name);
+  const keys = await cache.keys();
+  const deleteOps = [];
+
+  if (keys.length <= max) return; // Early return if no trimming needed
+
+  // Calculate how many to delete
+  const toDelete = keys.length - max;
+
+  // Delete oldest entries (at beginning of array)
+  for (let i = 0; i < toDelete; i++) {
+    deleteOps.push(cache.delete(keys[i]));
   }
+
+  await Promise.all(deleteOps);
 }
 
 /**
