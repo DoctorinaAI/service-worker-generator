@@ -106,7 +106,7 @@
     _flutter.loader.load({
       config: userConfig,
       onEntrypointLoaded: async function(engineInitializer) {
-        progress(50);
+        progress(30);
         const appRunner = await engineInitializer.initializeEngine();
         progress(80);
         await appRunner.runApp();

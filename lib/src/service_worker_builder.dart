@@ -53,7 +53,7 @@ String buildServiceWorker({
       '// ---------------------------\n'
       '// Resource Manifest with MD5 hash and file sizes\n'
       '// ---------------------------\n'
-      '//const RESOURCES_SIZE  = $resourcesSize; // total size of all resources in bytes\n'
+      'const RESOURCES_SIZE  = $resourcesSize; // total size of all resources in bytes\n'
       'const RESOURCES = '
       '${const JsonEncoder.withIndent('  ').convert(resources)}\n'
       '\n'
@@ -488,7 +488,7 @@ async function notifyClients(data) {
   const allClients = await self.clients.matchAll({ includeUncontrolled: true });
   allClients.forEach(client => {
     try {
-      client.postMessage({ type: 'sw-progress', timestamp: Date.now(), ...data });
+      client.postMessage({ type: 'sw-progress', timestamp: Date.now(), total: RESOURCES_SIZE, ...data });
     } catch {}
   });
 }
