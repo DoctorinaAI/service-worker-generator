@@ -4,7 +4,7 @@
 // Version & Cache Names
 // ---------------------------
 const CACHE_PREFIX    = 'app-cache'; // Prefix for all caches
-const CACHE_VERSION   = '1748527840183'; // Bump this on every release
+const CACHE_VERSION   = '1748528567537'; // Bump this on every release
 const CACHE_NAME      = `${CACHE_PREFIX}-${CACHE_VERSION}`; // Primary content cache
 const TEMP_CACHE      = `${CACHE_PREFIX}-temp-${CACHE_VERSION}`; // Temporary cache for atomic updates
 const MANIFEST_CACHE  = `${CACHE_PREFIX}-manifest`; // Stores previous manifest (no version suffix)
@@ -12,7 +12,7 @@ const RUNTIME_CACHE   = `${CACHE_PREFIX}-runtime-${CACHE_VERSION}`; // Cache for
 const RUNTIME_ENTRIES = 50; // Max entries in runtime cache
 const CACHE_TTL       = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
 const MEDIA_EXT       = /\.(png|jpe?g|svg|gif|webp|ico|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|pdf|json|jsonp)$/i;
-const RESOURCES_SIZE  = 18589; // total size of all resources in bytes
+const RESOURCES_SIZE  = 18683; // total size of all resources in bytes
 const MAX_RETRIES     = 3; // Number of retry attempts
 const RETRY_DELAY     = 500; // Delay between retries in milliseconds
 
@@ -72,8 +72,8 @@ const RESOURCES = {
   },
   "sw.js": {
     "name": "sw.js",
-    "size": 13656,
-    "hash": "3945ea848d779301a58dec5d81ffc41a"
+    "size": 13750,
+    "hash": "7dd0083cd6fc57dc03bf2755d61f948c"
   },
   "version.json": {
     "name": "version.json",
@@ -107,9 +107,8 @@ self.addEventListener('activate', event => {
     const origin = self.location.origin + '/';
     const keep = [CACHE_NAME, TEMP_CACHE, MANIFEST_CACHE, RUNTIME_CACHE];
     // Delete outdated caches
-    (await caches.keys())
-      .filter(key => !keep.includes(key))
-      .forEach(key => caches.delete(key));
+    const outdated = (await caches.keys()).filter(key => !keep.includes(key));
+    await Promise.all(outdated.map(key => caches.delete(key)));
     // Open needed caches in parallel
     const [content, temp, manifest] = await Promise.all([
       caches.open(CACHE_NAME),
@@ -118,8 +117,9 @@ self.addEventListener('activate', event => {
     ]);
 
     // Read previous manifest (if exists), or initialize empty
-    const oldMan = (await manifest.match('manifest'))
-      ? await (await manifest.match('manifest')).json()
+    const manifestExists = await manifest.match('manifest');
+    const oldMan = manifestExists
+      ? await manifestExists.json()
       : {};
 
     // Remove outdated entries from contentCache
@@ -325,7 +325,11 @@ async function fetchWithProgress(request, meta) {
           read();
         }
       });
-      const newResp = new Response(stream, { headers: response.headers });
+      const newResp = new Response(stream, {
+        headers: response.headers,
+        status: response.status,
+        statusText: response.statusText
+      });
       await caches.open(CACHE_NAME).then(c => c.put(request, newResp.clone()));
       return newResp;
     } catch (err) {

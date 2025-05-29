@@ -69,9 +69,8 @@ self.addEventListener('activate', event => {
     const origin = self.location.origin + '/';
     const keep = [CACHE_NAME, TEMP_CACHE, MANIFEST_CACHE, RUNTIME_CACHE];
     // Delete outdated caches
-    (await caches.keys())
-      .filter(key => !keep.includes(key))
-      .forEach(key => caches.delete(key));
+    const outdated = (await caches.keys()).filter(key => !keep.includes(key));
+    await Promise.all(outdated.map(key => caches.delete(key)));
     // Open needed caches in parallel
     const [content, temp, manifest] = await Promise.all([
       caches.open(CACHE_NAME),
@@ -80,8 +79,9 @@ self.addEventListener('activate', event => {
     ]);
 
     // Read previous manifest (if exists), or initialize empty
-    const oldMan = (await manifest.match('manifest'))
-      ? await (await manifest.match('manifest')).json()
+    const manifestExists = await manifest.match('manifest');
+    const oldMan = manifestExists
+      ? await manifestExists.json()
       : {};
 
     // Remove outdated entries from contentCache
@@ -287,7 +287,11 @@ async function fetchWithProgress(request, meta) {
           read();
         }
       });
-      const newResp = new Response(stream, { headers: response.headers });
+      const newResp = new Response(stream, {
+        headers: response.headers,
+        status: response.status,
+        statusText: response.statusText
+      });
       await caches.open(CACHE_NAME).then(c => c.put(request, newResp.clone()));
       return newResp;
     } catch (err) {
