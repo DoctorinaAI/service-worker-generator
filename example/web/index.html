@@ -182,13 +182,11 @@
     <div class="progress-percentage" id="progress-percentage">0%</div>
   </div>  <script>
     {{flutter_js}}
-    {{flutter_build_config}}
-
-    // Progress management
+    {{flutter_build_config}}    // Progress management
     let currentProgress = 0;
     let isServiceWorkerAvailable = false;
-    let totalResourcesSize = 0; // Default from sw.js
-    let loadedFiles = new Map(); // Track loaded files: URL -> size
+    let totalResourcesSize = 0; // Total size from sw.js RESOURCES_SIZE
+    let loadedResources = new Map(); // Track loaded resources: resourceKey -> { size, loaded }
 
     const progressCircle = document.getElementById('progress-circle');
     const progressText = document.getElementById('progress-text');
@@ -198,6 +196,14 @@
     // Initialize progress ring
     progressCircle.style.strokeDasharray = circumference;
     progressCircle.style.strokeDashoffset = circumference;
+
+    function calculateTotalProgress() {
+      let totalLoaded = 0;
+      loadedResources.forEach(resource => {
+        totalLoaded += resource.loaded;
+      });
+      return totalLoaded;
+    }
 
     function updateProgress(value, text = '') {
       currentProgress = Math.min(Math.max(value, 0), 100);
@@ -222,26 +228,37 @@
         try {
           const registration = await navigator.serviceWorker.register('/sw.js');
           console.log('Service Worker registered successfully');
-          isServiceWorkerAvailable = true;
-
-          // Listen for service worker messages
+          isServiceWorkerAvailable = true; // Listen for service worker messages
           navigator.serviceWorker.addEventListener('message', (event) => {
             if (event.data && event.data.type === 'sw-progress') {
-              const { loaded = 0, total = totalResourcesSize } = event.data;
-              totalResourcesSize = total;
+              const { resourceKey, resourceSize, loaded, resourceUrl, resourcesSize } = event.data;
+              totalResourcesSize = resourcesSize || totalResourcesSize; // Update total size if provided
 
-              // Map SW progress from 10% to 90% (leaving 10% for dart logic)
-              const swProgress = Math.min((loaded / total) * 100, 100);
-              const mappedProgress = 10 + (swProgress * 0.8); // 10% + (0-100% * 80%)
+              if (resourceKey && resourceSize !== undefined && loaded !== undefined) {
+                // Update or add resource in our hash table
+                loadedResources.set(resourceKey, {
+                  size: resourceSize,
+                  loaded: loaded,
+                  url: resourceUrl
+                });
 
-              let progressText = 'Loading resources';
-              if (loaded > 0) {
-                const loadedMB = (loaded / 1024 / 1024).toFixed(1);
-                const totalMB = (total / 1024 / 1024).toFixed(1);
-                progressText = `Loading resources (${loadedMB}/${totalMB} MB)`;
+                // Calculate total progress
+                const totalLoaded = calculateTotalProgress();
+                const progressPercent = Math.min((totalLoaded / totalResourcesSize) * 100, 100);
+
+                // Map SW progress from 10% to 90% (leaving 10% for dart logic)
+                const mappedProgress = 10 + (progressPercent * 0.8); // 10% + (0-100% * 80%)
+
+                let progressText = 'Loading resources';
+                if (totalLoaded > 0) {
+                  const loadedMB = (totalLoaded / 1024 / 1024).toFixed(1);
+                  const totalMB = (totalResourcesSize / 1024 / 1024).toFixed(1);
+                  const resourceCount = loadedResources.size;
+                  progressText = `Loading resources (${loadedMB}/${totalMB} MB, ${resourceCount} files)`;
+                }
+
+                updateProgress(mappedProgress, progressText);
               }
-
-              updateProgress(mappedProgress, progressText);
             }
           });
 

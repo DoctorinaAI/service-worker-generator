@@ -78,7 +78,7 @@ self.addEventListener('install', event => {
    */
   self.skipWaiting();
   event.waitUntil((async () => {
-    await notifyClients({ loaded: 0, status: 'installing' });
+    // No initial notification needed - individual resources will be tracked
 
     const cache = await caches.open(TEMP_CACHE);
     const requests = CORE.map(path =>
@@ -90,15 +90,15 @@ self.addEventListener('install', event => {
     for (const request of requests) {
       try {
         await cache.add(request);
-        loadedCount++;
-
-        const resourceKey = getResourceKey(request);
+        loadedCount++;        const resourceKey = getResourceKey(request);
         const resourceInfo = RESOURCES[resourceKey];
         if (resourceInfo) {
           await notifyClients({
-            loaded: Math.floor((loadedCount / requests.length) * RESOURCES_SIZE / 10), // Rough estimate for install phase
-            status: 'installing',
-            url: request.url
+            resourceUrl: request.url,
+            resourceKey: resourceKey,
+            resourceSize: resourceInfo.size,
+            loaded: resourceInfo.size,
+            status: 'installing'
           });
         }
       } catch (error) {
@@ -106,7 +106,8 @@ self.addEventListener('install', event => {
       }
     }
 
-    await notifyClients({ loaded: Math.floor(RESOURCES_SIZE / 10), status: 'installed' });
+    // No final notification needed - individual resources are tracked
+    // await notifyClients({ loaded: Math.floor(RESOURCES_SIZE / 10), status: 'installed' });
   })());
 });
 
@@ -341,13 +342,16 @@ async function fetchWithProgress(request, cacheName) {
           statusText: response.statusText,
           headers: headers
         });
-        cache.put(request, timestampedResponse.clone());
-
-        // Notify progress for opaque responses
+        cache.put(request, timestampedResponse.clone());        // Notify progress for opaque responses
         const resourceKey = getResourceKey(request);
         const resourceInfo = RESOURCES[resourceKey];
         if (resourceInfo) {
-          await notifyClients({ loaded: resourceInfo.size, url: request.url });
+          await notifyClients({
+            resourceUrl: request.url,
+            resourceKey: resourceKey,
+            resourceSize: resourceInfo.size,
+            loaded: resourceInfo.size
+          });
         }
 
         return response;
@@ -364,13 +368,16 @@ async function fetchWithProgress(request, cacheName) {
           statusText: response.statusText,
           headers: headers
         });
-        cache.put(request, timestampedResponse.clone());
-
-        // Notify progress for non-streaming responses
+        cache.put(request, timestampedResponse.clone());        // Notify progress for non-streaming responses
         const resourceKey = getResourceKey(request);
         const resourceInfo = RESOURCES[resourceKey];
         if (resourceInfo) {
-          await notifyClients({ loaded: resourceInfo.size, url: request.url });
+          await notifyClients({
+            resourceUrl: request.url,
+            resourceKey: resourceKey,
+            resourceSize: resourceInfo.size,
+            loaded: resourceInfo.size
+          });
         }
 
         return response;
@@ -384,14 +391,32 @@ async function fetchWithProgress(request, cacheName) {
               if (done) {
                 controller.close();
                 // Final progress notification
-                notifyClients({ loaded: contentLength, url: request.url });
+                const resourceKey = getResourceKey(request);
+                const resourceInfo = RESOURCES[resourceKey];
+                if (resourceInfo) {
+                  notifyClients({
+                    resourceUrl: request.url,
+                    resourceKey: resourceKey,
+                    resourceSize: resourceInfo.size,
+                    loaded: resourceInfo.size
+                  });
+                }
                 return;
               }
               loaded += value.byteLength;
               controller.enqueue(value);
 
               // Progress notification during streaming
-              notifyClients({ loaded, url: request.url });
+              const resourceKey = getResourceKey(request);
+              const resourceInfo = RESOURCES[resourceKey];
+              if (resourceInfo) {
+                notifyClients({
+                  resourceUrl: request.url,
+                  resourceKey: resourceKey,
+                  resourceSize: resourceInfo.size,
+                  loaded: loaded
+                });
+              }
 
               read();
             }).catch(err => {
@@ -430,10 +455,9 @@ async function downloadOffline() {
     const cache = await caches.open(CACHE_NAME);
     const cachedKeys = (await cache.keys()).map(r => getResourceKey(r));
     const missing = CORE.filter(path => !cachedKeys.includes(path));
-
     if (missing.length === 0) {
       console.log('All resources already cached');
-      await notifyClients({ loaded: RESOURCES_SIZE });
+      // Don't send notification here as all resources are already tracked individually
       return true;
     }
 
@@ -449,9 +473,8 @@ async function downloadOffline() {
         }
       }
     }
-
-    // Initial progress notification
-    await notifyClients({ loaded: totalLoaded });
+    // Initial progress notification - don't send here as individual resources will be tracked
+    // await notifyClients({ loaded: totalLoaded });
 
     // Handle batches to avoid large atomic operations
     const BATCH_SIZE = 5;
@@ -482,9 +505,9 @@ async function downloadOffline() {
         }
       });
     }
-
     console.log(`Downloaded ${missing.length} resources for offline use`);
-    await notifyClients({ loaded: totalLoaded });
+    // Don't send notification here as individual resources are tracked
+    // await notifyClients({ loaded: totalLoaded });
     return true;
   } catch (error) {
     console.error('Failed to download offline resources:', error);
@@ -561,9 +584,8 @@ async function notifyClients(data) {
   const allClients = await self.clients.matchAll({ includeUncontrolled: true });
   allClients.forEach(client => {
     try {
-      client.postMessage({ type: 'sw-progress', timestamp: Date.now(), total: RESOURCES_SIZE, ...data });
+      client.postMessage({ type: 'sw-progress', timestamp: Date.now(), resourcesSize: RESOURCES_SIZE, ...data });
     } catch {}
   });
 }
-
 ''';
