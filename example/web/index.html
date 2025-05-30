@@ -2,19 +2,6 @@
 <html>
 
 <head>
-  <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
-  -->
   <base href="$FLUTTER_BASE_HREF">
 
   <meta charset="UTF-8">
@@ -30,7 +17,7 @@
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png" />
 
-  <title>sw_example</title>
+  <title>Service Worker</title>
   <link rel="manifest" href="manifest.json">
   <style type="text/css">
     body {
@@ -169,6 +156,7 @@
 </head>
 
 <body>
+  <!-- Loading indicator -->
   <div id="loading">
     <div class="logo-container">
       <svg class="progress-ring" viewBox="0 0 140 140">
@@ -177,12 +165,18 @@
       </svg>
       <img src="icons/Icon-192.png" class="logo-image" alt="App Logo">
     </div>
-    <h1>Example</h1>
+    <h1>Service Worker</h1>
     <div class="progress-text" id="progress-text">Initializing<span class="loading-dots"></span></div>
     <div class="progress-percentage" id="progress-percentage">0%</div>
-  </div>  <script>
+  </div>
+
+  <!-- Flutter JS and build config -->
+  <script>
+    // This script tag is replaced by the Flutter build system
     {{flutter_js}}
-    {{flutter_build_config}}    // Progress management
+    {{flutter_build_config}}
+
+    // Progress management
     let currentProgress = 0;
     let isServiceWorkerAvailable = false;
     let totalResourcesSize = 0; // Total size from sw.js RESOURCES_SIZE
@@ -197,6 +191,10 @@
     progressCircle.style.strokeDasharray = circumference;
     progressCircle.style.strokeDashoffset = circumference;
 
+    /**
+     * Calculates the total loaded resources size.
+     * Returns the total loaded size from the loadedResources map.
+     */
     function calculateTotalProgress() {
       let totalLoaded = 0;
       loadedResources.forEach(resource => {
@@ -205,7 +203,12 @@
       return totalLoaded;
     }
 
-    function updateProgress(value, text = '') {
+    /**
+     * Updates the progress ring and text.
+     * @param {number} value - Progress value (0-100).
+     * @param {string} text - Optional text to display.
+     */
+    function updateLoadingProgress(value, text = '') {
       currentProgress = Math.min(Math.max(value, 0), 100);
 
       // Update circular progress
@@ -214,15 +217,33 @@
 
       // Update text
       progressPercentage.textContent = `${Math.round(currentProgress)}%`;
-      if (text) {
-        progressText.innerHTML = text + '<span class="loading-dots"></span>';
-      }
+      if (text) progressText.innerHTML = `${text}<span class="loading-dots"></span>`;
 
       // Console logging
       console.log(`Loading progress: ${Math.round(currentProgress)}% - ${text || 'Loading'}`);
     }
 
-    // Service Worker registration and message handling
+    /**
+     * Removes the loading widget with a fade-out effect.
+     * This function is called when the app is ready.
+     */
+    function removeLoadingWidget() {
+      const loadingEl = document.getElementById("loading");
+      if (loadingEl) {
+        loadingEl.style.transition = 'opacity 0.5s ease-out';
+        loadingEl.style.opacity = '0';
+        setTimeout(() => loadingEl.remove(), 500);
+      }
+    }
+
+    // Expose functions to the global scope for external access
+    window.updateLoadingProgress = updateLoadingProgress;
+    window.removeLoadingWidget = removeLoadingWidget;
+
+    /**
+     * Registers the service worker and listens for messages.
+     * Updates progress based on service worker messages.
+     */
     async function registerServiceWorker() {
       if ('serviceWorker' in navigator) {
         try {
@@ -257,7 +278,7 @@
                   progressText = `Loading resources (${loadedMB}/${totalMB} MB, ${resourceCount} files)`;
                 }
 
-                updateProgress(mappedProgress, progressText);
+                updateLoadingProgress(mappedProgress, progressText);
               }
             }
           });
@@ -275,13 +296,16 @@
       }
     }
 
-    // Initialize the application
+    /**
+     * Initializes the Flutter application.
+     * Registers the service worker and loads the Flutter engine.
+     */
     async function initializeApp() {
       // Register service worker first
       await registerServiceWorker();
 
       // Initial progress
-      updateProgress(10, 'Loading application');
+      updateLoadingProgress(10, 'Loading application');
 
       const searchParams = new URLSearchParams(window.location.search);
       const renderer = searchParams.get('renderer');
@@ -293,17 +317,17 @@
           onEntrypointLoaded: async function(engineInitializer) {
             if (!isServiceWorkerAvailable) {
               // Fallback progress without service worker
-              updateProgress(30, 'Initializing Flutter engine');
+              updateLoadingProgress(30, 'Initializing Flutter engine');
             }
 
             const appRunner = await engineInitializer.initializeEngine();
-            updateProgress(90, 'Starting application');
+            updateLoadingProgress(90, 'Starting application');
             await appRunner.runApp();
           }
         });
       } catch (error) {
         console.error('Failed to initialize Flutter app:', error);
-        updateProgress(0, 'Failed to load application');
+        updateLoadingProgress(0, 'Failed to load application');
       }
     }
 
@@ -312,8 +336,9 @@
       initializeApp();
     });
 
+    // Listen for the first frame event to finalize loading
     window.addEventListener('flutter-first-frame', function () {
-      updateProgress(100, 'Ready');
+      updateLoadingProgress(100, 'Ready');
 
       // Fade out loading screen after a short delay
       setTimeout(() => {

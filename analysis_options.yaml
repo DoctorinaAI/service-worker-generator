@@ -4,8 +4,8 @@ formatter:
   page_width: 80
 
 analyzer:
-  exclude:
-    - "example/**"
+  #exclude:
+  #  - "example/**"
 
   # Enable the following options to enable strong mode.
   language:
