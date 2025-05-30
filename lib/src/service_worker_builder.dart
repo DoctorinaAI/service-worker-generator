@@ -84,23 +84,19 @@ self.addEventListener('install', event => {
     );
 
     // Pre-cache with progress tracking
-    let loadedCount = 0;
     for (const request of requests) {
       try {
-        await cache.add(request);
-        loadedCount++;
         const resourceKey = getResourceKey(request);
         const resourceInfo = RESOURCES[resourceKey];
-        if (resourceInfo) {
-          await notifyClients({
-            resourceName: resourceInfo.name,
-            resourceUrl: request.url,
-            resourceKey: resourceKey,
-            resourceSize: resourceInfo.size,
-            loaded: 0,
-            status: 'installing'
-          });
-        }
+        await fetchWithProgress(request, TEMP_CACHE);
+        await notifyClients({
+          resourceName: resourceInfo.name,
+          resourceUrl: request.url,
+          resourceKey: resourceKey,
+          resourceSize: resourceInfo.size,
+          loaded: resourceInfo.size,
+          status: 'completed'
+        });
       } catch (error) {
         console.warn(`Failed to pre-cache ${request.url}:`, error);
       }

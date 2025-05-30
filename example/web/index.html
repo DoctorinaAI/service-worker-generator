@@ -488,8 +488,16 @@
      */
     function renderResourcesList() {
       const container = document.getElementById('resources-container');
+      if (!container) return;
       container.innerHTML = '';
-      loadedResources.forEach(res => {
+      // Sort resources by timestamp (most recent first)
+      const sortedResources = Array.from(loadedResources.values())
+        .filter(res => res.size > 0).sort((a, b) => b.timestamp - a.timestamp);
+      if (sortedResources.length === 0) {
+        container.innerHTML = '<div class="resource-tile">No resources loaded yet</div>';
+        return;
+      }
+      sortedResources.forEach(res => {
         const tile = document.createElement('div');
         tile.className = 'resource-tile';
 
