@@ -335,7 +335,7 @@ async function fetchWithProgress(request, cacheName) {
           statusText: response.statusText,
           headers: headers
         });
-        cache.put(request, timestampedResponse.clone());        // Notify progress for opaque responses
+        cache.put(request, timestampedResponse.clone()); // Notify progress for opaque responses
         const resourceKey = getResourceKey(request);
         const resourceInfo = RESOURCES[resourceKey];
         if (resourceInfo) {
@@ -353,9 +353,8 @@ async function fetchWithProgress(request, cacheName) {
       }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-      const contentLength = parseInt(response.headers.get('content-length') || '0', 10);
-      if (!response.body || !contentLength) {
-        // Add timestamp header for non-streaming responses
+      // If response is not a stream, cache it directly
+      if (!response.body) {
         const headers = new Headers(response.headers);
         headers.set('SW-Fetched-At', timestamp.toString());
         const timestampedResponse = new Response(response.body, {
@@ -363,7 +362,10 @@ async function fetchWithProgress(request, cacheName) {
           statusText: response.statusText,
           headers: headers
         });
-        cache.put(request, timestampedResponse.clone());        // Notify progress for non-streaming responses
+
+        // Put the response in cache with timestamp
+        cache.put(request, timestampedResponse.clone());
+
         const resourceKey = getResourceKey(request);
         const resourceInfo = RESOURCES[resourceKey];
         if (resourceInfo) {
@@ -377,8 +379,10 @@ async function fetchWithProgress(request, cacheName) {
           });
         }
 
-        return response;
-      }      // Stream response and cache chunks
+        return timestampedResponse;
+      }
+
+      // Stream response and cache chunks
       const stream = new ReadableStream({
         start(controller) {
           reader = response.body.getReader();

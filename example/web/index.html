@@ -265,10 +265,6 @@
 
   <!-- Flutter JS and build config -->
   <script>
-    // This script tag is replaced by the Flutter build system
-    {{flutter_js}}
-    {{flutter_build_config}}
-
     // Progress management
     let currentProgress = 0;
     let isServiceWorkerAvailable = false;
@@ -406,15 +402,13 @@
     }
 
     /**
-     * Initializes the Flutter application.
-     * Registers the service worker and loads the Flutter engine.
+     * Loads the Flutter application.
+     * Initializes the Flutter engine and runs the app.
      */
-    async function initializeApp() {
-      // Register service worker first
-      await registerServiceWorker();
-
-      // Initial progress
-      updateLoadingProgress(10, 'Loading application');
+    async function loadFlutterApp() {
+      // This tag is replaced by the Flutter build system
+      {{flutter_js}}
+      {{flutter_build_config}}
 
       const searchParams = new URLSearchParams(window.location.search);
       const renderer = searchParams.get('renderer');
@@ -437,6 +431,38 @@
       } catch (error) {
         console.error('Failed to initialize Flutter app:', error);
         updateLoadingProgress(0, 'Failed to load application');
+      }
+    }
+
+    /**
+     * Initializes the Flutter application.
+     * Registers the service worker and loads the Flutter engine.
+     */
+    async function initializeApp() {
+      try {
+        // Register service worker first
+        updateLoadingProgress(0, 'Registering service worker');
+        await registerServiceWorker();
+
+        // Initial progress update
+        updateLoadingProgress(10, 'Loading flutter application');
+        if ('serviceWorker' in navigator) {
+          if (navigator.serviceWorker.controller) {
+            console.log('[SW] registered:', reg);
+            loadFlutterApp(); // Load Flutter app immediately if already controlled
+          } else {
+            navigator.serviceWorker.addEventListener('controllerchange', () => {
+              console.log('[SW] controller changed — now controlled');
+              loadFlutterApp(); // Load Flutter app after service worker takes control
+            });
+          }
+        } else {
+          console.warn('[SW] Service Worker not supported, loading Flutter app directly');
+          loadFlutterApp(); // Load Flutter app directly if service worker is not supported
+        }
+      } catch (e) {
+        console.error('[SW] registration failed:', e);
+        loadFlutterApp(); // Load Flutter app even if service worker registration fails
       }
     }
 

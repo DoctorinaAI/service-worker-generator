@@ -9,7 +9,7 @@
       "args": [
         "--input=example/build/web",
         "--output=flutter_service_worker.js",
-        "--glob=*, **/*.js, **/*.json, assets/**",
+        "--glob=*, **/*.js, **/*.wasm, **/*.json, assets/**, canvaskit/**, icons/**",
         "--no-glob=flutter_service_worker.js, assets/NOTICES",
         "--comments",
       ],
