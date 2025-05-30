@@ -262,9 +262,10 @@
               if (resourceKey && resourceSize !== undefined && loaded !== undefined) {
                 // Update or add resource in our hash table
                 loadedResources.set(resourceKey, {
-                  size: resourceSize,
-                  loaded: loaded,
-                  url: resourceUrl,
+                  key: resourceKey, // Unique key for the resource
+                  size: resourceSize, // Size of the resource in bytes
+                  loaded: loaded, // Bytes loaded so far
+                  url: resourceUrl, // URL of the resource
                   status: status // installing | fetching
                 });
 
