@@ -30,8 +30,10 @@ platforms:
 # PROJECT STRUCTURE
 # ==============================================================================
 
+# dart pub global activate --source path .
+# dart run sw:generate
 executables:
-  - bin/main.dart
+  generate: generate
 
 # ==============================================================================
 # DEPENDENCIES
