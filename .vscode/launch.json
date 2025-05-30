@@ -8,9 +8,9 @@
       "program": "bin/main.dart",
       "args": [
         "--input=example/build/web",
-        "--output=sw.js",
+        "--output=flutter_service_worker.js",
         "--glob=*, **/*.js, **/*.json, assets/**",
-        "--no-glob=sw.js, assets/NOTICES",
+        "--no-glob=flutter_service_worker.js, assets/NOTICES",
         "--comments",
       ],
       "env": {

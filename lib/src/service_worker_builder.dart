@@ -78,8 +78,6 @@ self.addEventListener('install', event => {
    */
   self.skipWaiting();
   event.waitUntil((async () => {
-    // No initial notification needed - individual resources will be tracked
-
     const cache = await caches.open(TEMP_CACHE);
     const requests = CORE.map(path =>
       new Request(new URL(path, self.location.origin), { cache: 'reload' })
@@ -90,7 +88,8 @@ self.addEventListener('install', event => {
     for (const request of requests) {
       try {
         await cache.add(request);
-        loadedCount++;        const resourceKey = getResourceKey(request);
+        loadedCount++;
+        const resourceKey = getResourceKey(request);
         const resourceInfo = RESOURCES[resourceKey];
         if (resourceInfo) {
           await notifyClients({
@@ -105,9 +104,6 @@ self.addEventListener('install', event => {
         console.warn(`Failed to pre-cache ${request.url}:`, error);
       }
     }
-
-    // No final notification needed - individual resources are tracked
-    // await notifyClients({ loaded: Math.floor(RESOURCES_SIZE / 10), status: 'installed' });
   })());
 });
 
@@ -350,7 +346,8 @@ async function fetchWithProgress(request, cacheName) {
             resourceUrl: request.url,
             resourceKey: resourceKey,
             resourceSize: resourceInfo.size,
-            loaded: resourceInfo.size
+            loaded: resourceInfo.size,
+            status: 'fetching'
           });
         }
 
@@ -376,7 +373,8 @@ async function fetchWithProgress(request, cacheName) {
             resourceUrl: request.url,
             resourceKey: resourceKey,
             resourceSize: resourceInfo.size,
-            loaded: resourceInfo.size
+            loaded: resourceInfo.size,
+            status: 'fetching'
           });
         }
 
@@ -398,7 +396,8 @@ async function fetchWithProgress(request, cacheName) {
                     resourceUrl: request.url,
                     resourceKey: resourceKey,
                     resourceSize: resourceInfo.size,
-                    loaded: resourceInfo.size
+                    loaded: resourceInfo.size,
+                    status: 'fetching'
                   });
                 }
                 return;
@@ -414,7 +413,8 @@ async function fetchWithProgress(request, cacheName) {
                   resourceUrl: request.url,
                   resourceKey: resourceKey,
                   resourceSize: resourceInfo.size,
-                  loaded: loaded
+                  loaded: loaded,
+                  status: 'fetching'
                 });
               }
 
@@ -473,8 +473,6 @@ async function downloadOffline() {
         }
       }
     }
-    // Initial progress notification - don't send here as individual resources will be tracked
-    // await notifyClients({ loaded: totalLoaded });
 
     // Handle batches to avoid large atomic operations
     const BATCH_SIZE = 5;
@@ -506,8 +504,6 @@ async function downloadOffline() {
       });
     }
     console.log(`Downloaded ${missing.length} resources for offline use`);
-    // Don't send notification here as individual resources are tracked
-    // await notifyClients({ loaded: totalLoaded });
     return true;
   } catch (error) {
     console.error('Failed to download offline resources:', error);

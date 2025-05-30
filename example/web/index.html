@@ -250,7 +250,7 @@
     async function registerServiceWorker() {
       if ('serviceWorker' in navigator) {
         try {
-          const registration = await navigator.serviceWorker.register('/sw.js');
+          const registration = await navigator.serviceWorker.register('/flutter_service_worker.js');
           console.log('Service Worker registered successfully');
           isServiceWorkerAvailable = true; // Listen for service worker messages
           navigator.serviceWorker.addEventListener('message', (event) => {
