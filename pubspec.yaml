@@ -8,7 +8,7 @@ description: >
   A command-line tool to generate service worker files for web applications.
   It simplifies the process of creating service workers.
 
-version: 0.0.1
+version: 0.0.2
 
 homepage: https://github.com/DoctorinaAI/service-worker-generator
 repository: https://github.com/DoctorinaAI/service-worker-generator
@@ -40,7 +40,7 @@ executables:
 # ==============================================================================
 
 environment:
-  sdk: ">=3.8.0 <4.0.0"
+  sdk: ">=3.6.0 <4.0.0"
 
 dependencies:
   path: ^1.9.1
@@ -49,5 +49,5 @@ dependencies:
   crypto: ^3.0.6
 
 dev_dependencies:
-  lints: ^6.0.0
+  lints: ">=5.0.0 <7.0.0"
   test: ^1.26.2
