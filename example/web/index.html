@@ -257,8 +257,6 @@
             if (event.data && event.data.type === 'sw-progress') {
               const { resourceKey, resourceSize, loaded, resourceUrl, resourcesSize, status } = event.data;
 
-              if (status !== 'fetching') return; // Only handle fetching status
-
               totalResourcesSize = resourcesSize || totalResourcesSize; // Update total size if provided
 
               if (resourceKey && resourceSize !== undefined && loaded !== undefined) {
@@ -266,7 +264,8 @@
                 loadedResources.set(resourceKey, {
                   size: resourceSize,
                   loaded: loaded,
-                  url: resourceUrl
+                  url: resourceUrl,
+                  status: status // installing | fetching
                 });
 
                 // Calculate total progress
@@ -280,8 +279,8 @@
                 if (totalLoaded > 0) {
                   const loadedMB = (totalLoaded / 1024 / 1024).toFixed(1);
                   const totalMB = (totalResourcesSize / 1024 / 1024).toFixed(1);
-                  const resourceCount = loadedResources.size;
-                  progressText = `Loading resources (${loadedMB}/${totalMB} MB, ${resourceCount} files)`;
+                  //const resourceCount = loadedResources.size;
+                  progressText = `Loading resources (${loadedMB}/${totalMB} MB)`;
                 }
 
                 updateLoadingProgress(mappedProgress, progressText);

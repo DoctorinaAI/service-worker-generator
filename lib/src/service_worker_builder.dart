@@ -96,7 +96,7 @@ self.addEventListener('install', event => {
             resourceUrl: request.url,
             resourceKey: resourceKey,
             resourceSize: resourceInfo.size,
-            loaded: resourceInfo.size,
+            loaded: 0,
             status: 'installing'
           });
         }
