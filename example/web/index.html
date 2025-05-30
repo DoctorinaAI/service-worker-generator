@@ -326,13 +326,14 @@
       }, 300);
     });
 
-    // Handle service worker updates
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.addEventListener('controllerchange', () => {
-        console.log('Service Worker updated, reloading page...');
-        window.location.reload();
-      });
-    }
+    // Handle service worker updates,
+    // reloading the page when a new service worker takes control.
+    //if ('serviceWorker' in navigator) {
+    //  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    //    console.log('Service Worker updated, reloading page...');
+    //    window.location.reload();
+    //  });
+    //}
   </script>
 </body>
 </html>
