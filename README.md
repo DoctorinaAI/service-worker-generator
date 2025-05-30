@@ -48,7 +48,7 @@ dart run sw:generate --prefix my-app --version 1.2.3
 
 # Filter files with glob patterns
 dart run sw:generate \
-    --glob="**.{html,js,wasm,json}; assets/**; canvaskit/**; icons/**\"
+    --glob="**.{html,js,wasm,json}; assets/**; canvaskit/**; icons/**"
     --no-glob="flutter_service_worker.js; **/*.map; assets/NOTICES"
 
 # Include comments in generated file
@@ -64,8 +64,8 @@ dart run sw:generate --comments
 | `--output`   | `-o`  | Output service worker filename                | `sw.js`           |
 | `--prefix`   | `-p`  | Cache name prefix                             | `app-cache`       |
 | `--version`  | `-v`  | Cache version                                 | current timestamp |
-| `--glob`     | `-g`  | Glob pattern to include files                 | `**`              |
-| `--no-glob`  | `-e`  | Glob pattern to exclude files                 | -                 |
+| `--glob`     | `-g`  | Glob patterns to include files                | `**`              |
+| `--no-glob`  | `-e`  | Glob patterns to exclude files                | -                 |
 | `--comments` | `-c`  | Include comments in generated file            | `false`           |
 
 ## 📁 Usage Examples
@@ -87,7 +87,7 @@ flutter build web --release --no-tree-shake-icons --no-web-resources-cdn --base-
 dart run sw:generate --input=build/web \
     --output=flutter_service_worker.js \
     --prefix=flutter-app \
-    --glob="**.{html,js,wasm,json}; assets/**; canvaskit/**; icons/**\" \
+    --glob="**.{html,js,wasm,json}; assets/**; canvaskit/**; icons/**" \
     --no-glob="flutter_service_worker.js; **/*.map; assets/NOTICES" \
     --comments
 ```
