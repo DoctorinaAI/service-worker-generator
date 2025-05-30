@@ -10,7 +10,7 @@
         "--input=example/build/web",
         "--output=flutter_service_worker.js",
         "--glob=*, **/*.js, **/*.wasm, **/*.json, assets/**, canvaskit/**, icons/**",
-        "--no-glob=flutter_service_worker.js, assets/NOTICES",
+        "--no-glob=flutter_service_worker.js, **/*.map, assets/NOTICES",
         "--comments",
       ],
       "env": {
