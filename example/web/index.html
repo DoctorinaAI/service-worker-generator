@@ -125,6 +125,91 @@
       animation: dots 1.5s infinite;
     }
 
+    /* Resources container */
+    .resources-container {
+      margin-top: 1rem;
+      width: 320px;
+      max-height: 0; /* по умолчанию скрыт */
+      overflow-y: auto;
+      transition: max-height 0.3s ease;
+    }
+
+    /* Resource tile */
+    .resource-tile {
+      height: 64px;
+      padding: 4px 8px;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    /* Name of the resource */
+    .resource-key {
+      font-size: 0.9rem;
+      color: #ffffff;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Progress bar for each resource */
+    .resource-progress-wrapper {
+      position: relative;
+      background: rgba(255, 255, 255, 0.1);
+      height: 24px;
+      margin-top: 4px;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    /* Progress bar */
+    .resource-progress-bar {
+      height: 100%;
+      width: 0;
+      background: #00ff88;
+      transition: width 0.3s ease;
+    }
+
+    /* Text for progress bar */
+    .resource-progress-text {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 0.7rem;
+      color: #fff;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+      pointer-events: none;
+    }
+
+    /* Resouces Firefox */
+    .resources-container {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(255,255,255,0.4) transparent;
+    }
+
+    /* Resouces WebKit */
+    .resources-container::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    .resources-container::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    .resources-container::-webkit-scrollbar-thumb {
+      background-color: rgba(255,255,255,0.4);
+      border-radius: 3px;
+      border: 1px solid transparent;
+      background-clip: content-box;
+    }
+
+    .resources-container::-webkit-scrollbar-thumb:hover {
+      background-color: rgba(255,255,255,0.6);
+    }
+
     @keyframes dots {
       0%, 20% { content: ''; }
       40% { content: '.'; }
@@ -154,6 +239,10 @@
       .progress-text {
         font-size: 1rem;
       }
+
+      .resources-container {
+        width: 90vw;
+      }
     }
   </style>
 </head>
@@ -171,6 +260,7 @@
     <h1>Service Worker</h1>
     <div class="progress-text" id="progress-text">Initializing<span class="loading-dots"></span></div>
     <div class="progress-percentage" id="progress-percentage">0%</div>
+    <div id="resources-container" class="resources-container"></div>
   </div>
 
   <!-- Flutter JS and build config -->
@@ -254,20 +344,30 @@
           console.log('Service Worker registered successfully');
           isServiceWorkerAvailable = true; // Listen for service worker messages
           navigator.serviceWorker.addEventListener('message', (event) => {
-            if (event.data && event.data.type === 'sw-progress') {
-              const { resourceKey, resourceSize, loaded, resourceUrl, resourcesSize, status } = event.data;
+            if (event.data && event.data?.type === 'sw-progress') {
+              const {
+                resourceKey,
+                resourceUrl,
+                resourceName,
+                resourceSize,
+                resourcesSize,
+                timestamp,
+                loaded,
+                status
+              } = event.data;
 
               totalResourcesSize = resourcesSize || totalResourcesSize; // Update total size if provided
 
               if (resourceKey && resourceSize !== undefined && loaded !== undefined) {
                 // Update or add resource in our hash table
                 loadedResources.set(resourceKey, {
+                  name: resourceName || resourceKey, // Use resourceName if available
                   key: resourceKey, // Unique key for the resource
                   size: resourceSize, // Size of the resource in bytes
                   loaded: loaded, // Bytes loaded so far
                   url: resourceUrl, // URL of the resource
                   status: status, // installing | fetching
-                  timestamp: Date.now() // Timestamp of the last update
+                  timestamp: timestamp || Date.now() // Timestamp of the last update
                 });
 
                 // Calculate total progress
@@ -287,6 +387,8 @@
 
                 updateLoadingProgress(mappedProgress, progressText);
               }
+
+              renderResourcesList();
             }
           });
 
@@ -366,6 +468,74 @@
     //    window.location.reload();
     //  });
     //}
+
+    /**
+     * Formats bytes into a human-readable string.
+     * @param {number} bytes - The number of bytes.
+     * @param {number} [decimals=1] - Number of decimal places to show.
+     */
+    function formatBytes(bytes, decimals = 1) {
+      if (bytes === 0) return '0 B';
+      const k = 1024;
+      const dm = decimals < 0 ? 0 : decimals;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+    }
+
+    /**
+     * Draws the list of resources with their loading progress.
+     */
+    function renderResourcesList() {
+      const container = document.getElementById('resources-container');
+      container.innerHTML = '';
+      loadedResources.forEach(res => {
+        const tile = document.createElement('div');
+        tile.className = 'resource-tile';
+
+        const title = document.createElement('div');
+        title.className = 'resource-key';
+        title.textContent = res.name || res.key || res.url || 'Unknown';
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'resource-progress-wrapper';
+
+        const bar = document.createElement('div');
+        bar.className = 'resource-progress-bar';
+        const percent = res.size ? (res.loaded / res.size) * 100 : 0;
+        bar.style.width = `${percent}%`;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'resource-progress-text';
+        overlay.textContent = `${res.status} ${formatBytes(res.loaded)} / ${formatBytes(res.size)}`;
+
+        wrapper.append(bar, overlay);
+        tile.append(title, wrapper);
+        container.append(tile);
+      });
+
+      adjustResourcesContainerHeight();
+    }
+
+    /**
+     * Show or hide the resources container based on available height
+     */
+    function adjustResourcesContainerHeight() {
+      const container = document.getElementById('resources-container');
+      const loading = document.getElementById('loading');
+      const viewportH = window.innerHeight;
+      const loadingRect = loading.getBoundingClientRect();
+      const available = viewportH - loadingRect.top - loadingRect.height - 20; // отступ 20px
+
+      if (available >= 64) {
+        container.style.maxHeight = `${available}px`;
+      } else {
+        container.style.maxHeight = '0';
+      }
+    }
+
+    // Подстраиваем на ресайз
+    window.addEventListener('resize', adjustResourcesContainerHeight);
   </script>
 </body>
 </html>

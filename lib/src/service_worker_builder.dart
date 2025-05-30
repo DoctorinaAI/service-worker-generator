@@ -93,6 +93,7 @@ self.addEventListener('install', event => {
         const resourceInfo = RESOURCES[resourceKey];
         if (resourceInfo) {
           await notifyClients({
+            resourceName: resourceInfo.name,
             resourceUrl: request.url,
             resourceKey: resourceKey,
             resourceSize: resourceInfo.size,
@@ -343,6 +344,7 @@ async function fetchWithProgress(request, cacheName) {
         const resourceInfo = RESOURCES[resourceKey];
         if (resourceInfo) {
           await notifyClients({
+            resourceName: resourceInfo.name,
             resourceUrl: request.url,
             resourceKey: resourceKey,
             resourceSize: resourceInfo.size,
@@ -370,6 +372,7 @@ async function fetchWithProgress(request, cacheName) {
         const resourceInfo = RESOURCES[resourceKey];
         if (resourceInfo) {
           await notifyClients({
+            resourceName: resourceInfo.name,
             resourceUrl: request.url,
             resourceKey: resourceKey,
             resourceSize: resourceInfo.size,
@@ -393,6 +396,7 @@ async function fetchWithProgress(request, cacheName) {
                 const resourceInfo = RESOURCES[resourceKey];
                 if (resourceInfo) {
                   notifyClients({
+                    resourceName: resourceInfo.name,
                     resourceUrl: request.url,
                     resourceKey: resourceKey,
                     resourceSize: resourceInfo.size,
@@ -410,6 +414,7 @@ async function fetchWithProgress(request, cacheName) {
               const resourceInfo = RESOURCES[resourceKey];
               if (resourceInfo) {
                 notifyClients({
+                  resourceName: resourceInfo.name,
                   resourceUrl: request.url,
                   resourceKey: resourceKey,
                   resourceSize: resourceInfo.size,
@@ -580,7 +585,12 @@ async function notifyClients(data) {
   const allClients = await self.clients.matchAll({ includeUncontrolled: true });
   allClients.forEach(client => {
     try {
-      client.postMessage({ type: 'sw-progress', timestamp: Date.now(), resourcesSize: RESOURCES_SIZE, ...data });
+      client.postMessage({
+        type: 'sw-progress',
+        timestamp: Date.now(),
+        resourcesSize: RESOURCES_SIZE,
+        ...data
+      });
     } catch {}
   });
 }
