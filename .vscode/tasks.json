@@ -71,7 +71,8 @@
       "type": "shell",
       "command": [
         "flutter pub get",
-        " && flutter build web --wasm --release --no-tree-shake-icons --no-web-resources-cdn --base-href=/ -o build/web"
+        // --wasm
+        " && flutter build web --release --no-tree-shake-icons --no-web-resources-cdn --base-href=/ -o build/web"
       ],
       "dependsOn": [],
       "args": [],
