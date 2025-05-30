@@ -9,14 +9,14 @@
       "args": [
         "--input=example/build/web",
         "--output=flutter_service_worker.js",
-        "--glob=*, **/*.js, **/*.wasm, **/*.json, assets/**, canvaskit/**, icons/**",
-        "--no-glob=flutter_service_worker.js, **/*.map, assets/NOTICES",
+        "--glob=\"**.{html,js,wasm,json}; assets/**; canvaskit/**; icons/**\"",
+        "--no-glob=\"flutter_service_worker.js; **/*.map; assets/NOTICES\"",
         "--comments",
       ],
       "env": {
         "ENVIRONMENT": "development"
       },
-      "preLaunchTask": "example:flutter:build:web",
+      /* "preLaunchTask": "example:flutter:build:web", */
       "console": "debugConsole"
     },
     // dart test test/unit_test.dart --color --platform=vm

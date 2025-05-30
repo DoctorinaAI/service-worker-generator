@@ -48,8 +48,8 @@ dart run sw:generate --prefix my-app --version 1.2.3
 
 # Filter files with glob patterns
 dart run sw:generate \
-    --glob "*, **/*.js, **/*.wasm, **/*.json, assets/**, canvaskit/**, icons/**"
-    --no-glob "flutter_service_worker.js, **/*.map, assets/NOTICES"
+    --glob="**.{html,js,wasm,json}; assets/**; canvaskit/**; icons/**\"
+    --no-glob="flutter_service_worker.js; **/*.map; assets/NOTICES"
 
 # Include comments in generated file
 dart run sw:generate --comments
@@ -84,12 +84,11 @@ dart run build_runner build --delete-conflicting-outputs --release
 flutter build web --release --no-tree-shake-icons --no-web-resources-cdn --base-href=/ -o build/web
 
 # 5. Generate service worker
-dart run sw:generate --input build/web \
+dart run sw:generate --input=build/web \
     --output=flutter_service_worker.js \
-    --prefix flutter-app \
-    --version "$(date +%s)" \
-    --glob=*, **/*.js, **/*.wasm, **/*.json, assets/**, canvaskit/**, icons/** \
-    --no-glob=flutter_service_worker.js, **/*.map, assets/NOTICES \
+    --prefix=flutter-app \
+    --glob="**.{html,js,wasm,json}; assets/**; canvaskit/**; icons/**\" \
+    --no-glob="flutter_service_worker.js; **/*.map; assets/NOTICES" \
     --comments
 ```
 

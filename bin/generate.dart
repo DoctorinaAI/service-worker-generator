@@ -14,117 +14,121 @@ final $log = io.stdout.writeln; // Log to stdout
 final $err = io.stderr.writeln; // Log to stderr
 
 void main([List<String>? arguments]) => runZonedGuarded<void>(
-  () async {
-    // Get command line arguments
-    // If no arguments are provided, use the default values
-    final parser = buildArgumentsParser();
-    final $arguments = parser.parse(arguments ?? []);
-    if ($arguments['help'] == true) {
-      io.stdout
-        ..writeln(_help)
-        ..writeln()
-        ..writeln(parser.usage);
-      io.exit(0);
-    }
+      () async {
+        // Get command line arguments
+        // If no arguments are provided, use the default values
+        final parser = buildArgumentsParser();
+        final $arguments = parser.parse(arguments ?? []);
+        if ($arguments['help'] == true) {
+          io.stdout
+            ..writeln(_help)
+            ..writeln()
+            ..writeln(parser.usage);
+          io.exit(0);
+        }
 
-    final indexDirectory = io.Directory(
-      path.normalize($arguments.option('input') ?? 'build/web'),
-    );
-    final outputFile = io.File(
-      path.normalize(
-        path.join(indexDirectory.path, $arguments.option('output') ?? '.'),
-      ),
-    );
+        final indexDirectory = io.Directory(
+          path.normalize($arguments.option('input') ?? 'build/web'),
+        );
+        final outputFile = io.File(
+          path.normalize(
+            path.join(indexDirectory.path, $arguments.option('output') ?? '.'),
+          ),
+        );
 
-    // Check if the input directory exists
-    if (!indexDirectory.existsSync()) {
-      $err('Error: Input directory does not exist: ${indexDirectory.path}');
-      io.exit(1);
-    } else if (!indexDirectory.listSync().whereType<io.File>().any(
-      (f) => f.path.toLowerCase() != 'index.html',
-    )) {
-      $err(
-        'Error: No index.html file found in the input directory: '
-        '${indexDirectory.path}',
-      );
-      io.exit(1);
-    }
+        // Check if the input directory exists
+        if (!indexDirectory.existsSync()) {
+          $err('Error: Input directory does not exist: ${indexDirectory.path}');
+          io.exit(1);
+        } else if (!indexDirectory.listSync().whereType<io.File>().any(
+              (f) => f.path.toLowerCase() != 'index.html',
+            )) {
+          $err(
+            'Error: No index.html file found in the input directory: '
+            '${indexDirectory.path}',
+          );
+          io.exit(1);
+        }
 
-    // Find all files in the input directory to include in the service worker
-    $log('Retrieving files from: ${indexDirectory.path}');
-    final files = filesInDirectory(
-      indexDirectory,
-      include:
-          $arguments
-              .option('glob')
-              ?.split(',')
-              .map((e) => e.trim())
-              .where((e) => e.isNotEmpty)
-              .toSet() ??
-          const <String>{'**'},
-      exclude:
-          $arguments
-              .option('no-glob')
-              ?.split(',')
-              .map((e) => e.trim())
-              .where((e) => e.isNotEmpty)
-              .toSet() ??
-          const <String>{},
-    );
+        // Find all files in the input directory to include
+        $log('Retrieving files from: ${indexDirectory.path}');
+        final files = filesInDirectory(
+          indexDirectory,
+          include: $arguments
+                  .option('glob')
+                  ?.replaceAll('"', '')
+                  .replaceAll('\'', '')
+                  .split(';')
+                  .map((e) => e.trim())
+                  .where((e) => e.isNotEmpty)
+                  .toSet() ??
+              const <String>{'**'},
+          exclude: $arguments
+                  .option('no-glob')
+                  ?.replaceAll('"', '')
+                  .replaceAll('\'', '')
+                  .split(';')
+                  .map((e) => e.trim())
+                  .where((e) => e.isNotEmpty)
+                  .toSet() ??
+              const <String>{},
+        );
 
-    // Create a resource map with the relative paths and their MD5 hashes
-    $log('Generating resource map for ${files.length} files...');
-    final resources = <String, Object?>{
-      for (final MapEntry(key: String url, value: io.File file)
-          in files.entries)
-        url: <String, Object?>{
-          'name': path.basename(url),
-          'size': await file.length(),
-          'hash': await md5(file),
-        },
-    };
+        // Create a resource map with the relative paths and their MD5 hashes
+        $log('Generating resource map for ${files.length} files...');
+        final resources = <String, Object?>{
+          for (final MapEntry(key: String url, value: io.File file)
+              in files.entries)
+            url: <String, Object?>{
+              'name': path.basename(url),
+              'size': await file.length(),
+              'hash': await md5(file),
+            },
+        };
 
-    // Cache prefix for the service worker
-    // This can be used to differentiate between different service workers
-    final cachePrefix =
-        $arguments
-            .option('prefix')
-            ?.replaceAll(RegExp('[^A-Za-z0-9_-]'), '-')
-            .replaceAll(RegExp('-{2,}'), '-') ??
-        'app-cache';
-    final cacheVersion =
-        $arguments
-            .option('version')
-            ?.replaceAll(RegExp('[^A-Za-z0-9_-]'), '-')
-            .replaceAll(RegExp('-{2,}'), '-') ??
-        DateTime.now().millisecondsSinceEpoch.toString();
+        // Cache prefix for the service worker
+        // This can be used to differentiate between different service workers
+        final cachePrefix = $arguments
+                .option('prefix')
+                ?.replaceAll('"', '')
+                .replaceAll('\'', '')
+                .replaceAll(RegExp('[^A-Za-z0-9_-]'), '-')
+                .replaceAll(RegExp('-{2,}'), '-') ??
+            'app-cache';
+        final cacheVersion = $arguments
+                .option('version')
+                ?.replaceAll('"', '')
+                .replaceAll('\'', '')
+                .replaceAll(RegExp('[^A-Za-z0-9_-]'), '-')
+                .replaceAll(RegExp('-{2,}'), '-') ??
+            DateTime.now().millisecondsSinceEpoch.toString();
 
-    var serviceWorkerText = buildServiceWorker(
-      cachePrefix: cachePrefix,
-      cacheVersion: cacheVersion,
-      resources: <String, Object?>{
-        if (resources['index.html'] case Object obj) '/': obj,
-        ...resources,
+        var serviceWorkerText = buildServiceWorker(
+          cachePrefix: cachePrefix,
+          cacheVersion: cacheVersion,
+          resources: <String, Object?>{
+            if (resources['index.html'] case Object obj) '/': obj,
+            ...resources,
+          },
+        );
+        if (!$arguments.flag('comments'))
+          serviceWorkerText = removeComments(serviceWorkerText);
+
+        // Write the service worker file
+        $log('Writing service worker file to: ${outputFile.path}');
+        outputFile.parent.createSync(recursive: true);
+        await io.File(outputFile.path).writeAsString(
+          serviceWorkerText,
+          mode: io.FileMode.writeOnly,
+          encoding: utf8,
+          flush: true,
+        );
+      },
+      (e, s) {
+        $err('An error occurred: $e');
+        io.exit(1);
       },
     );
-    if (!$arguments.flag('comments'))
-      serviceWorkerText = removeComments(serviceWorkerText);
-
-    // Write the service worker file
-    $log('Writing service worker file to: ${outputFile.path}');
-    outputFile.parent.createSync(recursive: true);
-    await io.File(outputFile.path).writeAsString(
-      serviceWorkerText,
-      mode: io.FileMode.writeOnly,
-      encoding: utf8,
-      flush: true,
-    );
-  },
-  (e, s) {
-    $err('An error occurred: $e');
-    io.exit(1);
-  },
-);
 
 /// Parse arguments
 ArgParser buildArgumentsParser() => ArgParser()
@@ -177,8 +181,7 @@ ArgParser buildArgumentsParser() => ArgParser()
     mandatory: false,
     defaultsTo: 'app-cache',
     valueHelp: 'app-cache',
-    help:
-        'Prefix for the service worker cache name. '
+    help: 'Prefix for the service worker cache name. '
         'This can be used to differentiate between different service workers '
         'or versions of the same service worker.',
   )
@@ -188,8 +191,7 @@ ArgParser buildArgumentsParser() => ArgParser()
     aliases: const <String>['cache', 'cache-version'],
     mandatory: false,
     valueHelp: '1.0.0, 20231001, v1.2.3',
-    help:
-        'Version of the service worker cache. '
+    help: 'Version of the service worker cache. '
         'This can be used to bust the cache when deploying updates.',
   )
   ..addOption(
@@ -216,8 +218,7 @@ ArgParser buildArgumentsParser() => ArgParser()
     aliases: const <String>['comment', 'comments', 'with-comments'],
     negatable: true,
     defaultsTo: false,
-    help:
-        'Include comments in the generated service worker file. '
+    help: 'Include comments in the generated service worker file. '
         'This is useful for debugging and understanding the generated code.',
   );
 
