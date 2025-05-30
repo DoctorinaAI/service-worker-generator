@@ -255,7 +255,10 @@
           isServiceWorkerAvailable = true; // Listen for service worker messages
           navigator.serviceWorker.addEventListener('message', (event) => {
             if (event.data && event.data.type === 'sw-progress') {
-              const { resourceKey, resourceSize, loaded, resourceUrl, resourcesSize } = event.data;
+              const { resourceKey, resourceSize, loaded, resourceUrl, resourcesSize, status } = event.data;
+
+              if (status !== 'fetching') return; // Only handle fetching status
+
               totalResourcesSize = resourcesSize || totalResourcesSize; // Update total size if provided
 
               if (resourceKey && resourceSize !== undefined && loaded !== undefined) {
