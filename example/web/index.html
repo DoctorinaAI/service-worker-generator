@@ -276,12 +276,12 @@
                 // Map SW progress from 10% to 90% (leaving 10% for dart logic)
                 const mappedProgress = 10 + (progressPercent * 0.8); // 10% + (0-100% * 80%)
 
-                let progressText = 'Loading resources';
+                let progressText = 'Downloading';
                 if (totalLoaded > 0) {
                   const loadedMB = (totalLoaded / 1024 / 1024).toFixed(1);
                   const totalMB = (totalResourcesSize / 1024 / 1024).toFixed(1);
                   //const resourceCount = loadedResources.size;
-                  progressText = `Loading resources (${loadedMB}/${totalMB} MB)`;
+                  progressText = `Downloading (${loadedMB}/${totalMB} MB)`;
                 }
 
                 updateLoadingProgress(mappedProgress, progressText);
