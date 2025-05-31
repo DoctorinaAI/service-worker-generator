@@ -245,6 +245,15 @@
       }
     }
   </style>
+
+  <!-- Enable WASM threads on debug: https://github.com/orgs/community/discussions/13309#discussioncomment-3844940 -->
+  <script>
+    if (!window.crossOriginIsolated && ['localhost', '127.0.0.1'].includes(location.hostname)) {
+      const script = document.createElement('script');
+      script.src = 'enable-wasm-threads.js';
+      document.head.appendChild(script);
+    }
+  </script>
 </head>
 
 <body>
