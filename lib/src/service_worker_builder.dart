@@ -117,9 +117,7 @@ self.addEventListener("activate", function(event) {
       var origin = self.location.origin;
       for (var request of await contentCache.keys()) {
         var key = request.url.substring(origin.length + 1);
-        if (key == "") {
-          key = "/";
-        }
+        if (key == "") key = "/";
         // If a resource from the old manifest is not in the new cache, or if
         // the MD5 sum has changed, delete it. Otherwise the resource is left
         // in the cache and can be reused by the new service worker.
@@ -168,7 +166,6 @@ self.addEventListener("fetch", (event) => {
   // browser should take over.
   var resourceInfo = RESOURCES[resourceKey];
   if (!resourceInfo) return;
-
 
   // If the URL is the index.html, perform an online-first request.
   if (resourceKey == '/') return onlineFirst(event);
