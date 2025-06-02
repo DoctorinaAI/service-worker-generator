@@ -117,6 +117,12 @@ We welcome contributions to this project! Please follow these steps:
 6. **Push** to the branch (`git push origin feature/amazing-feature`)
 7. **Create** a Pull Request
 
+To use this package from local path, you can clone the repository and run:
+
+```shell
+dart pub global activate --source path .
+```
+
 ## 📝 License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
