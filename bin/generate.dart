@@ -10,6 +10,12 @@ import 'package:sw/sw.dart';
 // to the service worker with custom logic.
 // Mike Matiunin <plugfox@gmail.com>, 28 May 2025
 
+// TODO(plugfox): Add retry logic for the file fetching
+// Mike Matiunin <plugfox@gmail.com>, 02 June 2025
+
+// TODO(plugfox): Fetch files as streams and notify about the progress
+// Mike Matiunin <plugfox@gmail.com>, 02 June 2025
+
 final $log = io.stdout.writeln; // Log to stdout
 final $err = io.stderr.writeln; // Log to stderr
 
