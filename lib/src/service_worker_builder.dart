@@ -313,7 +313,7 @@ function maybeExpire() {
 
 /**
  * Creates a response with a timestamp header for cache management.
- * @param {Response} response - The original response.
+ * @param {Response} response - The original response (should be cloned before calling this).
  * @param {number} timestamp - The timestamp to add.
  * @returns {Response} - The response with timestamp header.
  */
@@ -356,7 +356,7 @@ async function onlineFirst(request) {
     const response = await fetch(request);
     if (response.ok) {
       const cache = await caches.open(CACHE_NAME);
-      const timestampedResponse = createTimestampedResponse(response);
+      const timestampedResponse = createTimestampedResponse(response.clone());
       cache.put(request, timestampedResponse.clone());
     }
     return response;
@@ -407,7 +407,7 @@ async function fetchWithProgress(request, cacheName) {
       const response = await fetch(request);
       if (response.type === 'opaque') {
         // Always cache opaque responses with timestamp
-        const timestampedResponse = createTimestampedResponse(response, timestamp);
+        const timestampedResponse = createTimestampedResponse(response.clone(), timestamp);
         cache.put(request, timestampedResponse.clone());
 
         // Notify progress for opaque responses
@@ -429,7 +429,7 @@ async function fetchWithProgress(request, cacheName) {
 
       // If response is not a stream, cache it directly
       if (!response.body) {
-        const timestampedResponse = createTimestampedResponse(response, timestamp);
+        const timestampedResponse = createTimestampedResponse(response.clone(), timestamp);
 
         // Put the response in cache with timestamp
         cache.put(request, timestampedResponse.clone());
@@ -447,11 +447,14 @@ async function fetchWithProgress(request, cacheName) {
           });        }
 
         fetchSemaphore.release();
-        return timestampedResponse;
-      }      // Stream response and cache chunks
+        return response;
+      }      // Clone the response before reading the body
+      const responseClone = response.clone();
+
+      // Stream response and cache chunks
       const stream = new ReadableStream({
         start(controller) {
-          reader = response.body.getReader();
+          reader = responseClone.body.getReader();
           let loaded = 0;
           const resourceKey = getResourceKey(request);
           const resourceInfo = RESOURCES[resourceKey];
@@ -502,11 +505,12 @@ async function fetchWithProgress(request, cacheName) {
       const newResp = createTimestampedResponse(new Response(stream, {
         status: response.status,
         statusText: response.statusText,
-        headers: response.headers      }), timestamp);
+        headers: response.headers
+      }), timestamp);
 
       cache.put(request, newResp.clone());
       fetchSemaphore.release();
-      return newResp;
+      return response;
     } catch (err) {
       console.warn(`Fetch attempt ${attempt} failed for ${request.url}:`, err);
       if (reader) reader.cancel();
