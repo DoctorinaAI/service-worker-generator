@@ -1,3 +1,7 @@
+## 0.0.4
+
+- Improved service worker generation.
+
 ## 0.0.3
 
 - Service worker generation now based on the flutter's `flutter_service_worker.js`.
