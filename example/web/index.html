@@ -272,13 +272,13 @@
     <div id="resources-container" class="resources-container"></div>
   </div>
 
-  <!-- Flutter JS and build config -->
   <script>
     // Progress management
     let currentProgress = 0;
     let isServiceWorkerAvailable = false;
     let totalResourcesSize = 0; // Total size from sw.js RESOURCES_SIZE
     let loadedResources = new Map(); // Track loaded resources: resourceKey -> { size, loaded }
+    let serviceWorkerMessageHandler = null; // Store reference to the message handler for cleanup
 
     const progressCircle = document.getElementById('progress-circle');
     const progressText = document.getElementById('progress-text');
@@ -293,12 +293,25 @@
      * Calculates the total loaded resources size.
      * Returns the total loaded size from the loadedResources map.
      */
-    function calculateTotalProgress() {
+    function calculateTotalLoaded() {
       let totalLoaded = 0;
       loadedResources.forEach(resource => {
-        totalLoaded += resource.loaded;
+        totalLoaded += resource.loaded || 0; // Use loaded bytes if available
       });
       return totalLoaded;
+    }
+
+    /**
+     * Calculates the total size of all resources.
+     * Returns the total size from the loadedResources map.
+     */
+    function calculateTotalSize() {
+      let totalSize = 0;
+      loadedResources.forEach(resource => {
+        totalSize += resource.size || 0; // Use resource size if available
+      });
+      // Ensure at least 8 MB total size if no resources are loaded yet
+      return Math.max(totalSize, 8 * 1024 * 1024);
     }
 
     /**
@@ -326,6 +339,13 @@
      * This function is called when the app is ready.
      */
     function removeLoadingIndicator() {
+      // Clean up service worker message listener
+      if (serviceWorkerMessageHandler && 'serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', serviceWorkerMessageHandler);
+        serviceWorkerMessageHandler = null;
+        console.log('Service Worker message listener removed');
+      }
+
       const loadingEl = document.getElementById("loading");
       if (!loadingEl) return;
       loadingEl.remove();
@@ -342,10 +362,12 @@
     async function registerServiceWorker() {
       if ('serviceWorker' in navigator) {
         try {
-          const registration = await navigator.serviceWorker.register('/flutter_service_worker.js');
+          const registration = await navigator.serviceWorker.register('/sw.js');
           console.log('Service Worker registered successfully');
-          isServiceWorkerAvailable = true; // Listen for service worker messages
-          navigator.serviceWorker.addEventListener('message', (event) => {
+          isServiceWorkerAvailable = true;
+
+          // Create and store the message handler for later cleanup
+          serviceWorkerMessageHandler = (event) => {
             if (event.data && event.data?.type === 'sw-progress') {
               const {
                 resourceKey,
@@ -358,7 +380,7 @@
                 status
               } = event.data;
 
-              totalResourcesSize = resourcesSize || totalResourcesSize; // Update total size if provided
+              //totalResourcesSize = resourcesSize || totalResourcesSize; // Update total size if provided
 
               if (resourceKey && resourceSize !== undefined && loaded !== undefined) {
                 // Update or add resource in our hash table
@@ -373,37 +395,40 @@
                 });
 
                 // Calculate total progress
-                const totalLoaded = calculateTotalProgress();
-                const progressPercent = Math.min((totalLoaded / totalResourcesSize) * 100, 100);
+                const totalLoaded = calculateTotalLoaded();
+                const totalSize = calculateTotalSize();
+                const progressPercent = Math.min((totalLoaded / totalSize) * 100, 100);
 
                 // Map SW progress from 10% to 90% (leaving 10% for dart logic)
                 const mappedProgress = 10 + (progressPercent * 0.8); // 10% + (0-100% * 80%)
 
+                console.log(`Downloading resource "${resourceName}" (${formatBytes(loaded)} / ${formatBytes(resourceSize)})`);
+
                 let progressText = 'Downloading';
                 if (totalLoaded > 0) {
-                  const loadedMB = (totalLoaded / 1024 / 1024).toFixed(1);
-                  const totalMB = (totalResourcesSize / 1024 / 1024).toFixed(1);
                   //const resourceCount = loadedResources.size;
-                  progressText = `Downloading (${loadedMB}/${totalMB} MB)`;
+                  progressText = `Downloading (${formatBytes(totalLoaded)} / ${formatBytes(totalSize)})`;
                 }
 
-                updateLoadingProgress(mappedProgress, progressText);
+                // Update the loading progress only if it's below 90%
+                // Because we reserve 10% for the Dart logic
+                if (currentProgress <= 90)
+                  updateLoadingProgress(mappedProgress, progressText);
               }
 
               renderResourcesList();
             }
-          });
+          };
 
-          return registration;
+          // Listen for service worker messages
+          navigator.serviceWorker.addEventListener('message', serviceWorkerMessageHandler);
         } catch (error) {
           console.warn('Service Worker registration failed:', error);
           isServiceWorkerAvailable = false;
-          return null;
         }
       } else {
         console.warn('Service Workers are not supported');
         isServiceWorkerAvailable = false;
-        return null;
       }
     }
 
@@ -518,9 +543,9 @@
       container.innerHTML = '';
       // Sort resources by timestamp (most recent first)
       const sortedResources = Array.from(loadedResources.values())
-        .filter(res => res.size > 0).sort((a, b) => b.timestamp - a.timestamp);
+        .filter(r => r.loaded && r.size && r.size > 0 && r.loaded < r.size)
+        .sort((a, b) => b.timestamp - a.timestamp);
       if (sortedResources.length === 0) {
-        container.innerHTML = '<div class="resource-tile">No resources loaded yet</div>';
         return;
       }
       sortedResources.forEach(res => {

@@ -15,9 +15,12 @@ Future<void> initializeApp() async {
 
   // Simulate some initialization logic
   for (var i = 0; i < steps; i++) {
-    final progress = (offset + (i + 1) * 100 / steps / 10).clamp(offset, 100);
+    final progress =
+        (offset + (i + 1) * 100 / steps / (100 - offset))
+            .clamp(offset, 100)
+            .round();
     platform_initialization.$updateLoadingProgress(
-      progress: progress.toInt(),
+      progress: progress,
       text: 'Initialization step $i / $steps',
     );
     await Future.delayed(const Duration(milliseconds: 50));

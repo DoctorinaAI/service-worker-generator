@@ -98,14 +98,32 @@ self.addEventListener("activate", function(event) {
       var tempCache = await caches.open(TEMP_CACHE);
       var manifestCache = await caches.open(MANIFEST_CACHE);
       var manifest = await manifestCache.match('manifest');
+
       // When there is no prior manifest, clear the entire cache.
       if (!manifest) {
         await caches.delete(CACHE_NAME);
         contentCache = await caches.open(CACHE_NAME);
-        for (var request of await tempCache.keys()) {
+
+        const tempKeys = await tempCache.keys();
+        for (let i = 0; i < tempKeys.length; i++) {
+          const request = tempKeys[i];
+          const resourceKey = getResourceKey(request);
+          const resourceInfo = RESOURCES[resourceKey] || RESOURCES['/'];
+
           var response = await tempCache.match(request);
           await contentCache.put(request, response);
+
+          // Notify progress of copying files to content cache
+          notifyClients({
+            resourceName: resourceInfo?.name || resourceKey,
+            resourceUrl: request.url,
+            resourceKey: resourceKey,
+            resourceSize: resourceInfo?.size || 0,
+            loaded: resourceInfo?.size || 0,
+            status: 'completed'
+          });
         }
+
         await caches.delete(TEMP_CACHE);
         // Save the manifest to make future upgrades efficient.
         await manifestCache.put('manifest', new Response(JSON.stringify(RESOURCES)));
@@ -113,9 +131,13 @@ self.addEventListener("activate", function(event) {
         self.clients.claim();
         return;
       }
+
       var oldManifest = await manifest.json();
       var origin = self.location.origin;
-      for (var request of await contentCache.keys()) {
+
+      // Clean up outdated resources
+      const contentKeys = await contentCache.keys();
+      for (var request of contentKeys) {
         var key = request.url.substring(origin.length + 1);
         if (key == "") key = "/";
         // If a resource from the old manifest is not in the new cache, or if
@@ -125,12 +147,29 @@ self.addEventListener("activate", function(event) {
           await contentCache.delete(request);
         }
       }
+
       // Populate the cache with the app shell TEMP files, potentially overwriting
       // cache files preserved above.
-      for (var request of await tempCache.keys()) {
+      const tempKeys = await tempCache.keys();
+      for (let i = 0; i < tempKeys.length; i++) {
+        const request = tempKeys[i];
+        const resourceKey = getResourceKey(request);
+        const resourceInfo = RESOURCES[resourceKey] || RESOURCES['/'];
+
         var response = await tempCache.match(request);
         await contentCache.put(request, response);
+
+        // Notify progress of updating cache
+        notifyClients({
+          resourceName: resourceInfo?.name || resourceKey,
+          resourceUrl: request.url,
+          resourceKey: resourceKey,
+          resourceSize: resourceInfo?.size || 0,
+          loaded: resourceInfo?.size || 0,
+          status: 'updated'
+        });
       }
+
       await caches.delete(TEMP_CACHE);
       // Save the manifest to make future upgrades efficient.
       await manifestCache.put('manifest', new Response(JSON.stringify(RESOURCES)));
@@ -229,6 +268,8 @@ async function downloadOffline() {
   var resources = [];
   var contentCache = await caches.open(CACHE_NAME);
   var currentContent = {};
+  var origin = self.location.origin;
+
   for (var request of await contentCache.keys()) {
     var key = request.url.substring(origin.length + 1);
     if (key == "") {
@@ -236,6 +277,7 @@ async function downloadOffline() {
     }
     currentContent[key] = true;
   }
+
   for (var resourceKey of Object.keys(RESOURCES)) {
     if (!currentContent[resourceKey]) {
       resources.push(resourceKey);
@@ -251,16 +293,53 @@ async function downloadOffline() {
  * @param {event} event The fetch event.
  */
 function onlineFirst(event) {
+  var resourceKey = getResourceKey(event.request);
+  var resourceInfo = RESOURCES[resourceKey] || RESOURCES['/'];
+
   return event.respondWith(
     fetch(event.request).then((response) => {
       return caches.open(CACHE_NAME).then((cache) => {
         cache.put(event.request, response.clone());
+
+        // Notify successful online fetch
+        notifyClients({
+          resourceName: resourceInfo?.name || resourceKey,
+          resourceUrl: event.request.url,
+          resourceKey: resourceKey,
+          resourceSize: resourceInfo?.size || 0,
+          loaded: resourceInfo?.size || 0,
+          status: 'completed'
+        });
+
         return response;
       });
     }).catch((error) => {
       return caches.open(CACHE_NAME).then((cache) => {
         return cache.match(event.request).then((response) => {
-          if (response != null) return response;
+          if (response != null) {
+            // Notify fallback to cache
+            notifyClients({
+              resourceName: resourceInfo?.name || resourceKey,
+              resourceUrl: event.request.url,
+              resourceKey: resourceKey,
+              resourceSize: resourceInfo?.size || 0,
+              loaded: resourceInfo?.size || 0,
+              status: 'cached'
+            });
+            return response;
+          }
+
+          // Notify fetch error
+          notifyClients({
+            resourceName: resourceInfo?.name || resourceKey,
+            resourceUrl: event.request.url,
+            resourceKey: resourceKey,
+            resourceSize: resourceInfo?.size || 0,
+            loaded: 0,
+            status: 'error',
+            error: error.message
+          });
+
           throw error;
         });
       });
