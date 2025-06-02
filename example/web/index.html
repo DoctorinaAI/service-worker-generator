@@ -334,7 +334,7 @@
       }
     }
 
-    // Expose functions to the global scope for external access
+    // Expose functions globally
     window.updateLoadingProgress = updateLoadingProgress;
     window.removeLoadingIndicator = removeLoadingIndicator;
 
@@ -457,7 +457,7 @@
         updateLoadingProgress(10, 'Loading flutter application');
         if ('serviceWorker' in navigator) {
           if (navigator.serviceWorker.controller) {
-            console.log('[SW] registered');
+            console.log('[SW] registered and controlled');
             loadFlutterApp(); // Load Flutter app immediately if already controlled
           } else {
             navigator.serviceWorker.addEventListener('controllerchange', () => {

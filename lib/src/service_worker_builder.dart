@@ -42,6 +42,9 @@ String buildServiceWorker({
       'const EXPIRE_INTERVAL = 300 * 1000; // Expire runtime cache every 300 seconds\n'
       'const MAX_RETRIES     = 3; // Number of retry attempts\n'
       'const RETRY_DELAY     = 500; // Delay between retries in milliseconds\n'
+      'const BATCH_SIZE      = 6; // Optimal batch size for parallel downloads\n'
+      'const MAX_CONCURRENT  = 6; // Maximum concurrent fetch operations\n'
+      'const INSTALL_BATCH_SIZE = 4; // Batch size for install phase (more conservative)\n'
       '\n'
       '// ---------------------------\n'
       '// Patterns\n'
@@ -68,6 +71,37 @@ const String _serviceWorkerBody = r'''
 let lastExpire = 0;  // Timestamp of last expiration (throttled)
 let isExpiring = false;
 
+// Semaphore to limit concurrent fetch operations
+class Semaphore {
+  constructor(maxConcurrent) {
+    this.maxConcurrent = maxConcurrent;
+    this.currentCount = 0;
+    this.waitingQueue = [];
+  }
+
+  async acquire() {
+    if (this.currentCount < this.maxConcurrent) {
+      this.currentCount++;
+      return Promise.resolve();
+    }
+
+    return new Promise(resolve => {
+      this.waitingQueue.push(resolve);
+    });
+  }
+
+  release() {
+    this.currentCount--;
+    if (this.waitingQueue.length > 0) {
+      const resolve = this.waitingQueue.shift();
+      this.currentCount++;
+      resolve();
+    }
+  }
+}
+
+const fetchSemaphore = new Semaphore(MAX_CONCURRENT);
+
 // ---------------------------
 // Install Event
 // Pre-cache CORE resources into TEMP_CACHE
@@ -81,25 +115,51 @@ self.addEventListener('install', event => {
     const cache = await caches.open(TEMP_CACHE);
     const requests = CORE.map(path =>
       new Request(new URL(path, self.location.origin), { cache: 'reload' })
-    );
+    );    // Pre-cache with parallel processing and progress tracking
+    const batches = [];
 
-    // Pre-cache with progress tracking
-    for (const request of requests) {
-      try {
-        const resourceKey = getResourceKey(request);
-        const resourceInfo = RESOURCES[resourceKey];
-        await fetchWithProgress(request, TEMP_CACHE);
-        await notifyClients({
-          resourceName: resourceInfo.name,
-          resourceUrl: request.url,
-          resourceKey: resourceKey,
-          resourceSize: resourceInfo.size,
-          loaded: resourceInfo.size,
-          status: 'completed'
-        });
-      } catch (error) {
-        console.warn(`Failed to pre-cache ${request.url}:`, error);
-      }
+    for (let i = 0; i < requests.length; i += INSTALL_BATCH_SIZE) {
+      batches.push(requests.slice(i, i + INSTALL_BATCH_SIZE));
+    }    for (const batch of batches) {
+      // Process each batch in parallel using Promise.allSettled for better error handling
+      const results = await Promise.allSettled(
+        batch.map(async request => {
+          try {
+            const resourceKey = getResourceKey(request);
+            const resourceInfo = RESOURCES[resourceKey];
+
+            await fetchWithProgress(request, TEMP_CACHE);
+
+            await notifyClients({
+              resourceName: resourceInfo?.name || resourceKey,
+              resourceUrl: request.url,
+              resourceKey: resourceKey,
+              resourceSize: resourceInfo?.size || 0,
+              loaded: resourceInfo?.size || 0,
+              status: 'completed'
+            });
+
+            return { success: true, resourceKey };
+          } catch (error) {
+            console.warn(`Failed to pre-cache ${request.url}:`, error);
+            return { success: false, resourceKey: getResourceKey(request), error };
+          }
+        })
+      );
+
+      // Log batch completion for debugging
+      const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+      const failed = results.length - successful;
+      console.log(`Install batch completed: ${successful} successful, ${failed} failed`);
+
+      // Log individual failures for debugging
+      results.forEach((result, index) => {
+        if (result.status === 'rejected') {
+          console.error(`Batch item ${index} was rejected:`, result.reason);
+        } else if (!result.value.success) {
+          console.warn(`Failed to cache ${result.value.resourceKey}:`, result.value.error);
+        }
+      });
     }
   })());
 });
@@ -226,6 +286,12 @@ self.addEventListener('message', event => {
      */
     downloadOffline();
   }
+  if (event.data === 'sw-download-offline-force') {
+    /**
+     * Force download all CORE resources, even if already cached
+     */
+    downloadOffline(true);
+  }
 });
 
 // ===========================
@@ -243,6 +309,22 @@ function maybeExpire() {
   expireCache(RUNTIME_CACHE, CACHE_TTL)
     .catch(err => console.error('expireCache failed:', err))
     .finally(() => { isExpiring = false; });
+}
+
+/**
+ * Creates a response with a timestamp header for cache management.
+ * @param {Response} response - The original response.
+ * @param {number} timestamp - The timestamp to add.
+ * @returns {Response} - The response with timestamp header.
+ */
+function createTimestampedResponse(response, timestamp = Date.now()) {
+  const headers = new Headers(response.headers);
+  headers.set('SW-Fetched-At', timestamp.toString());
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: headers
+  });
 }
 
 /**
@@ -274,14 +356,7 @@ async function onlineFirst(request) {
     const response = await fetch(request);
     if (response.ok) {
       const cache = await caches.open(CACHE_NAME);
-      // Add timestamp header when caching navigation responses
-      const headers = new Headers(response.headers);
-      headers.set('SW-Fetched-At', Date.now().toString());
-      const timestampedResponse = new Response(response.body, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: headers
-      });
+      const timestampedResponse = createTimestampedResponse(response);
       cache.put(request, timestampedResponse.clone());
     }
     return response;
@@ -324,44 +399,37 @@ async function fetchWithProgress(request, cacheName) {
   while (attempt < MAX_RETRIES) {
     attempt++;
     let reader = null;
+
+    // Acquire semaphore to limit concurrent requests
+    await fetchSemaphore.acquire();
+
     try {
       const response = await fetch(request);
       if (response.type === 'opaque') {
         // Always cache opaque responses with timestamp
-        const headers = new Headers(response.headers);
-        headers.set('SW-Fetched-At', timestamp.toString());
-        const timestampedResponse = new Response(response.body, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: headers
-        });
-        cache.put(request, timestampedResponse.clone()); // Notify progress for opaque responses
+        const timestampedResponse = createTimestampedResponse(response, timestamp);
+        cache.put(request, timestampedResponse.clone());
+
+        // Notify progress for opaque responses
         const resourceKey = getResourceKey(request);
         const resourceInfo = RESOURCES[resourceKey];
         if (resourceInfo) {
           await notifyClients({
-            resourceName: resourceInfo.name,
+            resourceName: resourceInfo.name || resourceKey,
             resourceUrl: request.url,
             resourceKey: resourceKey,
-            resourceSize: resourceInfo.size,
-            loaded: resourceInfo.size,
-            status: 'fetching'
+            resourceSize: resourceInfo.size || 0,
+            loaded: resourceInfo.size || 0,            status: 'completed'
           });
         }
-
+        fetchSemaphore.release();
         return response;
       }
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
       // If response is not a stream, cache it directly
       if (!response.body) {
-        const headers = new Headers(response.headers);
-        headers.set('SW-Fetched-At', timestamp.toString());
-        const timestampedResponse = new Response(response.body, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: headers
-        });
+        const timestampedResponse = createTimestampedResponse(response, timestamp);
 
         // Put the response in cache with timestamp
         cache.put(request, timestampedResponse.clone());
@@ -370,38 +438,37 @@ async function fetchWithProgress(request, cacheName) {
         const resourceInfo = RESOURCES[resourceKey];
         if (resourceInfo) {
           await notifyClients({
-            resourceName: resourceInfo.name,
+            resourceName: resourceInfo.name || resourceKey,
             resourceUrl: request.url,
             resourceKey: resourceKey,
-            resourceSize: resourceInfo.size,
-            loaded: resourceInfo.size,
-            status: 'fetching'
-          });
-        }
+            resourceSize: resourceInfo.size || 0,
+            loaded: resourceInfo.size || 0,
+            status: 'completed'
+          });        }
 
+        fetchSemaphore.release();
         return timestampedResponse;
-      }
-
-      // Stream response and cache chunks
+      }      // Stream response and cache chunks
       const stream = new ReadableStream({
         start(controller) {
           reader = response.body.getReader();
           let loaded = 0;
+          const resourceKey = getResourceKey(request);
+          const resourceInfo = RESOURCES[resourceKey];
+
           function read() {
             reader.read().then(({ done, value }) => {
               if (done) {
                 controller.close();
                 // Final progress notification
-                const resourceKey = getResourceKey(request);
-                const resourceInfo = RESOURCES[resourceKey];
                 if (resourceInfo) {
                   notifyClients({
-                    resourceName: resourceInfo.name,
+                    resourceName: resourceInfo.name || resourceKey,
                     resourceUrl: request.url,
                     resourceKey: resourceKey,
-                    resourceSize: resourceInfo.size,
-                    loaded: resourceInfo.size,
-                    status: 'fetching'
+                    resourceSize: resourceInfo.size || 0,
+                    loaded: resourceInfo.size || loaded,
+                    status: 'completed'
                   });
                 }
                 return;
@@ -409,23 +476,21 @@ async function fetchWithProgress(request, cacheName) {
               loaded += value.byteLength;
               controller.enqueue(value);
 
-              // Progress notification during streaming
-              const resourceKey = getResourceKey(request);
-              const resourceInfo = RESOURCES[resourceKey];
-              if (resourceInfo) {
+              // Progress notification during streaming (throttled)
+              if (resourceInfo && loaded % 8192 === 0) { // Throttle progress updates
                 notifyClients({
-                  resourceName: resourceInfo.name,
+                  resourceName: resourceInfo.name || resourceKey,
                   resourceUrl: request.url,
                   resourceKey: resourceKey,
-                  resourceSize: resourceInfo.size,
+                  resourceSize: resourceInfo.size || 0,
                   loaded: loaded,
-                  status: 'fetching'
+                  status: 'downloading'
                 });
               }
 
               read();
             }).catch(err => {
-              reader.cancel();
+              if (reader) reader.cancel();
               controller.error(err);
             });
           }
@@ -433,62 +498,75 @@ async function fetchWithProgress(request, cacheName) {
         }
       });
 
-      // Add timestamp header for streaming responses
-      const headers = new Headers(response.headers);
-      headers.set('SW-Fetched-At', timestamp.toString());
-      const newResp = new Response(stream, {
+      // Create timestamped response for streaming
+      const newResp = createTimestampedResponse(new Response(stream, {
         status: response.status,
         statusText: response.statusText,
-        headers: headers
-      });
+        headers: response.headers      }), timestamp);
+
       cache.put(request, newResp.clone());
+      fetchSemaphore.release();
       return newResp;
     } catch (err) {
       console.warn(`Fetch attempt ${attempt} failed for ${request.url}:`, err);
       if (reader) reader.cancel();
       if (attempt >= MAX_RETRIES) throw err;
       await new Promise(r => setTimeout(r, RETRY_DELAY));
+    } finally {
+      // Always release semaphore
+      fetchSemaphore.release();
     }
   }
 }
 
 /**
  * Pre-cache all CORE resources for offline usage.
+ * @param {boolean} force - Force download even if already cached
  */
-async function downloadOffline() {
+async function downloadOffline(force = false) {
   try {
     const cache = await caches.open(CACHE_NAME);
     const cachedKeys = (await cache.keys()).map(r => getResourceKey(r));
-    const missing = CORE.filter(path => !cachedKeys.includes(path));
-    if (missing.length === 0) {
-      console.log('All resources already cached');
-      // Don't send notification here as all resources are already tracked individually
-      return true;
+
+    // Determine which resources to download
+    let resourcesToDownload;
+    if (force) {
+      // Force mode: download all CORE resources
+      resourcesToDownload = CORE;
+      console.log(`Force downloading all ${CORE.length} resources...`);
+    } else {
+      // Normal mode: only download missing resources
+      resourcesToDownload = CORE.filter(path => !cachedKeys.includes(path));
+      if (resourcesToDownload.length === 0) {
+        console.log('All resources already cached');
+        return true;
+      }
+      console.log(`Downloading ${resourcesToDownload.length} missing resources...`);
     }
 
-    console.log(`Downloading ${missing.length} missing resources...`);
     let totalLoaded = 0;
 
-    // Calculate already loaded size
-    for (const path of CORE) {
-      if (cachedKeys.includes(path)) {
-        const resourceInfo = RESOURCES[path];
-        if (resourceInfo) {
-          totalLoaded += resourceInfo.size;
+    // Calculate already loaded size (only in normal mode)
+    if (!force) {
+      for (const path of CORE) {
+        if (cachedKeys.includes(path)) {
+          const resourceInfo = RESOURCES[path];
+          if (resourceInfo) {
+            totalLoaded += resourceInfo.size;
+          }
         }
       }
     }
 
     // Handle batches to avoid large atomic operations
-    const BATCH_SIZE = 5;
-    for (let i = 0; i < missing.length; i += BATCH_SIZE) {
-      const batch = missing.slice(i, i + BATCH_SIZE);
+    for (let i = 0; i < resourcesToDownload.length; i += BATCH_SIZE) {
+      const batch = resourcesToDownload.slice(i, i + BATCH_SIZE);
 
       // Use Promise.allSettled for better error handling
       const results = await Promise.allSettled(
         batch.map(async path => {
           try {
-            const request = new Request(path);
+            const request = new Request(new URL(path, self.location.origin), { cache: 'reload' });
             await fetchWithProgress(request, CACHE_NAME);
             return { success: true, path };
           } catch (error) {
@@ -498,7 +576,12 @@ async function downloadOffline() {
         })
       );
 
-      // Process results
+      // Process results and count successful downloads
+      const successful = results.filter(r => r.status === 'fulfilled' && r.value.success).length;
+      const failed = results.length - successful;
+      console.log(`Batch ${Math.floor(i / BATCH_SIZE) + 1} completed: ${successful} successful, ${failed} failed`);
+
+      // Calculate loaded size for progress tracking
       results.forEach(result => {
         if (result.status === 'fulfilled' && result.value.success) {
           const resourceInfo = RESOURCES[result.value.path];
@@ -508,7 +591,9 @@ async function downloadOffline() {
         }
       });
     }
-    console.log(`Downloaded ${missing.length} resources for offline use`);
+
+    const mode = force ? 'force' : 'normal';
+    console.log(`Downloaded ${resourcesToDownload.length} resources for offline use (${mode} mode)`);
     return true;
   } catch (error) {
     console.error('Failed to download offline resources:', error);
@@ -523,13 +608,30 @@ async function downloadOffline() {
  */
 async function expireCache(cacheName, ttl) {
   const cache = await caches.open(cacheName);
-  const now   = Date.now();
-  for (const request of await cache.keys()) {
-    const resp = await cache.match(request);
-    const fetched = parseInt(resp.headers.get('SW-Fetched-At') || '0', 10);
-    if (now - fetched > ttl) {
-      await cache.delete(request);
-    }
+  const now = Date.now();
+  const requests = await cache.keys();
+
+  // Process requests in parallel to check expiration
+  const expiredRequests = await Promise.all(
+    requests.map(async request => {
+      try {
+        const resp = await cache.match(request);
+        const fetched = parseInt(resp.headers.get('SW-Fetched-At') || '0', 10);
+        return (now - fetched > ttl) ? request : null;
+      } catch (err) {
+        console.warn('Error checking cache entry expiration:', err);
+        return null;
+      }
+    })
+  );
+
+  // Filter out null values and delete expired entries in parallel
+  const toDelete = expiredRequests.filter(req => req !== null);
+  if (toDelete.length > 0) {
+    await Promise.allSettled(
+      toDelete.map(request => cache.delete(request))
+    );
+    console.log(`Expired ${toDelete.length} cache entries from ${cacheName}`);
   }
 }
 
@@ -557,6 +659,33 @@ async function trimCache(cacheName, maxEntries) {
   entriesWithTime.sort((a, b) => a.fetched - b.fetched);
   const toDelete = entriesWithTime.slice(0, entriesWithTime.length - maxEntries);
   await Promise.all(toDelete.map(entry => cache.delete(entry.request)));
+}
+
+/**
+ * Check if a resource is already cached and valid.
+ * @param {string} resourceKey - The resource key to check.
+ * @param {string} cacheName - The cache name to check in.
+ * @returns {Promise<boolean>} - True if resource is cached and valid.
+ */
+async function isResourceCached(resourceKey, cacheName) {
+  try {
+    const cache = await caches.open(cacheName);
+    const request = new Request(new URL(resourceKey === '/' ? resourceKey : `/${resourceKey}`, self.location.origin));
+    const cached = await cache.match(request, { ignoreSearch: true });
+
+    if (!cached) return false;
+
+    // Check if cached version matches current hash
+    const currentResource = RESOURCES[resourceKey];
+    if (!currentResource) return false;
+
+    // For now, assume cached resources are valid
+    // In the future, we could add hash comparison here
+    return true;
+  } catch (err) {
+    console.warn(`Error checking cache for ${resourceKey}:`, err);
+    return false;
+  }
 }
 
 /**
