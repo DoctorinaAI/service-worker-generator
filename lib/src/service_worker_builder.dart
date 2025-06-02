@@ -21,6 +21,15 @@ String buildServiceWorker({
       _ => total,
     },
   );
+  const coreSet = <String>{
+    'main.dart.wasm',
+    'main.dart.js',
+    'main.dart.mjs',
+    'index.html',
+    'assets/AssetManifest.bin.json',
+    'assets/FontManifest.json',
+  };
+  final core = resources.keys.where(coreSet.contains).toList(growable: false);
   return '\'use strict\';\n'
       '\n'
       '// ---------------------------\n'
@@ -49,11 +58,10 @@ String buildServiceWorker({
       '// ---------------------------\n'
       'const RESOURCES_SIZE  = $resourcesSize; // total size of all resources in bytes\n'
       'const RESOURCES = '
-      '${const JsonEncoder.withIndent('  ').convert(resources)}\n'
+      '${const JsonEncoder.withIndent('  ').convert(resources)};\n'
       '\n'
       '// CORE resources to pre-cache during install (deduplicated, map "index.html" → "/")\n'
-      //'const CORE = Array.from(new Set(Object.keys(RESOURCES).map(k => k === \'index.html\' ? \'/\' : k)));\n'
-      'const CORE = ["main.dart.js", "index.html", "assets/AssetManifest.bin.json", "assets/FontManifest.json"];'
+      'const CORE = ${const JsonEncoder.withIndent('  ').convert(core)};\n'
       '\n'
       // Body of the service worker script
       '${_serviceWorkerBody.trim()}';
@@ -61,7 +69,11 @@ String buildServiceWorker({
 
 // ignore: unnecessary_raw_strings
 const String _serviceWorkerBody = r'''
+// ---------------------------
+// Install Event
+// Pre-cache CORE resources into TEMP_CACHE
 // During install, the TEMP cache is populated with the application shell files.
+// ---------------------------
 self.addEventListener("install", (event) => {
   self.skipWaiting();
   return event.waitUntil(
@@ -71,9 +83,14 @@ self.addEventListener("install", (event) => {
     })
   );
 });
+
+// ---------------------------
+// Activate Event
+// Populate content cache, cleanup old caches, save manifest
 // During activate, the cache is populated with the temp files downloaded in
 // install. If this service worker is upgrading from one with a saved
 // MANIFEST, then use this to retain unchanged resource files.
+// ---------------------------
 self.addEventListener("activate", function(event) {
   return event.waitUntil(async function() {
     try {
@@ -131,30 +148,40 @@ self.addEventListener("activate", function(event) {
     }
   }());
 });
+
+// ---------------------------
+// Fetch Event
+// Routing & caching strategies with offline fallback.
 // The fetch handler redirects requests for RESOURCE files to the service
 // worker cache.
+// ---------------------------
 self.addEventListener("fetch", (event) => {
-  if (event.request.method !== 'GET') {
-    return;
-  }
+  if (event.request.method !== 'GET') return;
+
   var origin = self.location.origin;
-  var key = event.request.url.substring(origin.length + 1);
+  var resourceKey = getResourceKey(event.request);
   // Redirect URLs to the index.html
-  if (key.indexOf('?v=') != -1) {
-    key = key.split('?v=')[0];
-  }
-  if (event.request.url == origin || event.request.url.startsWith(origin + '/#') || key == '') {
-    key = '/';
-  }
+  if (resourceKey.indexOf('?v=') != -1) resourceKey = resourceKey.split('?v=')[0];
+  if (event.request.url == origin || event.request.url.startsWith(origin + '/#') || resourceKey == '')
+    resourceKey = '/';
   // If the URL is not the RESOURCE list then return to signal that the
   // browser should take over.
-  if (!RESOURCES[key]) {
-    return;
-  }
+  var resourceInfo = RESOURCES[resourceKey];
+  if (!resourceInfo) return;
+
+
   // If the URL is the index.html, perform an online-first request.
-  if (key == '/') {
-    return onlineFirst(event);
-  }
+  if (resourceKey == '/') return onlineFirst(event);
+
+  notifyClients({
+    resourceName: resourceInfo?.name || resourceKey,
+    resourceUrl: event.request.url,
+    resourceKey: resourceKey,
+    resourceSize: resourceInfo?.size || 0,
+    loaded: 0,
+    status: 'loading'
+  });
+
   event.respondWith(caches.open(CACHE_NAME)
     .then((cache) =>  {
       return cache.match(event.request).then((response) => {
@@ -163,6 +190,14 @@ self.addEventListener("fetch", (event) => {
         return response || fetch(event.request).then((response) => {
           if (response && Boolean(response.ok)) {
             cache.put(event.request, response.clone());
+            notifyClients({
+              resourceName: resourceInfo?.name || resourceKey,
+              resourceUrl: event.request.url,
+              resourceKey: resourceKey,
+              resourceSize: resourceInfo?.size || 0,
+              loaded: resourceInfo?.size || 0,
+              status: 'completed'
+            });
           }
           return response;
         });
@@ -170,6 +205,11 @@ self.addEventListener("fetch", (event) => {
     })
   );
 });
+
+// ---------------------------
+// Message Event
+// Handle skipWaiting and downloadOffline commands
+// ---------------------------
 self.addEventListener('message', (event) => {
   // SkipWaiting can be used to immediately activate a waiting service worker.
   // This will also require a page refresh triggered by the main worker.
@@ -182,8 +222,12 @@ self.addEventListener('message', (event) => {
     return;
   }
 });
+
 // Download offline will check the RESOURCES for all files not in the cache
 // and populate them.
+/**
+ * Pre-cache all CORE resources for offline usage.
+ */
 async function downloadOffline() {
   var resources = [];
   var contentCache = await caches.open(CACHE_NAME);
@@ -202,8 +246,13 @@ async function downloadOffline() {
   }
   return contentCache.addAll(resources);
 }
-// Attempt to download the resource online before falling back to
-// the offline cache.
+
+/**
+ * Online-first strategy.
+ * Attempt to download the resource online
+ * before falling back to the offline cache.
+ * @param {event} event The fetch event.
+ */
 function onlineFirst(event) {
   return event.respondWith(
     fetch(event.request).then((response) => {
@@ -214,13 +263,47 @@ function onlineFirst(event) {
     }).catch((error) => {
       return caches.open(CACHE_NAME).then((cache) => {
         return cache.match(event.request).then((response) => {
-          if (response != null) {
-            return response;
-          }
+          if (response != null) return response;
           throw error;
         });
       });
     })
   );
+}
+
+/**
+ * Convert a Request or URL string to a normalized resource key.
+ * Strips query and hash.
+ * @param {Request|string} requestOrUrl
+ * @returns {string}
+ */
+function getResourceKey(requestOrUrl) {
+  const url = typeof requestOrUrl === 'string'
+    ? new URL(requestOrUrl, self.location.origin)
+    : new URL(requestOrUrl.url);
+  url.hash = '';
+  url.search = '';
+  let key = url.pathname;
+  if (key.startsWith('/')) key = key.slice(1);
+  if (key.endsWith('/') && key !== '/') key = key.slice(0, -1);
+  return key === '' ? '/' : key;
+}
+
+/**
+ * Notify all clients with a message.
+ * @param {object} data Payload to send.
+ */
+async function notifyClients(data) {
+  const allClients = await self.clients.matchAll({ includeUncontrolled: true });
+  allClients.forEach(client => {
+    try {
+      client.postMessage({
+        type: 'sw-progress',
+        timestamp: Date.now(),
+        resourcesSize: RESOURCES_SIZE,
+        ...data
+      });
+    } catch {}
+  });
 }
 ''';

@@ -327,11 +327,8 @@
      */
     function removeLoadingIndicator() {
       const loadingEl = document.getElementById("loading");
-      if (loadingEl) {
-        loadingEl.style.transition = 'opacity 0.5s ease-out';
-        loadingEl.style.opacity = '0';
-        setTimeout(() => loadingEl.remove(), 500);
-      }
+      if (!loadingEl) return;
+      loadingEl.remove();
     }
 
     // Expose functions globally
@@ -449,12 +446,14 @@
      */
     async function initializeApp() {
       try {
+        updateLoadingProgress(0, 'Loading flutter application');
+        loadFlutterApp();
+
         // Register service worker first
-        updateLoadingProgress(0, 'Registering service worker');
+        updateLoadingProgress(10, 'Registering service worker');
         await registerServiceWorker();
 
-        // Initial progress update
-        updateLoadingProgress(10, 'Loading flutter application');
+        /* updateLoadingProgress(10, 'Loading flutter application');
         if ('serviceWorker' in navigator) {
           if (navigator.serviceWorker.controller) {
             console.log('[SW] registered and controlled');
@@ -468,7 +467,7 @@
         } else {
           console.warn('[SW] Service Worker not supported, loading Flutter app directly');
           loadFlutterApp(); // Load Flutter app directly if service worker is not supported
-        }
+        } */
       } catch (e) {
         console.error('[SW] registration failed:', e);
         loadFlutterApp(); // Load Flutter app even if service worker registration fails
@@ -482,17 +481,9 @@
 
     // Listen for the first frame event to finalize loading
     window.addEventListener('flutter-first-frame', function () {
-      updateLoadingProgress(100, 'Ready');
-
-      // Fade out loading screen after a short delay
-      setTimeout(() => {
-        const loadingEl = document.getElementById("loading");
-        if (loadingEl) {
-          loadingEl.style.transition = 'opacity 0.5s ease-out';
-          loadingEl.style.opacity = '0';
-          setTimeout(() => loadingEl.remove(), 500);
-        }
-      }, 300);
+      const loadingEl = document.getElementById("loading");
+      if (!loadingEl) return;
+      loadingEl.remove();
     });
 
     // Handle service worker updates,
