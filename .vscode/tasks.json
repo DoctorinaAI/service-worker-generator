@@ -70,7 +70,8 @@
       },
       "type": "shell",
       "command": [
-        "flutter pub get",
+        "mkdir -p build/web",
+        " && flutter pub get",
         // --wasm
         " && flutter build web --release --no-tree-shake-icons --no-web-resources-cdn --base-href=/ -o build/web"
       ],

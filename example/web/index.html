@@ -457,7 +457,7 @@
         updateLoadingProgress(10, 'Loading flutter application');
         if ('serviceWorker' in navigator) {
           if (navigator.serviceWorker.controller) {
-            console.log('[SW] registered:', reg);
+            console.log('[SW] registered');
             loadFlutterApp(); // Load Flutter app immediately if already controlled
           } else {
             navigator.serviceWorker.addEventListener('controllerchange', () => {
