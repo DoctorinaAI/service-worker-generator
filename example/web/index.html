@@ -26,7 +26,7 @@
       margin: 0;
       padding: 0;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #764ba2;
+      background: rgb(244 253 247);;
       min-height: 100vh;
       display: flex;
       align-items: center;
@@ -87,7 +87,7 @@
 
     .progress-ring-progress {
       fill: none;
-      stroke: #00ff88;
+      stroke: rgb(37 211 102); /* #00ff88; */
       stroke-width: 4;
       stroke-linecap: round;
       stroke-dasharray: 439.823;
@@ -98,9 +98,10 @@
 
     h1 {
       font-size: 2.5rem;
-      font-weight: 300;
+      font-weight: 700;
       margin: 0 0 1rem 0;
       letter-spacing: 0.5px;
+      color: #239965;
       text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
     }
 
@@ -121,6 +122,89 @@
       color: #b0b0b0;
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
       transition: color 0.3s ease;
+    }
+
+    .reset-button {
+      margin-top: 2rem;
+      padding: 12px 24px;
+      background: #25D366; /* rgba(255, 255, 255, 0.1); */
+      border: 2px solid #25D366; /* rgba(255, 255, 255, 0.3); */
+      border-radius: 8px;
+      color: white;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      backdrop-filter: blur(10px);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .reset-button:hover {
+      background: #61ff9b; /* rgba(255, 255, 255, 0.2); */
+      border-color: #61ff9b; /* rgba(255, 255, 255, 0.5); */
+      transform: translateY(-2px);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    }
+
+    .reset-button:active {
+      transform: translateY(0);
+    }
+
+    .reset-button::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: linear-gradient(90deg, transparent, #61ff9b /* rgba(255, 255, 255, 0.2) */, transparent);
+      transition: left 0.5s;
+    }
+
+    .reset-button:hover::before {
+      left: 100%;
+    }
+
+    .tooltip {
+      position: relative;
+      display: inline-block;
+    }
+
+    .tooltip .tooltiptext {
+      visibility: hidden;
+      width: 280px;
+      background-color: rgba(0, 0, 0, 0.9);
+      color: #fff;
+      text-align: center;
+      border-radius: 6px;
+      padding: 8px 12px;
+      position: absolute;
+      z-index: 1;
+      bottom: 125%;
+      left: 50%;
+      margin-left: -140px;
+      opacity: 0;
+      transition: opacity 0.3s;
+      font-size: 0.8rem;
+      line-height: 1.4;
+      backdrop-filter: blur(10px);
+    }
+
+    .tooltip .tooltiptext::after {
+      content: "";
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      margin-left: -5px;
+      border-width: 5px;
+      border-style: solid;
+      border-color: rgba(0, 0, 0, 0.9) transparent transparent transparent;
+    }
+
+    .tooltip:hover .tooltiptext {
+      visibility: visible;
+      opacity: 1;
     }
 
     .loading-dots {
@@ -197,12 +281,19 @@
         <circle class="progress-ring-circle" cx="70" cy="70" r="65"></circle>
         <circle class="progress-ring-progress" cx="70" cy="70" r="65" id="progress-circle"></circle>
       </svg>
-      <img src="icons/Icon-192.png" class="logo-image" alt="App Logo">
+      <img src="icons/Icon-192.png" class="logo-image" alt="Logo">
     </div>
     <h1>Service Worker</h1>
     <div class="progress-text" id="progress-text">Initializing<span class="loading-dots"></span></div>
     <div class="progress-percentage" id="progress-percentage">0%</div>
-    <div id="resources-container" class="resources-container"></div>
+    <div class="tooltip" id="reset-button-container" style="display: none;">
+      <button class="reset-button" id="reset-button" onclick="resetAppCache()">
+        ↻ Reset Cache
+      </button>
+      <span class="tooltiptext">
+        Loading appears to be stuck. Click to clear cache, unregister service worker, and reload the page.
+      </span>
+    </div>
   </div>
 
   <script>
@@ -213,6 +304,12 @@
     let loadedResources = new Map(); // Track loaded resources: resourceKey -> { size, loaded }
     let serviceWorkerMessageHandler = null; // Store reference to the message handler for cleanup
 
+    // Stalled loading detection
+    let lastProgressUpdateTime = Date.now();
+    let stalledLoadingTimeout = null;
+    let resetButtonShown = false;
+    const STALLED_TIMEOUT_MS = 30000; // 30 seconds
+
     const progressCircle = document.getElementById('progress-circle');
     const progressText = document.getElementById('progress-text');
     const progressPercentage = document.getElementById('progress-percentage');
@@ -221,6 +318,7 @@
     // Initialize progress ring
     progressCircle.style.strokeDasharray = circumference;
     progressCircle.style.strokeDashoffset = circumference;
+
 
     /**
      * Calculates the total loaded resources size.
@@ -243,8 +341,8 @@
       loadedResources.forEach(resource => {
         totalSize += resource.size || 0; // Use resource size if available
       });
-      // Ensure at least 8 MB total size if no resources are loaded yet
-      return Math.max(totalSize, 8 * 1024 * 1024);
+      // Ensure at least 3 MB total size if no resources are loaded yet
+      return Math.max(totalSize, 3 * 1024 * 1024);
     }
 
     /**
@@ -265,6 +363,10 @@
 
       // Console logging
       console.log(`Loading progress: ${Math.round(currentProgress)}% - ${text || 'Loading'}`);
+
+      // Update last progress time and reset stalled loading detection
+      lastProgressUpdateTime = Date.now();
+      resetStalledLoadingDetection();
     }
 
     /**
@@ -272,6 +374,7 @@
      * This function is called when the app is ready.
      */
     function removeLoadingIndicator() {
+      switchPointerEventForFlutterView(true); // Allow pointer events on the Flutter view
       const loadingEl = document.getElementById("loading");
       if (!loadingEl) return;
       loadingEl.remove();
@@ -282,16 +385,150 @@
     window.removeLoadingIndicator = removeLoadingIndicator;
 
     /**
+     * Detects if loading has stalled and shows reset button.
+     */
+    function checkStalledLoading() {
+      const timeSinceLastUpdate = Date.now() - lastProgressUpdateTime;
+      if (timeSinceLastUpdate >= STALLED_TIMEOUT_MS && !resetButtonShown) {
+        showResetButton();
+      }
+    }
+
+    /**
+     * Shows the reset button when loading appears stalled.
+     */
+    function showResetButton() {
+      const resetButtonContainer = document.getElementById('reset-button-container');
+      if (resetButtonContainer && !resetButtonShown) {
+        resetButtonContainer.style.display = 'block';
+        resetButtonShown = true;
+        console.log('Loading appears stalled, showing reset button');
+      }
+    }
+
+    /**
+     * Resets the stalled loading detection timer.
+     */
+    function resetStalledLoadingDetection() {
+      if (stalledLoadingTimeout) {
+        clearTimeout(stalledLoadingTimeout);
+      }
+
+      // Don't set new timeout if reset button is already shown or loading is complete
+      if (!resetButtonShown && currentProgress < 100) {
+        stalledLoadingTimeout = setTimeout(checkStalledLoading, STALLED_TIMEOUT_MS);
+      }
+    }
+
+    /**
+     * Resets app cache, unregisters service worker, and reloads the page.
+     */
+    async function resetAppCache() {
+      try {
+        console.log('Resetting app cache...');
+
+        // Update button text to show it's working
+        const resetButton = document.getElementById('reset-button');
+        if (resetButton) {
+          resetButton.innerHTML = '⏳ Resetting...';
+          resetButton.disabled = true;
+        }
+
+        // Clear all caches
+        if ('caches' in window) {
+          const cacheNames = await caches.keys();
+          await Promise.all(
+            cacheNames.map(cacheName => {
+              console.log('Deleting cache:', cacheName);
+              return caches.delete(cacheName);
+            })
+          );
+        }
+
+        // Unregister all service workers
+        if ('serviceWorker' in navigator) {
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          await Promise.all(
+            registrations.map(registration => {
+              console.log('Unregistering service worker:', registration.scope);
+              return registration.unregister();
+            })
+          );
+        }
+
+        // Clear local storage and session storage
+        if ('localStorage' in window) {
+          localStorage.clear();
+        }
+        if ('sessionStorage' in window) {
+          sessionStorage.clear();
+        }
+
+        console.log('Cache cleared, reloading page...');
+
+        // Force reload with cache bypass
+        window.location.reload(true);
+      } catch (error) {
+        console.error('Error resetting cache:', error);
+
+        // Fallback: just reload the page
+        window.location.reload(true);
+      }
+    }
+
+    // Make resetAppCache available globally
+    window.resetAppCache = resetAppCache;
+
+    /**
+     * Unregisters the old service worker if it exists.
+     * This is useful for cleaning up old service workers that might interfere with the new one.
+     */
+    async function maybeUnregisterServiceWorker() {
+      if ('serviceWorker' in navigator) {
+        try {
+          const registration = await navigator.serviceWorker.getRegistration('/flutter_service_worker.js');
+          if (registration) {
+            const success = await registration.unregister();
+            if (success) {
+              console.log('Old Service Worker unregistered successfully.');
+            } else {
+              console.log('Could not unregister the Service Worker.');
+            }
+          } else {
+            console.log('Service Worker not found for unregistration.');
+          }
+        } catch (error) {
+          console.error('Error unregistering Service Worker:', error);
+        }
+      } else {
+        console.log('Service Workers are not supported in this browser.');
+      }
+    }
+
+    /**
+     * Switches the pointer event handling for the Flutter view.
+     * This is useful for showing or hiding the Flutter view based on loading state.
+     * @param {boolean} handle - If true, allows pointer events on the Flutter view.
+     */
+    async function switchPointerEventForFlutterView(handle) {
+      const flutterView = document.querySelector('flutter-view');
+      if (!flutterView || show == undefined) return;
+      flutterView.style.pointerEvents = handle ? 'auto' : 'none';
+    }
+
+    /**
      * Registers the service worker and listens for messages.
      * Updates progress based on service worker messages.
      */
     async function registerServiceWorker() {
+      // eslint-disable-next-line no-undef
       const swVersion = {{flutter_service_worker_version}};
       if (!swVersion) {
         console.log('Service Worker not registered (no version or non-production build).');
         isServiceWorkerAvailable = false;
         return;
       }
+
       if (!('serviceWorker' in navigator)) {
         console.warn('Service Workers are not supported in this browser');
         isServiceWorkerAvailable = false;
@@ -306,53 +543,53 @@
 
         // Create and store the message handler for later cleanup
         serviceWorkerMessageHandler = (event) => {
-          if (event.data && event.data?.type === 'sw-progress') {
-            const {
-              resourceKey,
-              resourceUrl,
-              resourceName,
-              resourceSize,
-              resourcesSize,
-              timestamp,
-              loaded,
-              status
-            } = event.data;
+          if (!event.data || event.data?.type !== 'sw-progress')
+            return;
+          const {
+            resourceKey,
+            resourceUrl,
+            resourceName,
+            resourceSize,
+            resourcesSize,
+            timestamp,
+            loaded,
+            status
+          } = event.data;
 
-            //totalResourcesSize = resourcesSize || totalResourcesSize; // Update total size if provided
+          //totalResourcesSize = resourcesSize || totalResourcesSize; // Update total size if provided
 
-            if (resourceKey && resourceSize !== undefined && loaded !== undefined) {
-              // Update or add resource in our hash table
-              loadedResources.set(resourceKey, {
-                name: resourceName || resourceKey, // Use resourceName if available
-                key: resourceKey, // Unique key for the resource
-                size: resourceSize, // Size of the resource in bytes
-                loaded: loaded, // Bytes loaded so far
-                url: resourceUrl, // URL of the resource
-                status: status, // installing | fetching
-                timestamp: timestamp || Date.now() // Timestamp of the last update
-              });
+          if (resourceKey && resourceSize !== undefined && loaded !== undefined) {
+            // Update or add resource in our hash table
+            loadedResources.set(resourceKey, {
+              name: resourceName || resourceKey, // Use resourceName if available
+              key: resourceKey, // Unique key for the resource
+              size: resourceSize, // Size of the resource in bytes
+              loaded: loaded, // Bytes loaded so far
+              url: resourceUrl, // URL of the resource
+              status: status, // installing | fetching
+              timestamp: timestamp || Date.now() // Timestamp of the last update
+            });
 
-              // Calculate total progress
-              const totalLoaded = calculateTotalLoaded();
-              const totalSize = calculateTotalSize();
-              const progressPercent = Math.min((totalLoaded / totalSize) * 100, 100);
+            // Calculate total progress
+            const totalLoaded = calculateTotalLoaded();
+            const totalSize = calculateTotalSize();
+            const progressPercent = Math.min((totalLoaded / totalSize) * 100, 100);
 
-              // Map SW progress from 10% to 90% (leaving 10% for dart logic)
-              const mappedProgress = 10 + (progressPercent * 0.8); // 10% + (0-100% * 80%)
+            // Map SW progress from 10% to 90% (leaving 10% for dart logic)
+            const mappedProgress = 10 + (progressPercent * 0.8); // 10% + (0-100% * 80%)
 
-              console.log(`Downloading resource "${resourceName}" (${formatBytes(loaded)} / ${formatBytes(resourceSize)})`);
+            console.log(`Downloading resource "${resourceName}" (${formatBytes(loaded)} / ${formatBytes(resourceSize)})`);
 
-              let progressText = 'Downloading';
-              if (totalLoaded > 0) {
-                //const resourceCount = loadedResources.size;
-                progressText = `Downloading (${formatBytes(totalLoaded)} / ${formatBytes(totalSize)})`;
-              }
-
-              // Update the loading progress only if it's below 90%
-              // Because we reserve 10% for the Dart logic
-              if (currentProgress <= 90)
-                updateLoadingProgress(mappedProgress, progressText);
+            let progressText = 'Downloading';
+            if (totalLoaded > 0) {
+              //const resourceCount = loadedResources.size;
+              progressText = `Downloading (${formatBytes(totalLoaded)} / ${formatBytes(totalSize)})`;
             }
+
+            // Update the loading progress only if it's below 90%
+            // Because we reserve 10% for the Dart logic
+            if (currentProgress <= 90)
+              updateLoadingProgress(mappedProgress, progressText);
           }
         };
 
@@ -369,9 +606,15 @@
      * Initializes the Flutter engine and runs the app.
      */
     async function loadFlutterApp() {
-      // This tag is replaced by the Flutter build system
+      // This tags are replaced by the Flutter build system
+      // @ts-ignore
       {{flutter_js}}
+      // @ts-ignore
       {{flutter_build_config}}
+
+      // Try to unregister any Flutter service worker
+      // because we want to register our own sw.js
+      await maybeUnregisterServiceWorker();
 
       // Register service worker first
       updateLoadingProgress(10, 'Registering service worker');
@@ -388,10 +631,12 @@
             if (!isServiceWorkerAvailable) {
               // Fallback progress without service worker
               updateLoadingProgress(30, 'Initializing Flutter engine');
+              switchPointerEventForFlutterView(false);
             }
 
             // Initialize the Flutter engine
             const appRunner = await engineInitializer.initializeEngine();
+            switchPointerEventForFlutterView(false);
 
             // Clean up service worker message listener
             if (serviceWorkerMessageHandler && 'serviceWorker' in navigator) {
@@ -402,10 +647,12 @@
 
             // Set the loading progress to 90% before running the app
             updateLoadingProgress(90, 'Starting application');
+            switchPointerEventForFlutterView(false);
 
             // Run the Flutter application, and initialize
             // the last 10% of the loading progress
             await appRunner.runApp();
+            switchPointerEventForFlutterView(false);
           }
         });
       } catch (error) {
@@ -422,22 +669,6 @@
       try {
         updateLoadingProgress(0, 'Loading flutter application');
         loadFlutterApp();
-
-        /* updateLoadingProgress(10, 'Loading flutter application');
-        if ('serviceWorker' in navigator) {
-          if (navigator.serviceWorker.controller) {
-            console.log('[SW] registered and controlled');
-            loadFlutterApp(); // Load Flutter app immediately if already controlled
-          } else {
-            navigator.serviceWorker.addEventListener('controllerchange', () => {
-              console.log('[SW] controller changed — now controlled');
-              loadFlutterApp(); // Load Flutter app after service worker takes control
-            });
-          }
-        } else {
-          console.warn('[SW] Service Worker not supported, loading Flutter app directly');
-          loadFlutterApp(); // Load Flutter app directly if service worker is not supported
-        } */
       } catch (e) {
         console.error('[SW] registration failed:', e);
         loadFlutterApp(); // Load Flutter app even if service worker registration fails
@@ -446,24 +677,23 @@
 
     // Event listeners
     window.addEventListener('load', function () {
+      // Start stalled loading detection
+      resetStalledLoadingDetection();
       initializeApp();
     }, { once: true });
 
     // Listen for the first frame event to finalize loading
     window.addEventListener('flutter-first-frame', function () {
+      // Clear stalled loading timeout since app loaded successfully
+      if (stalledLoadingTimeout) {
+        clearTimeout(stalledLoadingTimeout);
+        stalledLoadingTimeout = null;
+      }
+
       const loadingEl = document.getElementById("loading");
       if (!loadingEl) return;
       loadingEl.remove();
     }, { once: true });
-
-    // Handle service worker updates,
-    // reloading the page when a new service worker takes control.
-    //if ('serviceWorker' in navigator) {
-    //  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    //    console.log('Service Worker updated, reloading page...');
-    //    window.location.reload();
-    //  });
-    //}
 
     /**
      * Formats bytes into a human-readable string.
