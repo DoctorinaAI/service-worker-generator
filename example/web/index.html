@@ -264,13 +264,13 @@
   </style>
 
   <!-- Enable WASM threads on debug: https://github.com/orgs/community/discussions/13309#discussioncomment-3844940 -->
-  <script>
+  <!-- <script>
     if (!window.crossOriginIsolated && ['localhost', '127.0.0.1'].includes(location.hostname)) {
       const script = document.createElement('script');
       script.src = 'enable-wasm-threads.js';
       document.head.appendChild(script);
     }
-  </script>
+  </script> -->
 </head>
 
 <body>
@@ -512,7 +512,7 @@
      */
     async function switchPointerEventForFlutterView(handle) {
       const flutterView = document.querySelector('flutter-view');
-      if (!flutterView || show == undefined) return;
+      if (!flutterView || handle == undefined) return;
       flutterView.style.pointerEvents = handle ? 'auto' : 'none';
     }
 
@@ -612,14 +612,6 @@
       // @ts-ignore
       {{flutter_build_config}}
 
-      // Try to unregister any Flutter service worker
-      // because we want to register our own sw.js
-      await maybeUnregisterServiceWorker();
-
-      // Register service worker first
-      updateLoadingProgress(10, 'Registering service worker');
-      await registerServiceWorker();
-
       const searchParams = new URLSearchParams(window.location.search);
       const renderer = searchParams.get('renderer');
       const userConfig = renderer ? { 'renderer': renderer } : {};
@@ -668,10 +660,20 @@
     async function initializeApp() {
       try {
         updateLoadingProgress(0, 'Loading flutter application');
-        loadFlutterApp();
+        var loaded = loadFlutterApp();
+
+        // Try to unregister any Flutter service worker
+        // because we want to register our own sw.js
+        await maybeUnregisterServiceWorker();
+
+        // Register service worker first
+        updateLoadingProgress(10, 'Registering service worker');
+        await registerServiceWorker();
+
+        await loaded; // Wait for the Flutter App to load
       } catch (e) {
         console.error('[SW] registration failed:', e);
-        loadFlutterApp(); // Load Flutter app even if service worker registration fails
+        await loadFlutterApp(); // Load Flutter app even if service worker registration fails
       }
     }
 
