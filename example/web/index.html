@@ -350,7 +350,7 @@
      * @param {string} text - Optional text to display.
      */
     function updateLoadingProgress(value, text = '') {
-      currentProgress = Math.min(Math.max(value, 0), 100);
+      currentProgress = Math.min(Math.max(value, currentProgress), 100);
 
       // Update circular progress
       const offset = circumference - (currentProgress / 100) * circumference;
@@ -542,8 +542,10 @@
 
         // Create and store the message handler for later cleanup
         serviceWorkerMessageHandler = (event) => {
+          // Ignore messages that are not from the service worker or not of type 'sw-progress'
           if (!event.data || event.data?.type !== 'sw-progress')
             return;
+
           const {
             resourceKey,
             resourceUrl,
@@ -604,21 +606,7 @@
      * Loads the Flutter application.
      * Initializes the Flutter engine and runs the app.
      */
-    async function loadFlutterApp() {
-      // This tags are replaced by the Flutter build system
-      // @ts-ignore
-      {{flutter_js}}
-      // @ts-ignore
-      {{flutter_build_config}}
-
-      // Try to unregister any Flutter service worker
-      // because we want to register our own sw.js
-      await maybeUnregisterServiceWorker();
-
-      // Register service worker first
-      updateLoadingProgress(10, 'Registering service worker');
-      await registerServiceWorker();
-
+    async function setupFlutterApp() {
       const searchParams = new URLSearchParams(window.location.search);
       const renderer = searchParams.get('renderer');
       const userConfig = renderer ? { 'renderer': renderer } : {};
@@ -667,7 +655,23 @@
     async function initializeApp() {
       try {
         updateLoadingProgress(0, 'Loading flutter application');
-        await loadFlutterApp();
+
+        // This tags are replaced by the Flutter build system
+        // @ts-ignore
+        {{flutter_js}}
+        // @ts-ignore
+        {{flutter_build_config}}
+
+        // Try to unregister any Flutter service worker
+        // because we want to register our own sw.js
+        await maybeUnregisterServiceWorker();
+
+        // Register service worker first
+        updateLoadingProgress(10, 'Registering service worker');
+        await registerServiceWorker();
+
+        updateLoadingProgress(20, 'Preparing application to load');
+        await setupFlutterApp();
       } catch (e) {
         console.error('[SW] registration failed:', e);
         await loadFlutterApp(); // Load Flutter app even if service worker registration fails
