@@ -12,6 +12,7 @@ on:
       - "main"
       - "master"
     paths:
+      - "bin/**.dart"
       - "lib/**.dart"
       - "test/**.dart"
       - "example/**.dart"
@@ -30,6 +31,7 @@ on:
       - "hotfix/**"
       - "support/**"
     paths:
+      - "bin/**.dart"
       - "lib/**.dart"
       - "test/**.dart"
       - "example/**.dart"
@@ -86,7 +88,7 @@ jobs:
         id: check-format
         timeout-minutes: 1
         run: |
-          find lib test -name "*.dart" ! -name "*.*.dart" -print0 | xargs -0 dart format --set-exit-if-changed --line-length 80 -o none lib/ test/
+          find bin lib test -name "*.dart" ! -name "*.*.dart" -print0 | xargs -0 dart format --set-exit-if-changed --line-length 80 -o none bin/ lib/ test/
 
       - name: 📈 Check analyzer
         id: check-analyzer
