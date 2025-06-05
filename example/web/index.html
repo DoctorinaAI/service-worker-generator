@@ -612,6 +612,14 @@
       // @ts-ignore
       {{flutter_build_config}}
 
+      // Try to unregister any Flutter service worker
+      // because we want to register our own sw.js
+      await maybeUnregisterServiceWorker();
+
+      // Register service worker first
+      updateLoadingProgress(10, 'Registering service worker');
+      await registerServiceWorker();
+
       const searchParams = new URLSearchParams(window.location.search);
       const renderer = searchParams.get('renderer');
       const userConfig = renderer ? { 'renderer': renderer } : {};
@@ -660,17 +668,7 @@
     async function initializeApp() {
       try {
         updateLoadingProgress(0, 'Loading flutter application');
-        var loaded = loadFlutterApp();
-
-        // Try to unregister any Flutter service worker
-        // because we want to register our own sw.js
-        await maybeUnregisterServiceWorker();
-
-        // Register service worker first
-        updateLoadingProgress(10, 'Registering service worker');
-        await registerServiceWorker();
-
-        await loaded; // Wait for the Flutter App to load
+        await loadFlutterApp();
       } catch (e) {
         console.error('[SW] registration failed:', e);
         await loadFlutterApp(); // Load Flutter app even if service worker registration fails
