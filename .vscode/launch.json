@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "[Dart] Example",
+      "name": "[Package] Generate example",
       "request": "launch",
       "type": "dart",
       "program": "bin/generate.dart",
@@ -12,6 +12,24 @@
         "--glob=\"**.{html,js,wasm,json}; assets/**; canvaskit/**; icons/**\"",
         "--no-glob=\"flutter_service_worker.js; **/*.map; assets/NOTICES\"",
         "--comments",
+      ],
+      "env": {
+        "ENVIRONMENT": "development"
+      },
+      /* "preLaunchTask": "example:flutter:build:web", */
+      "console": "debugConsole"
+    },
+    {
+      "name": "[Example] Serve (WASM)",
+      "request": "launch",
+      "type": "dart",
+      "program": "lib/main.dart",
+      "cwd": "example",
+      "args": [
+        /* "--dart-define-from-file=config/development.env", */
+        "--device-id=web-server",
+        "--web-port=4000",
+        "--wasm",
       ],
       "env": {
         "ENVIRONMENT": "development"

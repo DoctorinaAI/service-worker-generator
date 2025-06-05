@@ -1,3 +1,7 @@
+## 0.0.5
+
+- Update index.html example to include more features.
+
 ## 0.0.4
 
 - Improved service worker generation.
