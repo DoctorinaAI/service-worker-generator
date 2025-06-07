@@ -1,4 +1,3 @@
-import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:sw_example/src/platform/platform_initialization.dart'
     as platform_initialization;
@@ -31,7 +30,7 @@ Future<void> initializeApp() async {
   );
 
   // Finalize initialization and allow the first frame to be drawn.
-  SchedulerBinding.instance.addPostFrameCallback((_) {
+  binding.addPostFrameCallback((_) {
     binding.allowFirstFrame();
     platform_initialization.$removeLoadingWidget();
   });

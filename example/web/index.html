@@ -8,6 +8,7 @@
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="Service Worker Example">
   <meta flt-viewport="" name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#25D366">
 
   <!-- iOS meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
@@ -26,7 +27,7 @@
       margin: 0;
       padding: 0;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: rgb(244 253 247);;
+      background: rgb(244 253 247);
       min-height: 100vh;
       display: flex;
       align-items: center;
@@ -209,33 +210,29 @@
 
     .loading-dots {
       display: inline-block;
-      margin-left: 5px;
+      margin-left: 1px;
+      width: 1.5em;
+      text-align: left;
+      overflow: hidden;
+      vertical-align: bottom;
     }
 
     .loading-dots::after {
-      content: '';
-      animation: dots 1.5s infinite;
+      content: '...';
+      display: inline-block;
+      width: 1.5em;
+      /* fixed width to prevent shifting */
+      text-align: left;
+      overflow: hidden;
+      vertical-align: bottom; /*bottom;*/
+      animation: dots 1.5s steps(4, end) infinite;
     }
 
     @keyframes dots {
-
-      0%,
-      20% {
-        content: '';
-      }
-
-      40% {
-        content: '.';
-      }
-
-      60% {
-        content: '..';
-      }
-
-      80%,
-      100% {
-        content: '...';
-      }
+      0%, 100% { width: 0; }
+      25% { width: 0.5em; }
+      50% { width: 1em; }
+      75% { width: 1.5em; }
     }
 
     @media (prefers-color-scheme: dark) {}
@@ -278,13 +275,16 @@
   <div id="loading">
     <div class="logo-container">
       <svg class="progress-ring" viewBox="0 0 140 140">
-        <circle class="progress-ring-circle" cx="70" cy="70" r="65"></circle>
-        <circle class="progress-ring-progress" cx="70" cy="70" r="65" id="progress-circle"></circle>
+        <circle class="progress-ring-circle" cx="70" cy="70" r="65" vector-effect="non-scaling-stroke"></circle>
+        <circle class="progress-ring-progress" cx="70" cy="70" r="65" vector-effect="non-scaling-stroke" id="progress-circle"></circle>
       </svg>
       <img src="icons/Icon-192.png" class="logo-image" alt="Logo">
     </div>
     <h1>Service Worker</h1>
-    <div class="progress-text" id="progress-text">Initializing<span class="loading-dots"></span></div>
+    <div class="progress-text">
+      <span id="progress-text">Initializing</span>
+      <span class="loading-dots"></span>
+    </div>
     <div class="progress-percentage" id="progress-percentage">0%</div>
     <div class="tooltip" id="reset-button-container" style="display: none;">
       <button class="reset-button" id="reset-button" onclick="resetAppCache()">
@@ -308,7 +308,8 @@
     let lastProgressUpdateTime = Date.now();
     let stalledLoadingTimeout = null;
     let resetButtonShown = false;
-    const STALLED_TIMEOUT_MS = 30000; // 30 seconds
+    const STALLED_TIMEOUT_MS = 30000;        // 30 seconds
+    const MAX_FALLBACK_SIZE = 3 * 1024 ** 2; // 3 MiB
 
     const progressCircle = document.getElementById('progress-circle');
     const progressText = document.getElementById('progress-text');
@@ -341,7 +342,7 @@
         totalSize += resource.size || 0; // Use resource size if available
       });
       // Ensure at least 3 MB total size if no resources are loaded yet
-      return Math.max(totalSize, 3 * 1024 * 1024);
+      return Math.max(totalSize, MAX_FALLBACK_SIZE);
     }
 
     /**
@@ -358,7 +359,7 @@
 
       // Update text
       progressPercentage.textContent = `${Math.round(currentProgress)}%`;
-      if (text) progressText.innerHTML = `${text}<span class="loading-dots"></span>`;
+      if (text) progressText.textContent = text;
 
       // Console logging
       console.log(`Loading progress: ${Math.round(currentProgress)}% - ${text || 'Loading'}`);
@@ -536,9 +537,8 @@
 
       try {
         const swUrl = `sw.js?v=${swVersion}`;
-        const registration = await navigator.serviceWorker.register(swUrl);
+        await navigator.serviceWorker.register(swUrl);
         console.log('Service Worker registered successfully');
-        isServiceWorkerAvailable = true;
 
         // Create and store the message handler for later cleanup
         serviceWorkerMessageHandler = (event) => {
@@ -596,6 +596,10 @@
 
         // Listen for service worker messages
         navigator.serviceWorker.addEventListener('message', serviceWorkerMessageHandler);
+
+        const registration = await navigator.serviceWorker.ready;        
+        console.log('Service Worker ready: ', registration);
+        isServiceWorkerAvailable = true;
       } catch (error) {
         console.warn('Service Worker registration failed:', error);
         isServiceWorkerAvailable = false;
@@ -693,9 +697,7 @@
         stalledLoadingTimeout = null;
       }
 
-      const loadingEl = document.getElementById("loading");
-      if (!loadingEl) return;
-      loadingEl.remove();
+      removeLoadingIndicator();
     }, { once: true });
 
     /**
