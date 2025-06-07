@@ -2,13 +2,10 @@
 
 import 'dart:js_interop';
 
-//import 'dart:js_interop_unsafe';
-
-import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_web_plugins/flutter_web_plugins.dart';
 
-extension type $JSWindow._(JSObject _) implements JSObject {
+extension type const $JSWindow._(JSObject _) implements JSObject {
   /// Update loading progress.
   external void updateLoadingProgress(int progress, String text);
 
@@ -24,7 +21,7 @@ Future<void> $platformInitialization() async {
   //setUrlStrategy(const HashUrlStrategy());
   usePathUrlStrategy();
 
-  if (kIsWeb) BrowserContextMenu.disableContextMenu().ignore();
+  BrowserContextMenu.disableContextMenu().ignore();
 }
 
 void $updateLoadingProgress({int progress = 100, String text = ''}) =>

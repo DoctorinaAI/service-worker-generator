@@ -49,7 +49,7 @@ dart run sw:generate --prefix my-app --version 1.2.3
 # Filter files with glob patterns
 dart run sw:generate \
     --glob="**.{html,js,wasm,json}; assets/**; canvaskit/**; icons/**"
-    --no-glob="flutter_service_worker.js; **/*.map; assets/NOTICES"
+    --no-glob="flutter_service_worker.js; version.json; **/*.map; assets/NOTICES"
 
 # Include comments in generated file
 dart run sw:generate --comments
