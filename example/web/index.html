@@ -210,7 +210,7 @@
 
     .loading-dots {
       display: inline-block;
-      margin-left: 1px;
+      margin-left: -2px;
       width: 1.5em;
       text-align: left;
       overflow: hidden;
@@ -218,21 +218,16 @@
     }
 
     .loading-dots::after {
-      content: '...';
       display: inline-block;
-      width: 1.5em;
-      /* fixed width to prevent shifting */
-      text-align: left;
-      overflow: hidden;
-      vertical-align: bottom; /*bottom;*/
-      animation: dots 1.5s steps(4, end) infinite;
+      content: '';
+      animation: dots 1.5s steps(1, end) infinite;
     }
 
     @keyframes dots {
-      0%, 100% { width: 0; }
-      25% { width: 0.5em; }
-      50% { width: 1em; }
-      75% { width: 1.5em; }
+      0%, 100% { content: ''; }
+      25% { content: '.'; }
+      50% { content: '..'; }
+      75% { content: '...'; }
     }
 
     @media (prefers-color-scheme: dark) {}
