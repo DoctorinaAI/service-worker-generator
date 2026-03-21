@@ -295,7 +295,6 @@
     // Progress management
     let currentProgress = 0;
     let isServiceWorkerAvailable = false;
-    let totalResourcesSize = 0; // Total size from sw.js RESOURCES_SIZE
     let loadedResources = new Map(); // Track loaded resources: resourceKey -> { size, loaded }
     let serviceWorkerMessageHandler = null; // Store reference to the message handler for cleanup
 
@@ -475,32 +474,6 @@
     window.resetAppCache = resetAppCache;
 
     /**
-     * Unregisters the old service worker if it exists.
-     * This is useful for cleaning up old service workers that might interfere with the new one.
-     */
-    async function maybeUnregisterServiceWorker() {
-      if ('serviceWorker' in navigator) {
-        try {
-          const registration = await navigator.serviceWorker.getRegistration('/flutter_service_worker.js');
-          if (registration) {
-            const success = await registration.unregister();
-            if (success) {
-              console.log('Old Service Worker unregistered successfully.');
-            } else {
-              console.log('Could not unregister the Service Worker.');
-            }
-          } else {
-            console.log('Service Worker not found for unregistration.');
-          }
-        } catch (error) {
-          console.error('Error unregistering Service Worker:', error);
-        }
-      } else {
-        console.log('Service Workers are not supported in this browser.');
-      }
-    }
-
-    /**
      * Switches the pointer event handling for the Flutter view.
      * This is useful for showing or hiding the Flutter view based on loading state.
      * @param {boolean} handle - If true, allows pointer events on the Flutter view.
@@ -517,8 +490,8 @@
      */
     async function registerServiceWorker() {
       // eslint-disable-next-line no-undef
-      const swVersion = '{{flutter_service_worker_version}}';
-      if (!swVersion || swVersion === 'null' || swVersion === 'undefined') {
+      const swVersion = {{flutter_service_worker_version}};
+      if (swVersion == null) {
         console.log('Service Worker not registered (no version or non-production build).');
         isServiceWorkerAvailable = false;
         return;
@@ -531,11 +504,9 @@
       }
 
       try {
-        const swUrl = `sw.js?v=${swVersion}`;
-        await navigator.serviceWorker.register(swUrl);
-        console.log('Service Worker registered successfully');
-
         // Create and store the message handler for later cleanup
+        if (serviceWorkerMessageHandler)
+          navigator.serviceWorker.removeEventListener('message', serviceWorkerMessageHandler);
         serviceWorkerMessageHandler = (event) => {
           // Ignore messages that are not from the service worker or not of type 'sw-progress'
           if (!event.data || event.data?.type !== 'sw-progress')
@@ -551,8 +522,6 @@
             loaded,
             status
           } = event.data;
-
-          //totalResourcesSize = resourcesSize || totalResourcesSize; // Update total size if provided
 
           if (resourceKey && resourceSize !== undefined && loaded !== undefined) {
             // Update or add resource in our hash table
@@ -578,7 +547,6 @@
 
             let progressText = 'Downloading';
             if (totalLoaded > 0) {
-              //const resourceCount = loadedResources.size;
               progressText = `Downloading (${formatBytes(totalLoaded)} / ${formatBytes(totalSize)})`;
             }
 
@@ -592,9 +560,35 @@
         // Listen for service worker messages
         navigator.serviceWorker.addEventListener('message', serviceWorkerMessageHandler);
 
-        const registration = await navigator.serviceWorker.ready;        
+        const swUrl = new URL(`flutter_service_worker.js?v=${swVersion}`, document.baseURI).toString();
+        const existingRegistration = await navigator.serviceWorker.getRegistration();
+        const currentServiceWorker =
+          existingRegistration?.active ??
+          existingRegistration?.waiting ??
+          existingRegistration?.installing;
+        const currentSwUrl = currentServiceWorker?.scriptURL;
+
+        if (currentSwUrl === swUrl) {
+          console.log('Service Worker already registered with the current version');
+        } else {
+          await navigator.serviceWorker.register(swUrl);
+          console.log('Service Worker registered successfully');
+        }
+
+        const registration = await navigator.serviceWorker.ready;
         console.log('Service Worker ready: ', registration);
         isServiceWorkerAvailable = true;
+
+        // Auto-reload on SW updates (not on first install)
+        // navigator.serviceWorker.controller is null on first visit (no prior SW)
+        if (navigator.serviceWorker.controller) {
+          let refreshing = false;
+          navigator.serviceWorker.addEventListener('controllerchange', () => {
+            if (refreshing) return;
+            refreshing = true;
+            window.location.reload(true);
+          });
+        }
       } catch (error) {
         console.warn('Service Worker registration failed:', error);
         isServiceWorkerAvailable = false;
@@ -661,10 +655,6 @@
         // @ts-ignore
         {{flutter_build_config}}
 
-        // Try to unregister any Flutter service worker
-        // because we want to register our own sw.js
-        await maybeUnregisterServiceWorker();
-
         // Register service worker first
         updateLoadingProgress(10, 'Registering service worker');
         await registerServiceWorker();
@@ -673,7 +663,7 @@
         await setupFlutterApp();
       } catch (e) {
         console.error('[SW] registration failed:', e);
-        await loadFlutterApp(); // Load Flutter app even if service worker registration fails
+        await setupFlutterApp(); // Load Flutter app even if service worker registration fails
       }
     }
 

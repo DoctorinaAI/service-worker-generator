@@ -254,7 +254,7 @@ self.addEventListener('message', (event) => {
     return;
   }
   if (event.data === 'downloadOffline') {
-    downloadOffline();
+    event.waitUntil(downloadOffline());
     return;
   }
 });

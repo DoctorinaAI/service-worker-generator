@@ -41,14 +41,15 @@ void main([List<String>? arguments]) => runZonedGuarded<void>(
             path.join(indexDirectory.path, $arguments.option('output') ?? '.'),
           ),
         );
+        final indexFile = io.File(
+          path.normalize(path.join(indexDirectory.path, 'index.html')),
+        );
 
         // Check if the input directory exists
         if (!indexDirectory.existsSync()) {
           $err('Error: Input directory does not exist: ${indexDirectory.path}');
           io.exit(1);
-        } else if (!indexDirectory.listSync().whereType<io.File>().any(
-              (f) => f.path.toLowerCase() != 'index.html',
-            )) {
+        } else if (!indexFile.existsSync()) {
           $err(
             'Error: No index.html file found in the input directory: '
             '${indexDirectory.path}',
