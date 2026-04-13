@@ -6,108 +6,147 @@
 [![Dart](https://img.shields.io/badge/Dart-%230175C2.svg?style=flat&logo=dart&logoColor=white)](https://dart.dev)
 [![Flutter](https://img.shields.io/badge/Flutter-%2302569B.svg?style=flat&logo=Flutter&logoColor=white)](https://flutter.dev)
 
-A powerful command-line tool for automatically generating **Service Worker** files for web applications. Specifically designed for **Dart** and **Flutter Web** applications, it simplifies the process of creating efficient service workers with intelligent resource caching.
+A command-line tool for generating **Service Worker** files for web applications. Designed for **Dart** and **Flutter Web** applications, it creates service workers with intelligent resource caching, retry logic, and automatic version injection.
 
-## 🚀 Features
+## Features
 
-- ✅ **Automatic File Scanning** — Analyzes build directory and creates resource map with MD5 hashes
-- ✅ **Smart Caching Strategy** — Implements cache-first with network fallback and runtime caching
-- ✅ **Version Management** — Handles cache versioning for safe deployments and updates
-- ✅ **Flexible File Filtering** — Include/exclude files using powerful glob patterns
-- ✅ **Flutter Web Optimized** — Special support for Flutter web applications and assets
-- ✅ **Cross-Platform** — Works seamlessly on Windows, macOS, and Linux
-- ✅ **Customizable Cache Names** — Configure cache prefixes and versions
-- ✅ **Integrity Validation** — MD5 hashing for file integrity verification
-- ✅ **Offline Support** — Ensures your app works without internet connection
-- ✅ **PWA Ready** — Perfect for Progressive Web Applications
+- **Automatic File Scanning** — Analyzes build directory and creates resource map with MD5 hashes
+- **Smart Caching Strategy** — Cache-first for assets, online-first for index.html
+- **Version Management** — Cache versioning for safe deployments and updates
+- **Version Injection** — Replaces `{{sw_version}}` placeholder in `index.html` with the cache version
+- **Fetch Retry & Timeout** — Retries failed fetches (2 retries, 500ms delay) with 10s timeout per request
+- **Install/Activate Timeouts** — 30s timeout protection prevents stuck service worker updates
+- **Navigation Preload** — Enables navigation preload for faster online-first responses (Chromium)
+- **Stale Cache Cleanup** — Automatically removes all old caches with matching prefix on activation
+- **Flexible File Filtering** — Include/exclude files using glob patterns
+- **Flutter Web Optimized** — Pre-caches WASM, JS, and asset manifests as CORE resources
+- **Cross-Platform** — Works on Windows, macOS, and Linux
+- **Progress Notifications** — Sends `sw-progress` messages to clients during install, activate, and fetch
+- **Offline Support** — Full offline capability with `downloadOffline` command
+- **PWA Ready** — Progressive Web Application compatible
 
-## 📦 Installation
-
-### Global Installation
+## Installation
 
 ```shell
 dart pub global activate sw
 ```
 
-## 🛠 Usage
-
-### Basic Usage
+## Usage
 
 ```shell
 dart run sw:generate --help
 ```
 
-### Advanced Usage
+### Full Example (Flutter Web)
 
 ```shell
-# Custom input directory and output file
-dart run sw:generate --input build/web --output flutter_service_worker.js
+# 1. Build Flutter web
+flutter build web --release --wasm --no-web-resources-cdn --base-href=/ -o build/web
 
-# Custom cache prefix and version
-dart run sw:generate --prefix my-app --version 1.2.3
+# 2. Remove Flutter's deprecated service worker files
+rm -rf build/web/flutter_service_worker.js build/web/flutter_bootstrap.js build/web/flutter.js
 
-# Filter files with glob patterns
+# 3. Generate service worker (also replaces {{sw_version}} in index.html)
 dart run sw:generate \
-    --glob="**.{html,js,wasm,json}; assets/**; canvaskit/**; icons/**"
-    --no-glob="flutter_service_worker.js; version.json; **/*.map; assets/NOTICES"
-
-# Include comments in generated file
-dart run sw:generate --comments
-```
-
-## 📋 Command Line Options
-
-| Option       | Short | Description                                   | Default           |
-| ------------ | ----- | --------------------------------------------- | ----------------- |
-| `--help`     | `-h`  | Show help information                         | -                 |
-| `--input`    | `-i`  | Path to build directory containing index.html | `build/web`       |
-| `--output`   | `-o`  | Output service worker filename                | `sw.js`           |
-| `--prefix`   | `-p`  | Cache name prefix                             | `app-cache`       |
-| `--version`  | `-v`  | Cache version                                 | current timestamp |
-| `--glob`     | `-g`  | Glob patterns to include files                | `**`              |
-| `--no-glob`  | `-e`  | Glob patterns to exclude files                | -                 |
-| `--comments` | `-c`  | Include comments in generated file            | `false`           |
-
-## 📁 Usage Examples
-
-```shell
-# 1. Install dependencies
-flutter pub get
-
-# 2. Activate the service worker generator
-dart pub global activate sw
-
-# 3. (Optional) Run code generation
-dart run build_runner build --delete-conflicting-outputs --release
-
-# 4. Build Flutter project
-flutter build web --release --no-tree-shake-icons --no-web-resources-cdn --base-href=/ -o build/web
-
-# 5. Generate service worker
-dart run sw:generate --input=build/web \
-    --output=flutter_service_worker.js \
-    --prefix=flutter-app \
+    --input=build/web \
+    --output=sw.js \
+    --prefix=my-app \
     --glob="**.{html,js,wasm,json}; assets/**; canvaskit/**; icons/**" \
-    --no-glob="flutter_service_worker.js; **/*.map; assets/NOTICES" \
+    --no-glob="sw.js; flutter_service_worker.js; **/*.map; assets/NOTICES" \
     --comments
 ```
 
-## 📖 Generated Service Worker Structure
+After step 3, the generator:
 
-The generated service worker includes:
+1. Creates `sw.js` with the resource manifest and caching logic
+2. Finds `index.html` and replaces `{{sw_version}}` with the cache version timestamp
 
-- **🗄️ Resource Caching** — All specified files are cached during installation
-- **⚡ Cache-First Strategy** — Prioritizes cache over network for better performance
-- **🔄 Cache Versioning** — Automatic cache updates when version changes
-- **🧹 Smart Cleanup** — Removes old cache versions automatically
-- **📱 Runtime Caching** — Dynamic caching of new resources during runtime
-- **🔍 Integrity Checks** — MD5 hash validation for cached resources
-- **⏱️ TTL Support** — Time-based cache expiration
-- **📊 Size Limits** — Configurable cache size limits
+## Command Line Options
 
-## 🤝 Contributing
+| Option       | Short | Description                                    | Default           |
+| ------------ | ----- | ---------------------------------------------- | ----------------- |
+| `--help`     | `-h`  | Show help information                          | -                 |
+| `--input`    | `-i`  | Path to build directory containing index.html  | `build/web`       |
+| `--output`   | `-o`  | Output service worker filename                 | `sw.js`           |
+| `--prefix`   | `-p`  | Cache name prefix                              | `app-cache`       |
+| `--version`  | `-v`  | Cache version                                  | current timestamp |
+| `--glob`     | `-g`  | Glob patterns to include files (`;` separated) | `**`              |
+| `--no-glob`  | `-e`  | Glob patterns to exclude files (`;` separated) | -                 |
+| `--comments` | `-c`  | Include comments in generated file             | `false`           |
 
-We welcome contributions to this project! Please follow these steps:
+## Generated Service Worker
+
+### Caching Strategies
+
+| Resource           | Strategy     | Description                                     |
+| ------------------ | ------------ | ----------------------------------------------- |
+| `index.html` (`/`) | Online-first | Network with navigation preload, cache fallback |
+| CORE assets        | Pre-cached   | Cached during install (WASM, JS, manifests)     |
+| Other assets       | Cache-first  | Serve from cache, fetch on miss                 |
+
+### CORE Resources (Pre-cached on Install)
+
+These files are pre-cached during the service worker install event:
+
+- `main.dart.wasm` — Flutter WASM binary
+- `main.dart.js` — Compiled Dart JavaScript
+- `main.dart.mjs` — ES modules variant
+- `index.html` — Application shell
+- `assets/AssetManifest.bin.json` — Flutter asset registry
+- `assets/FontManifest.json` — Font definitions
+
+### Resilience Features
+
+- **Fetch timeout**: 10s per request (prevents hanging connections)
+- **Fetch retry**: 2 retries with 500ms delay between attempts
+- **Install timeout**: 30s (fails fast if pre-caching hangs)
+- **Activate timeout**: 30s (cleans slate and claims clients on timeout)
+- **Navigation preload**: Enabled on supporting browsers for faster navigation
+- **Error recovery**: Always calls `self.clients.claim()` even on errors, preventing stuck pages
+
+### Client Notifications
+
+The service worker sends `sw-progress` messages to all clients during resource operations:
+
+```javascript
+{
+  type: 'sw-progress',
+  timestamp: 1749123456789,
+  resourcesSize: 5242880,     // Total size of all resources
+  resourceName: 'main.dart.js',
+  resourceUrl: 'https://example.com/main.dart.js',
+  resourceKey: 'main.dart.js',
+  resourceSize: 1048576,      // Size of this resource
+  loaded: 1048576,            // Bytes loaded so far
+  status: 'completed'         // 'loading' | 'completed' | 'updated' | 'cached' | 'error'
+}
+```
+
+### Message Commands
+
+Send messages to the service worker to trigger actions:
+
+| Message             | Action                                        |
+| ------------------- | --------------------------------------------- |
+| `'skipWaiting'`     | Immediately activate a waiting service worker |
+| `'downloadOffline'` | Pre-cache all resources for offline usage     |
+
+## index.html Integration
+
+Use `{{sw_version}}` as a placeholder in your `index.html`. The generator replaces it automatically:
+
+```html
+<script>
+  const swVersion = "{{sw_version}}";
+  if (swVersion && !swVersion.includes("{{")) {
+    navigator.serviceWorker.register(`sw.js?v=${swVersion}`);
+  }
+</script>
+```
+
+This replaces Flutter's deprecated `{{flutter_service_worker_version}}` placeholder, which is no longer reliable in Flutter 3.22+.
+
+## Contributing
 
 1. **Fork** the repository
 2. **Create** a feature branch (`git checkout -b feature/amazing-feature`)
@@ -117,12 +156,12 @@ We welcome contributions to this project! Please follow these steps:
 6. **Push** to the branch (`git push origin feature/amazing-feature`)
 7. **Create** a Pull Request
 
-To use this package from local path, you can clone the repository and run:
+To use from local path:
 
 ```shell
 dart pub global activate --source path .
 ```
 
-## 📝 License
+## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.

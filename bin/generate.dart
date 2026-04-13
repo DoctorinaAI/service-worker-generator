@@ -10,9 +10,6 @@ import 'package:sw/sw.dart';
 // to the service worker with custom logic.
 // Mike Matiunin <plugfox@gmail.com>, 28 May 2025
 
-// TODO(plugfox): Add retry logic for the file fetching
-// Mike Matiunin <plugfox@gmail.com>, 02 June 2025
-
 // TODO(plugfox): Fetch files as streams and notify about the progress
 // Mike Matiunin <plugfox@gmail.com>, 02 June 2025
 
@@ -129,6 +126,22 @@ void main([List<String>? arguments]) => runZonedGuarded<void>(
           encoding: utf8,
           flush: true,
         );
+
+        // Replace {{sw_version}} placeholder in index.html
+        final indexFile = io.File(
+          path.join(indexDirectory.path, 'index.html'),
+        );
+        if (indexFile.existsSync()) {
+          final indexContent = await indexFile.readAsString(encoding: utf8);
+          if (indexContent.contains('{{sw_version}}')) {
+            await indexFile.writeAsString(
+              indexContent.replaceAll('{{sw_version}}', cacheVersion),
+              encoding: utf8,
+              flush: true,
+            );
+            $log('Replaced {{sw_version}} in index.html with: $cacheVersion');
+          }
+        }
       },
       (e, s) {
         $err('An error occurred: $e');

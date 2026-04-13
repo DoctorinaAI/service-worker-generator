@@ -1,3 +1,12 @@
+## 0.0.6
+
+- Add timeout protection for install (30s) and activate (30s) events.
+- Add fetch timeout (10s) and retry logic (2 retries with 500ms delay).
+- Add navigation preload support for online-first strategy.
+- Clean up all stale caches with matching prefix on activation.
+- Ensure `self.clients.claim()` is always called, even on error/timeout.
+- Emit `sw-version.txt` alongside `sw.js` for CI version injection.
+
 ## 0.0.5
 
 - Update index.html example to include more features.

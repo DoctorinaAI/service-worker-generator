@@ -70,143 +70,169 @@ String buildServiceWorker({
 // ignore: unnecessary_raw_strings
 const String _serviceWorkerBody = r'''
 // ---------------------------
+// Timeouts
+// ---------------------------
+const INSTALL_TIMEOUT = 30000; // Max time for install phase
+const ACTIVATE_TIMEOUT = 30000; // Max time for activate phase
+const FETCH_TIMEOUT = 10000; // Max time for a single fetch
+
+// ---------------------------
 // Install Event
-// Pre-cache CORE resources into TEMP_CACHE
-// During install, the TEMP cache is populated with the application shell files.
+// Pre-cache CORE resources into TEMP_CACHE with timeout protection.
 // ---------------------------
 self.addEventListener("install", (event) => {
   self.skipWaiting();
   return event.waitUntil(
-    caches.open(TEMP_CACHE).then((cache) => {
-      return cache.addAll(
-        CORE.map((value) => new Request(value, {'cache': 'reload'})));
-    })
+    Promise.race([
+      caches.open(TEMP_CACHE).then((cache) => {
+        return cache.addAll(
+          CORE.map((value) => new Request(value, {'cache': 'reload'})));
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Install timed out')), INSTALL_TIMEOUT))
+    ])
   );
 });
 
 // ---------------------------
 // Activate Event
-// Populate content cache, cleanup old caches, save manifest
-// During activate, the cache is populated with the temp files downloaded in
-// install. If this service worker is upgrading from one with a saved
-// MANIFEST, then use this to retain unchanged resource files.
+// Populate content cache, cleanup old/stale caches, save manifest.
+// Wrapped in a timeout to prevent stuck activations.
 // ---------------------------
 self.addEventListener("activate", function(event) {
-  return event.waitUntil(async function() {
-    try {
-      var contentCache = await caches.open(CACHE_NAME);
-      var tempCache = await caches.open(TEMP_CACHE);
-      var manifestCache = await caches.open(MANIFEST_CACHE);
-      var manifest = await manifestCache.match(MANIFEST_KEY);
+  return event.waitUntil(
+    Promise.race([
+      (async function() {
+        try {
+          // Enable navigation preload if supported
+          if (self.registration.navigationPreload) {
+            await self.registration.navigationPreload.enable();
+          }
 
-      // When there is no prior manifest, clear the entire cache.
-      if (!manifest) {
-        await caches.delete(CACHE_NAME);
-        contentCache = await caches.open(CACHE_NAME);
+          var contentCache = await caches.open(CACHE_NAME);
+          var tempCache = await caches.open(TEMP_CACHE);
+          var manifestCache = await caches.open(MANIFEST_CACHE);
+          var manifest = await manifestCache.match(MANIFEST_KEY);
 
-        const tempKeys = await tempCache.keys();
-        for (let i = 0; i < tempKeys.length; i++) {
-          const request = tempKeys[i];
-          const resourceKey = getResourceKey(request);
-          const resourceInfo = RESOURCES[resourceKey] || RESOURCES['/'];
+          // When there is no prior manifest, clear the entire cache.
+          if (!manifest) {
+            await caches.delete(CACHE_NAME);
+            contentCache = await caches.open(CACHE_NAME);
 
-          var response = await tempCache.match(request);
-          await contentCache.put(request, response);
+            const tempKeys = await tempCache.keys();
+            for (let i = 0; i < tempKeys.length; i++) {
+              const request = tempKeys[i];
+              const resourceKey = getResourceKey(request);
+              const resourceInfo = RESOURCES[resourceKey] || RESOURCES['/'];
 
-          // Notify progress of copying files to content cache
-          notifyClients({
-            resourceName: resourceInfo?.name || resourceKey,
-            resourceUrl: request.url,
-            resourceKey: resourceKey,
-            resourceSize: resourceInfo?.size || 0,
-            loaded: resourceInfo?.size || 0,
-            status: 'completed'
-          });
+              var response = await tempCache.match(request);
+              await contentCache.put(request, response);
+
+              notifyClients({
+                resourceName: resourceInfo?.name || resourceKey,
+                resourceUrl: request.url,
+                resourceKey: resourceKey,
+                resourceSize: resourceInfo?.size || 0,
+                loaded: resourceInfo?.size || 0,
+                status: 'completed'
+              });
+            }
+
+            await caches.delete(TEMP_CACHE);
+            await manifestCache.put(MANIFEST_KEY, new Response(JSON.stringify(RESOURCES)));
+          } else {
+            var oldManifest = await manifest.json();
+            var origin = self.location.origin;
+
+            // Clean up outdated resources whose MD5 hash changed
+            const contentKeys = await contentCache.keys();
+            for (var request of contentKeys) {
+              var key = request.url.substring(origin.length + 1);
+              if (key == "") key = "/";
+              if (!RESOURCES[key] || RESOURCES[key]?.hash != oldManifest[key]?.hash) {
+                await contentCache.delete(request);
+              }
+            }
+
+            // Populate cache with TEMP files, overwriting preserved entries
+            const tempKeys = await tempCache.keys();
+            for (let i = 0; i < tempKeys.length; i++) {
+              const request = tempKeys[i];
+              const resourceKey = getResourceKey(request);
+              const resourceInfo = RESOURCES[resourceKey] || RESOURCES['/'];
+
+              var response = await tempCache.match(request);
+              await contentCache.put(request, response);
+
+              notifyClients({
+                resourceName: resourceInfo?.name || resourceKey,
+                resourceUrl: request.url,
+                resourceKey: resourceKey,
+                resourceSize: resourceInfo?.size || 0,
+                loaded: resourceInfo?.size || 0,
+                status: 'updated'
+              });
+            }
+
+            await caches.delete(TEMP_CACHE);
+            await manifestCache.put(MANIFEST_KEY, new Response(JSON.stringify(RESOURCES)));
+          }
+
+          // Clean up ALL stale caches with our prefix
+          const allCaches = await caches.keys();
+          await Promise.all(
+            allCaches
+              .filter(name =>
+                name.startsWith(CACHE_PREFIX)
+                && name !== CACHE_NAME
+                && name !== MANIFEST_CACHE
+                && name !== TEMP_CACHE)
+              .map(name => caches.delete(name))
+          );
+
+          // Claim clients to enable caching on first launch
+          self.clients.claim();
+        } catch (err) {
+          // On an unhandled exception the state of the cache cannot be guaranteed.
+          console.error('Failed to upgrade service worker: ' + err);
+          await caches.delete(CACHE_NAME);
+          await caches.delete(TEMP_CACHE);
+          await caches.delete(MANIFEST_CACHE);
+          // Still claim clients so the page isn't stuck
+          self.clients.claim();
         }
-
-        await caches.delete(TEMP_CACHE);
-        // Save the manifest to make future upgrades efficient.
-        await manifestCache.put(MANIFEST_KEY, new Response(JSON.stringify(RESOURCES)));
-        // Claim client to enable caching on first launch
-        self.clients.claim();
-        return;
-      }
-
-      var oldManifest = await manifest.json();
-      var origin = self.location.origin;
-
-      // Clean up outdated resources
-      const contentKeys = await contentCache.keys();
-      for (var request of contentKeys) {
-        var key = request.url.substring(origin.length + 1);
-        if (key == "") key = "/";
-        // If a resource from the old manifest is not in the new cache, or if
-        // the MD5 sum has changed, delete it. Otherwise the resource is left
-        // in the cache and can be reused by the new service worker.
-        if (!RESOURCES[key] || RESOURCES[key]?.hash != oldManifest[key]?.hash) {
-          await contentCache.delete(request);
-        }
-      }
-
-      // Populate the cache with the app shell TEMP files, potentially overwriting
-      // cache files preserved above.
-      const tempKeys = await tempCache.keys();
-      for (let i = 0; i < tempKeys.length; i++) {
-        const request = tempKeys[i];
-        const resourceKey = getResourceKey(request);
-        const resourceInfo = RESOURCES[resourceKey] || RESOURCES['/'];
-
-        var response = await tempCache.match(request);
-        await contentCache.put(request, response);
-
-        // Notify progress of updating cache
-        notifyClients({
-          resourceName: resourceInfo?.name || resourceKey,
-          resourceUrl: request.url,
-          resourceKey: resourceKey,
-          resourceSize: resourceInfo?.size || 0,
-          loaded: resourceInfo?.size || 0,
-          status: 'updated'
-        });
-      }
-
-      await caches.delete(TEMP_CACHE);
-      // Save the manifest to make future upgrades efficient.
-      await manifestCache.put(MANIFEST_KEY, new Response(JSON.stringify(RESOURCES)));
-      // Claim client to enable caching on first launch
-      self.clients.claim();
-      return;
-    } catch (err) {
-      // On an unhandled exception the state of the cache cannot be guaranteed.
-      console.error('Failed to upgrade service worker: ' + err);
+      })(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Activate timed out')), ACTIVATE_TIMEOUT))
+    ]).catch(async (err) => {
+      console.error('Activate failed or timed out: ' + err);
+      // Clean slate on timeout
       await caches.delete(CACHE_NAME);
       await caches.delete(TEMP_CACHE);
       await caches.delete(MANIFEST_CACHE);
-    }
-  }());
+      self.clients.claim();
+    })
+  );
 });
 
 // ---------------------------
 // Fetch Event
 // Routing & caching strategies with offline fallback.
-// The fetch handler redirects requests for RESOURCE files to the service
-// worker cache.
 // ---------------------------
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== 'GET') return;
 
   var origin = self.location.origin;
   var resourceKey = getResourceKey(event.request);
-  // Redirect URLs to the index.html
+  // Strip version query parameter
   if (resourceKey.indexOf('?v=') != -1) resourceKey = resourceKey.split('?v=')[0];
   if (event.request.url == origin || event.request.url.startsWith(origin + '/#') || resourceKey == '')
     resourceKey = '/';
-  // If the URL is not the RESOURCE list then return to signal that the
-  // browser should take over.
+  // If the URL is not in the RESOURCE list, let the browser handle it
   var resourceInfo = RESOURCES[resourceKey];
   if (!resourceInfo) return;
 
-  // If the URL is the index.html, perform an online-first request.
+  // Online-first for index.html, cache-first for everything else
   if (resourceKey == '/') return onlineFirst(event);
 
   notifyClients({
@@ -219,11 +245,10 @@ self.addEventListener("fetch", (event) => {
   });
 
   event.respondWith(caches.open(CACHE_NAME)
-    .then((cache) =>  {
+    .then((cache) => {
       return cache.match(event.request).then((response) => {
-        // Either respond with the cached resource, or perform a fetch and
-        // lazily populate the cache only if the resource was successfully fetched.
-        return response || fetch(event.request).then((response) => {
+        // Serve from cache, or fetch with retry and lazily populate cache
+        return response || fetchWithRetry(event.request).then((response) => {
           if (response && Boolean(response.ok)) {
             cache.put(event.request, response.clone());
             notifyClients({
@@ -247,8 +272,6 @@ self.addEventListener("fetch", (event) => {
 // Handle skipWaiting and downloadOffline commands
 // ---------------------------
 self.addEventListener('message', (event) => {
-  // SkipWaiting can be used to immediately activate a waiting service worker.
-  // This will also require a page refresh triggered by the main worker.
   if (event.data === 'skipWaiting') {
     self.skipWaiting();
     return;
@@ -259,10 +282,40 @@ self.addEventListener('message', (event) => {
   }
 });
 
-// Download offline will check the RESOURCES for all files not in the cache
-// and populate them.
 /**
- * Pre-cache all CORE resources for offline usage.
+ * Fetch with timeout protection.
+ * Rejects if the fetch takes longer than FETCH_TIMEOUT.
+ * @param {Request|string} request
+ * @returns {Promise<Response>}
+ */
+function fetchWithTimeout(request) {
+  return Promise.race([
+    fetch(request),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Fetch timeout')), FETCH_TIMEOUT))
+  ]);
+}
+
+/**
+ * Fetch with retry and timeout.
+ * Retries up to `retries` times with RETRY_DELAY between attempts.
+ * @param {Request|string} request
+ * @param {number} retries
+ * @returns {Promise<Response>}
+ */
+async function fetchWithRetry(request, retries = 2) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await fetchWithTimeout(request);
+    } catch (err) {
+      if (i === retries) throw err;
+      await new Promise(r => setTimeout(r, RETRY_DELAY));
+    }
+  }
+}
+
+/**
+ * Pre-cache all RESOURCES for offline usage.
  */
 async function downloadOffline() {
   var resources = [];
@@ -287,63 +340,67 @@ async function downloadOffline() {
 }
 
 /**
- * Online-first strategy.
- * Attempt to download the resource online
- * before falling back to the offline cache.
- * @param {event} event The fetch event.
+ * Online-first strategy for index.html.
+ * Uses navigation preload when available, falls back to fetch with retry,
+ * then to cache.
+ * @param {FetchEvent} event
  */
 function onlineFirst(event) {
   var resourceKey = getResourceKey(event.request);
   var resourceInfo = RESOURCES[resourceKey] || RESOURCES['/'];
 
   return event.respondWith(
-    fetch(event.request).then((response) => {
-      return caches.open(CACHE_NAME).then((cache) => {
-        cache.put(event.request, response.clone());
+    // Try navigation preload first, then fetch
+    (event.preloadResponse || Promise.resolve(null))
+      .then((preloadResponse) => {
+        if (preloadResponse) return preloadResponse;
+        return fetchWithRetry(event.request);
+      })
+      .then((response) => {
+        return caches.open(CACHE_NAME).then((cache) => {
+          cache.put(event.request, response.clone());
 
-        // Notify successful online fetch
-        notifyClients({
-          resourceName: resourceInfo?.name || resourceKey,
-          resourceUrl: event.request.url,
-          resourceKey: resourceKey,
-          resourceSize: resourceInfo?.size || 0,
-          loaded: resourceInfo?.size || 0,
-          status: 'completed'
-        });
-
-        return response;
-      });
-    }).catch((error) => {
-      return caches.open(CACHE_NAME).then((cache) => {
-        return cache.match(event.request).then((response) => {
-          if (response != null) {
-            // Notify fallback to cache
-            notifyClients({
-              resourceName: resourceInfo?.name || resourceKey,
-              resourceUrl: event.request.url,
-              resourceKey: resourceKey,
-              resourceSize: resourceInfo?.size || 0,
-              loaded: resourceInfo?.size || 0,
-              status: 'cached'
-            });
-            return response;
-          }
-
-          // Notify fetch error
           notifyClients({
             resourceName: resourceInfo?.name || resourceKey,
             resourceUrl: event.request.url,
             resourceKey: resourceKey,
             resourceSize: resourceInfo?.size || 0,
-            loaded: 0,
-            status: 'error',
-            error: error.message
+            loaded: resourceInfo?.size || 0,
+            status: 'completed'
           });
 
-          throw error;
+          return response;
         });
-      });
-    })
+      })
+      .catch((error) => {
+        return caches.open(CACHE_NAME).then((cache) => {
+          return cache.match(event.request).then((response) => {
+            if (response != null) {
+              notifyClients({
+                resourceName: resourceInfo?.name || resourceKey,
+                resourceUrl: event.request.url,
+                resourceKey: resourceKey,
+                resourceSize: resourceInfo?.size || 0,
+                loaded: resourceInfo?.size || 0,
+                status: 'cached'
+              });
+              return response;
+            }
+
+            notifyClients({
+              resourceName: resourceInfo?.name || resourceKey,
+              resourceUrl: event.request.url,
+              resourceKey: resourceKey,
+              resourceSize: resourceInfo?.size || 0,
+              loaded: 0,
+              status: 'error',
+              error: error.message
+            });
+
+            throw error;
+          });
+        });
+      })
   );
 }
 
