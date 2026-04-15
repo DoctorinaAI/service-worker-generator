@@ -1,3 +1,11 @@
+## 0.0.7
+
+- Simplify service worker by removing retry logic and navigation preload.
+- Replace `Promise.race` timeout wrappers with modern `AbortController`-based `fetchWithTimeout`.
+- Remove unused constants (`MEDIA_EXT`, `NETWORK_ONLY`, `RETRY_DELAY`).
+- Remove `INSTALL_TIMEOUT`, `ACTIVATE_TIMEOUT` wrappers from install/activate events.
+- Streamline activate event handler by removing redundant `Promise.race` nesting.
+
 ## 0.0.6
 
 - Add timeout protection for install (30s) and activate (30s) events.

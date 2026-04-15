@@ -43,17 +43,6 @@ String buildServiceWorker({
       'const MANIFEST_KEY    = \'__sw-manifest__\'; // Key (URL) under which manifest is stored\n'
       '\n'
       '// ---------------------------\n'
-      '// Limits & Timeouts\n'
-      '// ---------------------------\n'
-      'const RETRY_DELAY     = 500; // Delay between retries in milliseconds\n'
-      '\n'
-      '// ---------------------------\n'
-      '// Patterns\n'
-      '// ---------------------------\n'
-      'const MEDIA_EXT       = /\\.(png|jpe?g|svg|gif|webp|ico|woff2?|ttf|otf|eot|mp4|webm|ogg|mp3|wav|pdf|json|jsonp)\$/i;\n'
-      'const NETWORK_ONLY    = /\\.(php|ashx|api)\$/i; // Always fetch from network\n'
-      '\n'
-      '// ---------------------------\n'
       '// Resource Manifest with MD5 hash and file sizes\n'
       '// ---------------------------\n'
       'const RESOURCES_SIZE  = $resourcesSize; // total size of all resources in bytes\n'
@@ -70,149 +59,118 @@ String buildServiceWorker({
 // ignore: unnecessary_raw_strings
 const String _serviceWorkerBody = r'''
 // ---------------------------
-// Timeouts
-// ---------------------------
-const INSTALL_TIMEOUT = 30000; // Max time for install phase
-const ACTIVATE_TIMEOUT = 30000; // Max time for activate phase
-const FETCH_TIMEOUT = 10000; // Max time for a single fetch
-
-// ---------------------------
 // Install Event
-// Pre-cache CORE resources into TEMP_CACHE with timeout protection.
+// Pre-cache CORE resources into TEMP_CACHE.
 // ---------------------------
 self.addEventListener("install", (event) => {
   self.skipWaiting();
   return event.waitUntil(
-    Promise.race([
-      caches.open(TEMP_CACHE).then((cache) => {
-        return cache.addAll(
-          CORE.map((value) => new Request(value, {'cache': 'reload'})));
-      }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Install timed out')), INSTALL_TIMEOUT))
-    ])
+    caches.open(TEMP_CACHE).then((cache) => {
+      return cache.addAll(
+        CORE.map((value) => new Request(value, {'cache': 'reload'})));
+    })
   );
 });
 
 // ---------------------------
 // Activate Event
 // Populate content cache, cleanup old/stale caches, save manifest.
-// Wrapped in a timeout to prevent stuck activations.
 // ---------------------------
 self.addEventListener("activate", function(event) {
-  return event.waitUntil(
-    Promise.race([
-      (async function() {
-        try {
-          // Enable navigation preload if supported
-          if (self.registration.navigationPreload) {
-            await self.registration.navigationPreload.enable();
-          }
+  return event.waitUntil(async function() {
+    try {
+      var contentCache = await caches.open(CACHE_NAME);
+      var tempCache = await caches.open(TEMP_CACHE);
+      var manifestCache = await caches.open(MANIFEST_CACHE);
+      var manifest = await manifestCache.match(MANIFEST_KEY);
 
-          var contentCache = await caches.open(CACHE_NAME);
-          var tempCache = await caches.open(TEMP_CACHE);
-          var manifestCache = await caches.open(MANIFEST_CACHE);
-          var manifest = await manifestCache.match(MANIFEST_KEY);
+      // When there is no prior manifest, clear the entire cache.
+      if (!manifest) {
+        await caches.delete(CACHE_NAME);
+        contentCache = await caches.open(CACHE_NAME);
 
-          // When there is no prior manifest, clear the entire cache.
-          if (!manifest) {
-            await caches.delete(CACHE_NAME);
-            contentCache = await caches.open(CACHE_NAME);
+        const tempKeys = await tempCache.keys();
+        for (let i = 0; i < tempKeys.length; i++) {
+          const request = tempKeys[i];
+          const resourceKey = getResourceKey(request);
+          const resourceInfo = RESOURCES[resourceKey] || RESOURCES['/'];
 
-            const tempKeys = await tempCache.keys();
-            for (let i = 0; i < tempKeys.length; i++) {
-              const request = tempKeys[i];
-              const resourceKey = getResourceKey(request);
-              const resourceInfo = RESOURCES[resourceKey] || RESOURCES['/'];
+          var response = await tempCache.match(request);
+          await contentCache.put(request, response);
 
-              var response = await tempCache.match(request);
-              await contentCache.put(request, response);
-
-              notifyClients({
-                resourceName: resourceInfo?.name || resourceKey,
-                resourceUrl: request.url,
-                resourceKey: resourceKey,
-                resourceSize: resourceInfo?.size || 0,
-                loaded: resourceInfo?.size || 0,
-                status: 'completed'
-              });
-            }
-
-            await caches.delete(TEMP_CACHE);
-            await manifestCache.put(MANIFEST_KEY, new Response(JSON.stringify(RESOURCES)));
-          } else {
-            var oldManifest = await manifest.json();
-            var origin = self.location.origin;
-
-            // Clean up outdated resources whose MD5 hash changed
-            const contentKeys = await contentCache.keys();
-            for (var request of contentKeys) {
-              var key = request.url.substring(origin.length + 1);
-              if (key == "") key = "/";
-              if (!RESOURCES[key] || RESOURCES[key]?.hash != oldManifest[key]?.hash) {
-                await contentCache.delete(request);
-              }
-            }
-
-            // Populate cache with TEMP files, overwriting preserved entries
-            const tempKeys = await tempCache.keys();
-            for (let i = 0; i < tempKeys.length; i++) {
-              const request = tempKeys[i];
-              const resourceKey = getResourceKey(request);
-              const resourceInfo = RESOURCES[resourceKey] || RESOURCES['/'];
-
-              var response = await tempCache.match(request);
-              await contentCache.put(request, response);
-
-              notifyClients({
-                resourceName: resourceInfo?.name || resourceKey,
-                resourceUrl: request.url,
-                resourceKey: resourceKey,
-                resourceSize: resourceInfo?.size || 0,
-                loaded: resourceInfo?.size || 0,
-                status: 'updated'
-              });
-            }
-
-            await caches.delete(TEMP_CACHE);
-            await manifestCache.put(MANIFEST_KEY, new Response(JSON.stringify(RESOURCES)));
-          }
-
-          // Clean up ALL stale caches with our prefix
-          const allCaches = await caches.keys();
-          await Promise.all(
-            allCaches
-              .filter(name =>
-                name.startsWith(CACHE_PREFIX)
-                && name !== CACHE_NAME
-                && name !== MANIFEST_CACHE
-                && name !== TEMP_CACHE)
-              .map(name => caches.delete(name))
-          );
-
-          // Claim clients to enable caching on first launch
-          self.clients.claim();
-        } catch (err) {
-          // On an unhandled exception the state of the cache cannot be guaranteed.
-          console.error('Failed to upgrade service worker: ' + err);
-          await caches.delete(CACHE_NAME);
-          await caches.delete(TEMP_CACHE);
-          await caches.delete(MANIFEST_CACHE);
-          // Still claim clients so the page isn't stuck
-          self.clients.claim();
+          notifyClients({
+            resourceName: resourceInfo?.name || resourceKey,
+            resourceUrl: request.url,
+            resourceKey: resourceKey,
+            resourceSize: resourceInfo?.size || 0,
+            loaded: resourceInfo?.size || 0,
+            status: 'completed'
+          });
         }
-      })(),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Activate timed out')), ACTIVATE_TIMEOUT))
-    ]).catch(async (err) => {
-      console.error('Activate failed or timed out: ' + err);
-      // Clean slate on timeout
+
+        await caches.delete(TEMP_CACHE);
+        await manifestCache.put(MANIFEST_KEY, new Response(JSON.stringify(RESOURCES)));
+      } else {
+        var oldManifest = await manifest.json();
+        var origin = self.location.origin;
+
+        // Clean up outdated resources whose MD5 hash changed
+        const contentKeys = await contentCache.keys();
+        for (var request of contentKeys) {
+          var key = request.url.substring(origin.length + 1);
+          if (key == "") key = "/";
+          if (!RESOURCES[key] || RESOURCES[key]?.hash != oldManifest[key]?.hash) {
+            await contentCache.delete(request);
+          }
+        }
+
+        // Populate cache with TEMP files, overwriting preserved entries
+        const tempKeys = await tempCache.keys();
+        for (let i = 0; i < tempKeys.length; i++) {
+          const request = tempKeys[i];
+          const resourceKey = getResourceKey(request);
+          const resourceInfo = RESOURCES[resourceKey] || RESOURCES['/'];
+
+          var response = await tempCache.match(request);
+          await contentCache.put(request, response);
+
+          notifyClients({
+            resourceName: resourceInfo?.name || resourceKey,
+            resourceUrl: request.url,
+            resourceKey: resourceKey,
+            resourceSize: resourceInfo?.size || 0,
+            loaded: resourceInfo?.size || 0,
+            status: 'updated'
+          });
+        }
+
+        await caches.delete(TEMP_CACHE);
+        await manifestCache.put(MANIFEST_KEY, new Response(JSON.stringify(RESOURCES)));
+      }
+
+      // Clean up ALL stale caches with our prefix
+      const allCaches = await caches.keys();
+      await Promise.all(
+        allCaches
+          .filter(name =>
+            name.startsWith(CACHE_PREFIX)
+            && name !== CACHE_NAME
+            && name !== MANIFEST_CACHE
+            && name !== TEMP_CACHE)
+          .map(name => caches.delete(name))
+      );
+
+      // Claim clients to enable caching on first launch
+      self.clients.claim();
+    } catch (err) {
+      // On an unhandled exception the state of the cache cannot be guaranteed.
+      console.error('Failed to upgrade service worker: ' + err);
       await caches.delete(CACHE_NAME);
       await caches.delete(TEMP_CACHE);
       await caches.delete(MANIFEST_CACHE);
       self.clients.claim();
-    })
-  );
+    }
+  }());
 });
 
 // ---------------------------
@@ -247,8 +205,8 @@ self.addEventListener("fetch", (event) => {
   event.respondWith(caches.open(CACHE_NAME)
     .then((cache) => {
       return cache.match(event.request).then((response) => {
-        // Serve from cache, or fetch with retry and lazily populate cache
-        return response || fetchWithRetry(event.request).then((response) => {
+        // Serve from cache, or fetch with timeout and lazily populate cache
+        return response || fetchWithTimeout(event.request).then((response) => {
           if (response && Boolean(response.ok)) {
             cache.put(event.request, response.clone());
             notifyClients({
@@ -283,35 +241,17 @@ self.addEventListener('message', (event) => {
 });
 
 /**
- * Fetch with timeout protection.
- * Rejects if the fetch takes longer than FETCH_TIMEOUT.
+ * Fetch with timeout protection using AbortController.
+ * Rejects if the fetch takes longer than the specified timeout.
  * @param {Request|string} request
+ * @param {number} timeout in milliseconds (default 10000)
  * @returns {Promise<Response>}
  */
-function fetchWithTimeout(request) {
-  return Promise.race([
-    fetch(request),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Fetch timeout')), FETCH_TIMEOUT))
-  ]);
-}
-
-/**
- * Fetch with retry and timeout.
- * Retries up to `retries` times with RETRY_DELAY between attempts.
- * @param {Request|string} request
- * @param {number} retries
- * @returns {Promise<Response>}
- */
-async function fetchWithRetry(request, retries = 2) {
-  for (let i = 0; i <= retries; i++) {
-    try {
-      return await fetchWithTimeout(request);
-    } catch (err) {
-      if (i === retries) throw err;
-      await new Promise(r => setTimeout(r, RETRY_DELAY));
-    }
-  }
+function fetchWithTimeout(request, timeout = 10000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+  return fetch(request, { signal: controller.signal })
+    .finally(() => clearTimeout(id));
 }
 
 /**
@@ -341,8 +281,7 @@ async function downloadOffline() {
 
 /**
  * Online-first strategy for index.html.
- * Uses navigation preload when available, falls back to fetch with retry,
- * then to cache.
+ * Attempts to fetch from network, falls back to cache.
  * @param {FetchEvent} event
  */
 function onlineFirst(event) {
@@ -350,12 +289,7 @@ function onlineFirst(event) {
   var resourceInfo = RESOURCES[resourceKey] || RESOURCES['/'];
 
   return event.respondWith(
-    // Try navigation preload first, then fetch
-    (event.preloadResponse || Promise.resolve(null))
-      .then((preloadResponse) => {
-        if (preloadResponse) return preloadResponse;
-        return fetchWithRetry(event.request);
-      })
+    fetchWithTimeout(event.request)
       .then((response) => {
         return caches.open(CACHE_NAME).then((cache) => {
           cache.put(event.request, response.clone());
