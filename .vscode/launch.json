@@ -8,10 +8,9 @@
       "program": "bin/generate.dart",
       "args": [
         "--input=example/build/web",
-        "--output=flutter_service_worker.js",
-        "--glob=\"**.{html,js,wasm,json}; assets/**; canvaskit/**; icons/**\"",
-        "--no-glob=\"flutter_service_worker.js; **/*.map; assets/NOTICES\"",
-        "--comments",
+        "--output=sw.js",
+        "--prefix=sw-example",
+        "--comments"
       ],
       "env": {
         "ENVIRONMENT": "development"
@@ -26,18 +25,15 @@
       "program": "lib/main.dart",
       "cwd": "example",
       "args": [
-        /* "--dart-define-from-file=config/development.env", */
         "--device-id=web-server",
         "--web-port=4000",
-        "--wasm",
+        "--wasm"
       ],
       "env": {
         "ENVIRONMENT": "development"
       },
-      /* "preLaunchTask": "example:flutter:build:web", */
       "console": "debugConsole"
     },
-    // dart test test/unit_test.dart --color --platform=vm
     {
       "name": "[Dart] Unit Test (vm)",
       "request": "launch",
@@ -58,12 +54,9 @@
         "--file-reporter=json:coverage/tests.json",
         "--timeout=5m",
         "--concurrency=12",
-        "--chain-stack-traces",
-        /* "--name=Disconnect_temporarily" */
+        "--chain-stack-traces"
       ],
-      "args": [],
-      /* "preLaunchTask": "start",
-      "postDebugTask": "stop" */
+      "args": []
     }
   ]
 }

@@ -6,8 +6,8 @@ import 'package:path/path.dart' as p;
 
 /// Convert a file system path to a URL path.
 String pathToUrl(String path) => p.url.normalize(
-      (!io.Platform.isWindows) ? path : path.replaceAll(r'\', '/'),
-    );
+  (!io.Platform.isWindows) ? path : path.replaceAll(r'\', '/'),
+);
 
 /// Get recursive map of files in a directory.
 /// The keys are the relative paths of the files,

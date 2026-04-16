@@ -29,6 +29,12 @@ sentry.properties
 
 # Lock files
 pubspec.lock
+package-lock.json
+
+# Node.js
+node_modules/
+packages/sw/dist/
+*.tsbuildinfo
 
 # Generated files
 example/sw.g.js

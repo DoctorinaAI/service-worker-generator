@@ -1,10 +1,169 @@
-{"protocolVersion":"0.1.1","runnerVersion":"1.26.2","pid":49648,"type":"start","time":0}
-{"suite":{"id":0,"platform":"vm","path":"test/unit_test.dart"},"type":"suite","time":0}
-{"test":{"id":1,"name":"loading test/unit_test.dart","suiteID":0,"groupIDs":[],"metadata":{"skip":false,"skipReason":null},"line":null,"column":null,"url":null},"type":"testStart","time":3}
-{"count":1,"time":7,"type":"allSuites"}
-{"testID":1,"result":"success","skipped":false,"hidden":true,"type":"testDone","time":387}
-{"group":{"id":2,"suiteID":0,"parentID":null,"name":"","metadata":{"skip":false,"skipReason":null},"testCount":1,"line":null,"column":null,"url":null},"type":"group","time":388}
-{"group":{"id":3,"suiteID":0,"parentID":2,"name":"unit_test","metadata":{"skip":false,"skipReason":null},"testCount":1,"line":3,"column":16,"url":"file:///C:/git/service-worker-generator/test/unit_test.dart"},"type":"group","time":389}
-{"test":{"id":4,"name":"unit_test example test","suiteID":0,"groupIDs":[2,3],"metadata":{"skip":false,"skipReason":null},"line":4,"column":3,"url":"file:///C:/git/service-worker-generator/test/unit_test.dart"},"type":"testStart","time":389}
-{"testID":4,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":398}
-{"success":true,"type":"done","time":402}
+{"protocolVersion":"0.1.1","runnerVersion":"1.31.0","pid":1435,"type":"start","time":0}
+{"suite":{"id":0,"platform":"vm","path":"test/injector_test.dart"},"type":"suite","time":0}
+{"test":{"id":1,"name":"loading test/injector_test.dart","suiteID":0,"groupIDs":[],"metadata":{"skip":false,"skipReason":null},"line":null,"column":null,"url":null},"type":"testStart","time":0}
+{"suite":{"id":2,"platform":"vm","path":"test/categorizer_test.dart"},"type":"suite","time":3}
+{"test":{"id":3,"name":"loading test/categorizer_test.dart","suiteID":2,"groupIDs":[],"metadata":{"skip":false,"skipReason":null},"line":null,"column":null,"url":null},"type":"testStart","time":3}
+{"suite":{"id":4,"platform":"vm","path":"test/cleanup_test.dart"},"type":"suite","time":3}
+{"test":{"id":5,"name":"loading test/cleanup_test.dart","suiteID":4,"groupIDs":[],"metadata":{"skip":false,"skipReason":null},"line":null,"column":null,"url":null},"type":"testStart","time":3}
+{"suite":{"id":6,"platform":"vm","path":"test/unit_test.dart"},"type":"suite","time":3}
+{"test":{"id":7,"name":"loading test/unit_test.dart","suiteID":6,"groupIDs":[],"metadata":{"skip":false,"skipReason":null},"line":null,"column":null,"url":null},"type":"testStart","time":4}
+{"suite":{"id":8,"platform":"vm","path":"test/manifest_test.dart"},"type":"suite","time":4}
+{"test":{"id":9,"name":"loading test/manifest_test.dart","suiteID":8,"groupIDs":[],"metadata":{"skip":false,"skipReason":null},"line":null,"column":null,"url":null},"type":"testStart","time":4}
+{"suite":{"id":10,"platform":"vm","path":"test/flutter_build_test.dart"},"type":"suite","time":4}
+{"test":{"id":11,"name":"loading test/flutter_build_test.dart","suiteID":10,"groupIDs":[],"metadata":{"skip":false,"skipReason":null},"line":null,"column":null,"url":null},"type":"testStart","time":4}
+{"count":6,"time":5,"type":"allSuites"}
+{"testID":1,"result":"success","skipped":false,"hidden":true,"type":"testDone","time":248}
+{"group":{"id":12,"suiteID":0,"parentID":null,"name":"","metadata":{"skip":false,"skipReason":null},"testCount":7,"line":null,"column":null,"url":null},"type":"group","time":250}
+{"group":{"id":13,"suiteID":0,"parentID":12,"name":"injectSWConfig","metadata":{"skip":false,"skipReason":null},"testCount":4,"line":8,"column":3,"url":"file:///Users/fox/git/service-worker-generator/test/injector_test.dart"},"type":"group","time":250}
+{"test":{"id":14,"name":"injectSWConfig replaces placeholder with config JSON","suiteID":0,"groupIDs":[12,13],"metadata":{"skip":false,"skipReason":null},"line":9,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/injector_test.dart"},"type":"testStart","time":250}
+{"testID":14,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":260}
+{"testID":5,"result":"success","skipped":false,"hidden":true,"type":"testDone","time":263}
+{"group":{"id":15,"suiteID":4,"parentID":null,"name":"","metadata":{"skip":false,"skipReason":null},"testCount":8,"line":null,"column":null,"url":null},"type":"group","time":263}
+{"group":{"id":16,"suiteID":4,"parentID":15,"name":"cleanup","metadata":{"skip":false,"skipReason":null},"testCount":8,"line":8,"column":3,"url":"file:///Users/fox/git/service-worker-generator/test/cleanup_test.dart"},"type":"group","time":263}
+{"test":{"id":17,"name":"cleanup removes Flutter files","suiteID":4,"groupIDs":[15,16],"metadata":{"skip":false,"skipReason":null},"line":39,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/cleanup_test.dart"},"type":"testStart","time":263}
+{"test":{"id":18,"name":"injectSWConfig throws if placeholder not found","suiteID":0,"groupIDs":[12,13],"metadata":{"skip":false,"skipReason":null},"line":37,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/injector_test.dart"},"type":"testStart","time":263}
+{"testID":7,"result":"success","skipped":false,"hidden":true,"type":"testDone","time":266}
+{"group":{"id":19,"suiteID":6,"parentID":null,"name":"","metadata":{"skip":false,"skipReason":null},"testCount":1,"line":null,"column":null,"url":null},"type":"group","time":266}
+{"group":{"id":20,"suiteID":6,"parentID":19,"name":"unit_test","metadata":{"skip":false,"skipReason":null},"testCount":1,"line":3,"column":16,"url":"file:///Users/fox/git/service-worker-generator/test/unit_test.dart"},"type":"group","time":266}
+{"test":{"id":21,"name":"unit_test example test","suiteID":6,"groupIDs":[19,20],"metadata":{"skip":false,"skipReason":null},"line":4,"column":3,"url":"file:///Users/fox/git/service-worker-generator/test/unit_test.dart"},"type":"testStart","time":266}
+{"testID":18,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":266}
+{"test":{"id":22,"name":"injectSWConfig handles empty manifest","suiteID":0,"groupIDs":[12,13],"metadata":{"skip":false,"skipReason":null},"line":49,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/injector_test.dart"},"type":"testStart","time":266}
+{"testID":22,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":267}
+{"test":{"id":23,"name":"injectSWConfig handles multiple resources","suiteID":0,"groupIDs":[12,13],"metadata":{"skip":false,"skipReason":null},"line":62,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/injector_test.dart"},"type":"testStart","time":268}
+{"testID":23,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":269}
+{"group":{"id":24,"suiteID":0,"parentID":12,"name":"injectBootstrapConfig","metadata":{"skip":false,"skipReason":null},"testCount":3,"line":99,"column":3,"url":"file:///Users/fox/git/service-worker-generator/test/injector_test.dart"},"type":"group","time":269}
+{"test":{"id":25,"name":"injectBootstrapConfig replaces placeholder with build config JSON","suiteID":0,"groupIDs":[12,24],"metadata":{"skip":false,"skipReason":null},"line":100,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/injector_test.dart"},"type":"testStart","time":269}
+{"testID":25,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":270}
+{"test":{"id":26,"name":"injectBootstrapConfig throws if placeholder not found","suiteID":0,"groupIDs":[12,24],"metadata":{"skip":false,"skipReason":null},"line":128,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/injector_test.dart"},"type":"testStart","time":270}
+{"testID":26,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":271}
+{"test":{"id":27,"name":"injectBootstrapConfig handles empty builds list","suiteID":0,"groupIDs":[12,24],"metadata":{"skip":false,"skipReason":null},"line":144,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/injector_test.dart"},"type":"testStart","time":272}
+{"testID":27,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":272}
+{"testID":21,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":276}
+{"testID":3,"result":"success","skipped":false,"hidden":true,"type":"testDone","time":285}
+{"group":{"id":28,"suiteID":2,"parentID":null,"name":"","metadata":{"skip":false,"skipReason":null},"testCount":31,"line":null,"column":null,"url":null},"type":"group","time":285}
+{"group":{"id":29,"suiteID":2,"parentID":28,"name":"FileCategorizer","metadata":{"skip":false,"skipReason":null},"testCount":31,"line":5,"column":3,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"group","time":285}
+{"group":{"id":30,"suiteID":2,"parentID":29,"name":"FileCategorizer core","metadata":{"skip":false,"skipReason":null},"testCount":5,"line":14,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"group","time":285}
+{"test":{"id":31,"name":"FileCategorizer core main.dart.js is core","suiteID":2,"groupIDs":[28,29,30],"metadata":{"skip":false,"skipReason":null},"line":15,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":285}
+{"testID":17,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":288}
+{"test":{"id":32,"name":"cleanup removes map files by default","suiteID":4,"groupIDs":[15,16],"metadata":{"skip":false,"skipReason":null},"line":56,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/cleanup_test.dart"},"type":"testStart","time":289}
+{"testID":32,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":291}
+{"test":{"id":33,"name":"cleanup keeps map files when keepMaps is true","suiteID":4,"groupIDs":[15,16],"metadata":{"skip":false,"skipReason":null},"line":69,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/cleanup_test.dart"},"type":"testStart","time":291}
+{"testID":33,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":293}
+{"test":{"id":34,"name":"cleanup replaces {{sw_version}} in index.html","suiteID":4,"groupIDs":[15,16],"metadata":{"skip":false,"skipReason":null},"line":82,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/cleanup_test.dart"},"type":"testStart","time":293}
+{"testID":31,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":296}
+{"testID":34,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":296}
+{"test":{"id":35,"name":"FileCategorizer core main.dart.wasm is core","suiteID":2,"groupIDs":[28,29,30],"metadata":{"skip":false,"skipReason":null},"line":22,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":296}
+{"test":{"id":36,"name":"cleanup replaces {{flutter_service_worker_version}} in index.html","suiteID":4,"groupIDs":[15,16],"metadata":{"skip":false,"skipReason":null},"line":92,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/cleanup_test.dart"},"type":"testStart","time":296}
+{"testID":11,"result":"success","skipped":false,"hidden":true,"type":"testDone","time":298}
+{"group":{"id":37,"suiteID":10,"parentID":null,"name":"","metadata":{"skip":false,"skipReason":null},"testCount":8,"line":null,"column":null,"url":null},"type":"group","time":298}
+{"group":{"id":38,"suiteID":10,"parentID":37,"name":"extractFlutterBuildInfo","metadata":{"skip":false,"skipReason":null},"testCount":5,"line":8,"column":3,"url":"file:///Users/fox/git/service-worker-generator/test/flutter_build_test.dart"},"type":"group","time":298}
+{"test":{"id":39,"name":"extractFlutterBuildInfo parses valid flutter_bootstrap.js","suiteID":10,"groupIDs":[37,38],"metadata":{"skip":false,"skipReason":null},"line":19,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/flutter_build_test.dart"},"type":"testStart","time":298}
+{"testID":35,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":298}
+{"testID":9,"result":"success","skipped":false,"hidden":true,"type":"testDone","time":300}
+{"group":{"id":40,"suiteID":8,"parentID":null,"name":"","metadata":{"skip":false,"skipReason":null},"testCount":8,"line":null,"column":null,"url":null},"type":"group","time":300}
+{"group":{"id":41,"suiteID":8,"parentID":40,"name":"ResourceEntry","metadata":{"skip":false,"skipReason":null},"testCount":2,"line":10,"column":3,"url":"file:///Users/fox/git/service-worker-generator/test/manifest_test.dart"},"type":"group","time":300}
+{"test":{"id":42,"name":"ResourceEntry toJson produces correct map","suiteID":8,"groupIDs":[40,41],"metadata":{"skip":false,"skipReason":null},"line":11,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/manifest_test.dart"},"type":"testStart","time":300}
+{"testID":36,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":300}
+{"test":{"id":43,"name":"FileCategorizer core main.dart.mjs is core","suiteID":2,"groupIDs":[28,29,30],"metadata":{"skip":false,"skipReason":null},"line":29,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":301}
+{"test":{"id":44,"name":"cleanup preserves main.dart.js","suiteID":4,"groupIDs":[15,16],"metadata":{"skip":false,"skipReason":null},"line":106,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/cleanup_test.dart"},"type":"testStart","time":301}
+{"testID":43,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":302}
+{"test":{"id":45,"name":"FileCategorizer core support wasm is core","suiteID":2,"groupIDs":[28,29,30],"metadata":{"skip":false,"skipReason":null},"line":36,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":302}
+{"testID":44,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":303}
+{"testID":45,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":303}
+{"test":{"id":46,"name":"cleanup handles missing files gracefully","suiteID":4,"groupIDs":[15,16],"metadata":{"skip":false,"skipReason":null},"line":115,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/cleanup_test.dart"},"type":"testStart","time":303}
+{"test":{"id":47,"name":"FileCategorizer core canvaskit variant files are core","suiteID":2,"groupIDs":[28,29,30],"metadata":{"skip":false,"skipReason":null},"line":43,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":303}
+{"testID":46,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":305}
+{"test":{"id":48,"name":"cleanup removes map files in subdirectories","suiteID":4,"groupIDs":[15,16],"metadata":{"skip":false,"skipReason":null},"line":125,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/cleanup_test.dart"},"type":"testStart","time":305}
+{"testID":47,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":306}
+{"group":{"id":49,"suiteID":2,"parentID":29,"name":"FileCategorizer required","metadata":{"skip":false,"skipReason":null},"testCount":3,"line":55,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"group","time":306}
+{"test":{"id":50,"name":"FileCategorizer required AssetManifest.json is required","suiteID":2,"groupIDs":[28,29,49],"metadata":{"skip":false,"skipReason":null},"line":56,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":307}
+{"testID":50,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":307}
+{"testID":48,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":307}
+{"test":{"id":51,"name":"FileCategorizer required AssetManifest.bin.json is required","suiteID":2,"groupIDs":[28,29,49],"metadata":{"skip":false,"skipReason":null},"line":63,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":307}
+{"testID":51,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":308}
+{"testID":42,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":308}
+{"test":{"id":52,"name":"FileCategorizer required FontManifest.json is required","suiteID":2,"groupIDs":[28,29,49],"metadata":{"skip":false,"skipReason":null},"line":70,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":308}
+{"test":{"id":53,"name":"ResourceEntry toJson uses category name","suiteID":8,"groupIDs":[40,41],"metadata":{"skip":false,"skipReason":null},"line":26,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/manifest_test.dart"},"type":"testStart","time":308}
+{"testID":52,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":309}
+{"group":{"id":54,"suiteID":2,"parentID":29,"name":"FileCategorizer ignore","metadata":{"skip":false,"skipReason":null},"testCount":10,"line":78,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"group","time":309}
+{"test":{"id":55,"name":"FileCategorizer ignore map files are ignored","suiteID":2,"groupIDs":[28,29,54],"metadata":{"skip":false,"skipReason":null},"line":79,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":309}
+{"testID":53,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":309}
+{"group":{"id":56,"suiteID":8,"parentID":40,"name":"generateManifest","metadata":{"skip":false,"skipReason":null},"testCount":4,"line":38,"column":3,"url":"file:///Users/fox/git/service-worker-generator/test/manifest_test.dart"},"type":"group","time":309}
+{"test":{"id":57,"name":"generateManifest scans files and categorizes them","suiteID":8,"groupIDs":[40,56],"metadata":{"skip":false,"skipReason":null},"line":49,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/manifest_test.dart"},"type":"testStart","time":309}
+{"testID":55,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":309}
+{"test":{"id":58,"name":"FileCategorizer ignore symbols files are ignored","suiteID":2,"groupIDs":[28,29,54],"metadata":{"skip":false,"skipReason":null},"line":86,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":309}
+{"testID":58,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":310}
+{"test":{"id":59,"name":"FileCategorizer ignore NOTICES is ignored","suiteID":2,"groupIDs":[28,29,54],"metadata":{"skip":false,"skipReason":null},"line":93,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":310}
+{"testID":59,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":310}
+{"test":{"id":60,"name":"FileCategorizer ignore sw.js is ignored","suiteID":2,"groupIDs":[28,29,54],"metadata":{"skip":false,"skipReason":null},"line":100,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":311}
+{"testID":60,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":311}
+{"test":{"id":61,"name":"FileCategorizer ignore bootstrap.js is ignored","suiteID":2,"groupIDs":[28,29,54],"metadata":{"skip":false,"skipReason":null},"line":104,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":311}
+{"testID":61,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":312}
+{"test":{"id":62,"name":"FileCategorizer ignore index.html is ignored","suiteID":2,"groupIDs":[28,29,54],"metadata":{"skip":false,"skipReason":null},"line":111,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":312}
+{"testID":62,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":312}
+{"test":{"id":63,"name":"FileCategorizer ignore flutter_bootstrap.js is ignored","suiteID":2,"groupIDs":[28,29,54],"metadata":{"skip":false,"skipReason":null},"line":118,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":312}
+{"testID":63,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":313}
+{"test":{"id":64,"name":"FileCategorizer ignore flutter_service_worker.js is ignored","suiteID":2,"groupIDs":[28,29,54],"metadata":{"skip":false,"skipReason":null},"line":125,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":313}
+{"testID":64,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":314}
+{"test":{"id":65,"name":"FileCategorizer ignore version.json is ignored","suiteID":2,"groupIDs":[28,29,54],"metadata":{"skip":false,"skipReason":null},"line":132,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":314}
+{"testID":39,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":315}
+{"test":{"id":66,"name":"extractFlutterBuildInfo parses multiple builds","suiteID":10,"groupIDs":[37,38],"metadata":{"skip":false,"skipReason":null},"line":39,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/flutter_build_test.dart"},"type":"testStart","time":315}
+{"testID":65,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":316}
+{"test":{"id":67,"name":"FileCategorizer ignore flutter.js is ignored","suiteID":2,"groupIDs":[28,29,54],"metadata":{"skip":false,"skipReason":null},"line":139,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":316}
+{"testID":66,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":316}
+{"testID":67,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":316}
+{"test":{"id":68,"name":"extractFlutterBuildInfo throws if flutter_bootstrap.js not found","suiteID":10,"groupIDs":[37,38],"metadata":{"skip":false,"skipReason":null},"line":54,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/flutter_build_test.dart"},"type":"testStart","time":317}
+{"group":{"id":69,"suiteID":2,"parentID":29,"name":"FileCategorizer optional","metadata":{"skip":false,"skipReason":null},"testCount":7,"line":147,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"group","time":317}
+{"test":{"id":70,"name":"FileCategorizer optional small png is optional","suiteID":2,"groupIDs":[28,29,69],"metadata":{"skip":false,"skipReason":null},"line":148,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":317}
+{"testID":70,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":318}
+{"test":{"id":71,"name":"FileCategorizer optional small json is optional","suiteID":2,"groupIDs":[28,29,69],"metadata":{"skip":false,"skipReason":null},"line":155,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":319}
+{"testID":68,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":319}
+{"test":{"id":72,"name":"extractFlutterBuildInfo throws if buildConfig not found in file","suiteID":10,"groupIDs":[37,38],"metadata":{"skip":false,"skipReason":null},"line":67,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/flutter_build_test.dart"},"type":"testStart","time":319}
+{"testID":71,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":319}
+{"test":{"id":73,"name":"FileCategorizer optional small ttf is optional","suiteID":2,"groupIDs":[28,29,69],"metadata":{"skip":false,"skipReason":null},"line":162,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":319}
+{"testID":72,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":320}
+{"test":{"id":74,"name":"extractFlutterBuildInfo handles missing engineRevision gracefully","suiteID":10,"groupIDs":[37,38],"metadata":{"skip":false,"skipReason":null},"line":85,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/flutter_build_test.dart"},"type":"testStart","time":320}
+{"testID":73,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":320}
+{"test":{"id":75,"name":"FileCategorizer optional small webp is optional","suiteID":2,"groupIDs":[28,29,69],"metadata":{"skip":false,"skipReason":null},"line":169,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":320}
+{"testID":75,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":321}
+{"test":{"id":76,"name":"FileCategorizer optional large png is ignored","suiteID":2,"groupIDs":[28,29,69],"metadata":{"skip":false,"skipReason":null},"line":176,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":321}
+{"testID":74,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":321}
+{"group":{"id":77,"suiteID":10,"parentID":37,"name":"getConfiguredRenderers","metadata":{"skip":false,"skipReason":null},"testCount":3,"line":99,"column":3,"url":"file:///Users/fox/git/service-worker-generator/test/flutter_build_test.dart"},"type":"group","time":321}
+{"test":{"id":78,"name":"getConfiguredRenderers extracts renderer names","suiteID":10,"groupIDs":[37,77],"metadata":{"skip":false,"skipReason":null},"line":100,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/flutter_build_test.dart"},"type":"testStart","time":321}
+{"testID":76,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":321}
+{"test":{"id":79,"name":"FileCategorizer optional large ttf is ignored","suiteID":2,"groupIDs":[28,29,69],"metadata":{"skip":false,"skipReason":null},"line":183,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":322}
+{"testID":79,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":322}
+{"test":{"id":80,"name":"FileCategorizer optional unknown extension is ignored","suiteID":2,"groupIDs":[28,29,69],"metadata":{"skip":false,"skipReason":null},"line":190,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":322}
+{"testID":78,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":322}
+{"test":{"id":81,"name":"getConfiguredRenderers handles builds without renderer","suiteID":10,"groupIDs":[37,77],"metadata":{"skip":false,"skipReason":null},"line":114,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/flutter_build_test.dart"},"type":"testStart","time":322}
+{"testID":80,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":323}
+{"group":{"id":82,"suiteID":2,"parentID":29,"name":"FileCategorizer user overrides","metadata":{"skip":false,"skipReason":null},"testCount":4,"line":198,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"group","time":323}
+{"test":{"id":83,"name":"FileCategorizer user overrides core override adds to defaults","suiteID":2,"groupIDs":[28,29,82],"metadata":{"skip":false,"skipReason":null},"line":199,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":323}
+{"testID":81,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":323}
+{"test":{"id":84,"name":"getConfiguredRenderers deduplicates renderers","suiteID":10,"groupIDs":[37,77],"metadata":{"skip":false,"skipReason":null},"line":126,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/flutter_build_test.dart"},"type":"testStart","time":323}
+{"testID":84,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":323}
+{"testID":83,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":324}
+{"test":{"id":85,"name":"FileCategorizer user overrides ignore override adds to defaults","suiteID":2,"groupIDs":[28,29,82],"metadata":{"skip":false,"skipReason":null},"line":209,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":324}
+{"testID":85,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":325}
+{"test":{"id":86,"name":"FileCategorizer user overrides optional override matches files","suiteID":2,"groupIDs":[28,29,82],"metadata":{"skip":false,"skipReason":null},"line":217,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":325}
+{"testID":86,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":326}
+{"test":{"id":87,"name":"FileCategorizer user overrides required override adds to defaults","suiteID":2,"groupIDs":[28,29,82],"metadata":{"skip":false,"skipReason":null},"line":225,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":326}
+{"testID":87,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":327}
+{"group":{"id":88,"suiteID":2,"parentID":29,"name":"FileCategorizer priority","metadata":{"skip":false,"skipReason":null},"testCount":2,"line":234,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"group","time":327}
+{"test":{"id":89,"name":"FileCategorizer priority core takes precedence over ignore","suiteID":2,"groupIDs":[28,29,88],"metadata":{"skip":false,"skipReason":null},"line":235,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":327}
+{"testID":89,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":327}
+{"test":{"id":90,"name":"FileCategorizer priority ignore takes precedence over optional","suiteID":2,"groupIDs":[28,29,88],"metadata":{"skip":false,"skipReason":null},"line":243,"column":7,"url":"file:///Users/fox/git/service-worker-generator/test/categorizer_test.dart"},"type":"testStart","time":328}
+{"testID":90,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":328}
+{"testID":57,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":330}
+{"test":{"id":91,"name":"generateManifest excludes files matching exclude globs","suiteID":8,"groupIDs":[40,56],"metadata":{"skip":false,"skipReason":null},"line":86,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/manifest_test.dart"},"type":"testStart","time":330}
+{"testID":91,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":332}
+{"test":{"id":92,"name":"generateManifest includes only matching include globs","suiteID":8,"groupIDs":[40,56],"metadata":{"skip":false,"skipReason":null},"line":102,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/manifest_test.dart"},"type":"testStart","time":332}
+{"testID":92,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":334}
+{"test":{"id":93,"name":"generateManifest computes MD5 hashes","suiteID":8,"groupIDs":[40,56],"metadata":{"skip":false,"skipReason":null},"line":118,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/manifest_test.dart"},"type":"testStart","time":334}
+{"testID":93,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":335}
+{"group":{"id":94,"suiteID":8,"parentID":40,"name":"manifestToJson","metadata":{"skip":false,"skipReason":null},"testCount":2,"line":137,"column":3,"url":"file:///Users/fox/git/service-worker-generator/test/manifest_test.dart"},"type":"group","time":336}
+{"test":{"id":95,"name":"manifestToJson serializes manifest to JSON string","suiteID":8,"groupIDs":[40,94],"metadata":{"skip":false,"skipReason":null},"line":138,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/manifest_test.dart"},"type":"testStart","time":336}
+{"testID":95,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":339}
+{"test":{"id":96,"name":"manifestToJson handles empty manifest","suiteID":8,"groupIDs":[40,94],"metadata":{"skip":false,"skipReason":null},"line":154,"column":5,"url":"file:///Users/fox/git/service-worker-generator/test/manifest_test.dart"},"type":"testStart","time":339}
+{"testID":96,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":339}
+{"success":true,"type":"done","time":341}

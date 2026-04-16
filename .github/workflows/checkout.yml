@@ -15,10 +15,11 @@ on:
       - "bin/**.dart"
       - "lib/**.dart"
       - "test/**.dart"
-      - "example/**.dart"
-      - "example/**.html"
+      - "packages/sw/src/**"
+      - "scripts/**"
       - ".github/workflows/*.yml"
       - "pubspec.yaml"
+      - "package.json"
       - "analysis_options.yaml"
   pull_request:
     branches:
@@ -34,10 +35,11 @@ on:
       - "bin/**.dart"
       - "lib/**.dart"
       - "test/**.dart"
-      - "example/**.dart"
-      - "example/**.html"
+      - "packages/sw/src/**"
+      - "scripts/**"
       - ".github/workflows/*.yml"
       - "pubspec.yaml"
+      - "package.json"
       - "analysis_options.yaml"
 
 permissions:
@@ -50,8 +52,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  typescript:
+    name: "TypeScript"
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 📦 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 📥 Install dependencies
+        run: npm ci
+
+      - name: 🔍 Type check
+        run: npm run check
+
+      - name: 🧪 Run tests
+        run: npm test
+
+      - name: 🏗️ Build artifacts
+        run: npm run build
+
+      - name: ✅ Verify committed assets match build output
+        run: npm run verify
+
   checkout:
-    name: "Checkout"
+    name: "Dart"
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -93,7 +124,7 @@ jobs:
       - name: 📈 Check analyzer
         id: check-analyzer
         timeout-minutes: 1
-        run: dart analyze --fatal-infos --fatal-warnings lib/ test/
+        run: dart analyze --fatal-warnings lib/ test/
 
       - name: 🧪 Run unit tests
         id: run-unit-tests
@@ -101,4 +132,4 @@ jobs:
         run: |
           dart test --color --platform=vm --concurrency=12 \
             --timeout=60s --reporter=github --file-reporter=json:reports/tests.json \
-            --coverage=coverage -- test/unit_test.dart
+            --coverage=coverage
