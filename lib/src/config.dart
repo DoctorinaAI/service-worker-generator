@@ -5,6 +5,30 @@ import 'package:yaml/yaml.dart' as yaml;
 
 /// Generator configuration with all settings.
 class GeneratorConfig {
+  /// Create a generator configuration.
+  const GeneratorConfig({
+    required this.inputDir,
+    required this.version,
+    this.swOutput = 'sw.js',
+    this.bootstrapOutput = 'bootstrap.js',
+    this.cachePrefix = 'app-cache',
+    this.includeGlobs = const {'**'},
+    this.excludeGlobs = const {},
+    this.coreGlobs = const {},
+    this.requiredGlobs = const {},
+    this.optionalGlobs = const {},
+    this.ignoreGlobs = const {},
+    this.keepMaps = false,
+    this.noCleanup = false,
+    this.comments = false,
+    this.theme = 'auto',
+    this.logo = '',
+    this.title = '',
+    this.color = '#25D366',
+    this.minProgress = 0,
+    this.maxProgress = 90,
+  });
+
   /// Path to Flutter build output directory.
   final String inputDir;
 
@@ -65,32 +89,9 @@ class GeneratorConfig {
   /// Maximum progress value.
   final int maxProgress;
 
-  /// Create a generator configuration.
-  const GeneratorConfig({
-    required this.inputDir,
-    this.swOutput = 'sw.js',
-    this.bootstrapOutput = 'bootstrap.js',
-    this.cachePrefix = 'app-cache',
-    required this.version,
-    this.includeGlobs = const {'**'},
-    this.excludeGlobs = const {},
-    this.coreGlobs = const {},
-    this.requiredGlobs = const {},
-    this.optionalGlobs = const {},
-    this.ignoreGlobs = const {},
-    this.keepMaps = false,
-    this.noCleanup = false,
-    this.comments = false,
-    this.theme = 'auto',
-    this.logo = '',
-    this.title = '',
-    this.color = '#25D366',
-    this.minProgress = 0,
-    this.maxProgress = 90,
-  });
-
   /// Parse configuration from CLI args, optional YAML file, and env.
   /// Priority: CLI args > YAML > env > defaults.
+  // ignore: prefer_constructors_over_static_methods
   static GeneratorConfig parse(List<String> args) {
     final parser = _buildArgParser();
     final results = parser.parse(args);
@@ -227,7 +228,7 @@ class GeneratorConfig {
       final content = file.readAsStringSync();
       final doc = yaml.loadYaml(content);
       if (doc is Map) return Map<String, dynamic>.from(doc);
-    } catch (e) {
+    } on Object catch (e) {
       io.stderr.writeln('Warning: Failed to parse YAML config: $e');
     }
     return const {};

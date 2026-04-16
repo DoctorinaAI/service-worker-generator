@@ -5,14 +5,14 @@ import 'package:path/path.dart' as p;
 
 /// Parsed Flutter build configuration.
 class FlutterBuildInfo {
+  /// Create a Flutter build info.
+  const FlutterBuildInfo({required this.engineRevision, required this.builds});
+
   /// Engine revision hash (e.g., "425cfb54d01a9472b3e81d9e76fd63a4a44cfbcb").
   final String engineRevision;
 
   /// Build entries from _flutter.buildConfig.builds.
   final List<Map<String, dynamic>> builds;
-
-  /// Create a Flutter build info.
-  const FlutterBuildInfo({required this.engineRevision, required this.builds});
 }
 
 /// Extract Flutter build info from the build directory.

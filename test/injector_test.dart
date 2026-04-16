@@ -11,7 +11,7 @@ void main() {
           '(function(){var config="__INJECT_SW_CONFIG__";start(config)})();';
 
       final manifest = {
-        'main.dart.js': ResourceEntry(
+        'main.dart.js': const ResourceEntry(
           name: 'main.dart.js',
           size: 1024,
           hash: 'abc123',
@@ -63,19 +63,19 @@ void main() {
       const template = 'config="__INJECT_SW_CONFIG__"';
 
       final manifest = {
-        'main.dart.js': ResourceEntry(
+        'main.dart.js': const ResourceEntry(
           name: 'main.dart.js',
           size: 1024,
           hash: 'aaa',
           category: ResourceCategory.core,
         ),
-        'assets/FontManifest.json': ResourceEntry(
+        'assets/FontManifest.json': const ResourceEntry(
           name: 'FontManifest.json',
           size: 200,
           hash: 'bbb',
           category: ResourceCategory.required,
         ),
-        'icons/icon.png': ResourceEntry(
+        'icons/icon.png': const ResourceEntry(
           name: 'icon.png',
           size: 5000,
           hash: 'ccc',
@@ -101,7 +101,7 @@ void main() {
       const template =
           '(function(){var c="__INJECT_BOOTSTRAP_CONFIG__";boot(c)})();';
 
-      final config = GeneratorConfig(
+      const config = GeneratorConfig(
         inputDir: 'build/web',
         version: '12345',
         cachePrefix: 'test',
@@ -126,7 +126,7 @@ void main() {
     });
 
     test('throws if placeholder not found', () {
-      final config = GeneratorConfig(inputDir: 'build/web', version: '1');
+      const config = GeneratorConfig(inputDir: 'build/web', version: '1');
 
       expect(
         () => injectBootstrapConfig(
@@ -144,7 +144,7 @@ void main() {
     test('handles empty builds list', () {
       const template = 'c="__INJECT_BOOTSTRAP_CONFIG__"';
 
-      final config = GeneratorConfig(inputDir: 'build/web', version: '1');
+      const config = GeneratorConfig(inputDir: 'build/web', version: '1');
 
       final result = injectBootstrapConfig(
         template: template,

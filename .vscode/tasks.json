@@ -146,6 +146,32 @@
       }
     },
     {
+      "label": "example:flutter:pub:get",
+      "detail": "Get dependencies for the example Flutter project",
+      "icon": {
+        "color": "terminal.ansiGreen",
+        "id": "cloud-download"
+      },
+      "type": "shell",
+      "command": "flutter pub get",
+      "group": {
+        "kind": "none",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}/example"
+      },
+      "presentation": {
+        "reveal": "silent",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false,
+        "group": "dart"
+      }
+    },
+    {
       "label": "example:flutter:build:web",
       "detail": "Build the example Flutter web application",
       "icon": {
@@ -153,11 +179,38 @@
         "id": "github-action"
       },
       "type": "shell",
-      "command": "flutter pub get && flutter build web --release --no-tree-shake-icons --no-web-resources-cdn --base-href=/ -o build/web",
+      "command": "flutter build web --release --no-tree-shake-icons --no-web-resources-cdn --base-href=/ -o build/web",
       "group": "none",
       "problemMatcher": [],
       "options": {
         "cwd": "${workspaceFolder}/example"
+      },
+      "dependsOn": [
+        "example:flutter:pub:get"
+      ],
+      "dependsOrder": "sequence",
+      "presentation": {
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false,
+        "group": "example"
+      }
+    },
+    {
+      "label": "example:generate",
+      "detail": "Run SW generator on example build output",
+      "icon": {
+        "color": "terminal.ansiBlue",
+        "id": "zap"
+      },
+      "type": "shell",
+      "command": "dart run sw:generate --input=example/build/web --prefix=example --no-cleanup --theme=auto --logo=icons/Icon-192.png --title='Service Worker' --color=#25D366",
+      "group": "none",
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
       },
       "presentation": {
         "reveal": "always",
@@ -165,8 +218,54 @@
         "panel": "shared",
         "showReuseMessage": false,
         "clear": false,
-        "group": "dart"
+        "group": "example"
       }
+    },
+    {
+      "label": "pipeline:full",
+      "detail": "Full pipeline: build TS → build Flutter → generate SW",
+      "icon": {
+        "color": "terminal.ansiMagenta",
+        "id": "rocket"
+      },
+      "dependsOn": [
+        "ts:build:all",
+        "example:flutter:build:web"
+      ],
+      "dependsOrder": "sequence",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "pipeline:generate",
+      "detail": "Build TS + run generator (skip Flutter build)",
+      "icon": {
+        "color": "terminal.ansiMagenta",
+        "id": "play"
+      },
+      "dependsOn": [
+        "ts:build:all",
+        "example:generate"
+      ],
+      "dependsOrder": "sequence",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "pipeline:all",
+      "detail": "Full pipeline: build TS → build Flutter → generate SW → run generator",
+      "icon": {
+        "color": "terminal.ansiMagenta",
+        "id": "star-full"
+      },
+      "dependsOn": [
+        "ts:build:all",
+        "example:flutter:build:web",
+        "example:generate"
+      ],
+      "dependsOrder": "sequence",
+      "group": "build",
+      "problemMatcher": []
     }
   ]
 }

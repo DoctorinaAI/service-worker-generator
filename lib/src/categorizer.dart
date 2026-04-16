@@ -63,12 +63,6 @@ const Set<String> _optionalExtensions = {
 
 /// Categorize files based on default rules and user overrides.
 class FileCategorizer {
-  final List<glob.Glob> _coreGlobs;
-  final List<glob.Glob> _requiredGlobs;
-  final List<glob.Glob> _optionalGlobs;
-  final List<glob.Glob> _ignoreGlobs;
-  final Set<String> _canvaskitFiles;
-
   /// Create a file categorizer.
   ///
   /// [coreOverrides], [requiredOverrides], [optionalOverrides],
@@ -90,10 +84,16 @@ class FileCategorizer {
        _optionalGlobs = _toGlobs(optionalOverrides),
        _ignoreGlobs = _toGlobs({..._defaultIgnorePatterns, ...ignoreOverrides}),
        _canvaskitFiles = canvaskitFiles;
+  final List<glob.Glob> _coreGlobs;
+  final List<glob.Glob> _requiredGlobs;
+  final List<glob.Glob> _optionalGlobs;
+  final List<glob.Glob> _ignoreGlobs;
+  final Set<String> _canvaskitFiles;
 
   /// Categorize a file by its path and size.
   ResourceCategory categorize(String path, int size) {
-    // User overrides take precedence (in order: core, required, ignore, optional)
+    // User overrides take precedence
+    // (in order: core, required, ignore, optional)
     if (_coreGlobs.any((g) => g.matches(path))) return ResourceCategory.core;
     if (_requiredGlobs.any((g) => g.matches(path))) {
       return ResourceCategory.required;

@@ -62,12 +62,15 @@
             "Bash(touch *)",
             "Bash(npm install *)",
             "Bash(npm -w packages/sw run check)",
+            "Bash(npm -w packages/sw run test)",
+            "Bash(npm -w packages/sw install --save-dev jsdom)",
             "Bash(npm run *)",
             "Bash(dart analyze *)",
             "Bash(dart pub *)",
             "Bash(dart format *)",
             "Bash(dart run *)",
-            "Bash(dart test *)"
+            "Bash(dart test *)",
+            "Bash(npx playwright *)"
         ],
         "deny": [
             "Read(.env*)",

@@ -6,6 +6,14 @@ import 'files.dart';
 
 /// A single resource entry in the manifest.
 class ResourceEntry {
+  /// Create a resource entry.
+  const ResourceEntry({
+    required this.name,
+    required this.size,
+    required this.hash,
+    required this.category,
+  });
+
   /// File basename.
   final String name;
 
@@ -17,14 +25,6 @@ class ResourceEntry {
 
   /// Caching category.
   final ResourceCategory category;
-
-  /// Create a resource entry.
-  const ResourceEntry({
-    required this.name,
-    required this.size,
-    required this.hash,
-    required this.category,
-  });
 
   /// Convert to a JSON-serializable map.
   Map<String, dynamic> toJson() => {

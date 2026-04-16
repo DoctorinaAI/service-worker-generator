@@ -98,12 +98,12 @@ Future<void> generate(GeneratorConfig config) async {
   );
 
   // 6. Write output files
-  final swFile = io.File(p.join(buildDir.path, config.swOutput));
-  swFile.writeAsStringSync(swContent);
+  io.File(p.join(buildDir.path, config.swOutput)).writeAsStringSync(swContent);
   io.stdout.writeln('  ${config.swOutput} (${_formatBytes(swContent.length)})');
 
-  final bootstrapFile = io.File(p.join(buildDir.path, config.bootstrapOutput));
-  bootstrapFile.writeAsStringSync(bootstrapContent);
+  io.File(
+    p.join(buildDir.path, config.bootstrapOutput),
+  ).writeAsStringSync(bootstrapContent);
   io.stdout.writeln(
     '  ${config.bootstrapOutput} '
     '(${_formatBytes(bootstrapContent.length)})',
@@ -150,9 +150,9 @@ Set<String> _findCanvaskitFiles(io.Directory buildDir, Set<String> renderers) {
   }
 
   // Only include files that actually exist
-  return files.where((f) {
-    return io.File(p.join(buildDir.path, f)).existsSync();
-  }).toSet();
+  return files
+      .where((f) => io.File(p.join(buildDir.path, f)).existsSync())
+      .toSet();
 }
 
 String _formatBytes(int bytes) {

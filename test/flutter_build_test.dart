@@ -17,17 +17,16 @@ void main() {
     });
 
     test('parses valid flutter_bootstrap.js', () {
-      final bootstrapFile = io.File(
-        p.join(tempDir.path, 'flutter_bootstrap.js'),
-      );
-      bootstrapFile.writeAsStringSync('''
+      io.File(p.join(tempDir.path, 'flutter_bootstrap.js')).writeAsStringSync(
+        '''
 "use strict";
 (function() {
   var _flutter = {};
   _flutter.buildConfig = {"engineRevision":"abc123def456","builds":[{"compileTarget":"dartdevc","renderer":"canvaskit","mainJsPath":"main.dart.js"}]};
   _flutter.loader.load();
 })();
-''');
+''',
+      );
 
       final info = extractFlutterBuildInfo(tempDir);
       expect(info.engineRevision, 'abc123def456');
@@ -37,12 +36,11 @@ void main() {
     });
 
     test('parses multiple builds', () {
-      final bootstrapFile = io.File(
-        p.join(tempDir.path, 'flutter_bootstrap.js'),
-      );
-      bootstrapFile.writeAsStringSync('''
+      io.File(p.join(tempDir.path, 'flutter_bootstrap.js')).writeAsStringSync(
+        '''
 _flutter.buildConfig = {"engineRevision":"rev123","builds":[{"compileTarget":"dart2wasm","renderer":"skwasm","mainWasmPath":"main.dart.wasm"},{"compileTarget":"dartdevc","renderer":"canvaskit","mainJsPath":"main.dart.js"}]};
-''');
+''',
+      );
 
       final info = extractFlutterBuildInfo(tempDir);
       expect(info.engineRevision, 'rev123');
@@ -65,10 +63,9 @@ _flutter.buildConfig = {"engineRevision":"rev123","builds":[{"compileTarget":"da
     });
 
     test('throws if buildConfig not found in file', () {
-      final bootstrapFile = io.File(
+      io.File(
         p.join(tempDir.path, 'flutter_bootstrap.js'),
-      );
-      bootstrapFile.writeAsStringSync('// empty file');
+      ).writeAsStringSync('// empty file');
 
       expect(
         () => extractFlutterBuildInfo(tempDir),
@@ -83,12 +80,11 @@ _flutter.buildConfig = {"engineRevision":"rev123","builds":[{"compileTarget":"da
     });
 
     test('handles missing engineRevision gracefully', () {
-      final bootstrapFile = io.File(
-        p.join(tempDir.path, 'flutter_bootstrap.js'),
-      );
-      bootstrapFile.writeAsStringSync('''
+      io.File(p.join(tempDir.path, 'flutter_bootstrap.js')).writeAsStringSync(
+        '''
 _flutter.buildConfig = {"builds":[{"compileTarget":"dartdevc","renderer":"canvaskit"}]};
-''');
+''',
+      );
 
       final info = extractFlutterBuildInfo(tempDir);
       expect(info.engineRevision, '');
@@ -98,7 +94,7 @@ _flutter.buildConfig = {"builds":[{"compileTarget":"dartdevc","renderer":"canvas
 
   group('getConfiguredRenderers', () {
     test('extracts renderer names', () {
-      final info = FlutterBuildInfo(
+      const info = FlutterBuildInfo(
         engineRevision: 'abc',
         builds: [
           {'renderer': 'canvaskit'},
@@ -112,7 +108,7 @@ _flutter.buildConfig = {"builds":[{"compileTarget":"dartdevc","renderer":"canvas
     });
 
     test('handles builds without renderer', () {
-      final info = FlutterBuildInfo(
+      const info = FlutterBuildInfo(
         engineRevision: 'abc',
         builds: [
           {'compileTarget': 'dartdevc'},
@@ -124,7 +120,7 @@ _flutter.buildConfig = {"builds":[{"compileTarget":"dartdevc","renderer":"canvas
     });
 
     test('deduplicates renderers', () {
-      final info = FlutterBuildInfo(
+      const info = FlutterBuildInfo(
         engineRevision: 'abc',
         builds: [
           {'renderer': 'canvaskit'},

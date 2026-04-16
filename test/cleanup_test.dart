@@ -123,8 +123,8 @@ void main() {
     });
 
     test('removes map files in subdirectories', () {
-      final subDir = io.Directory(p.join(tempDir.path, 'canvaskit'));
-      subDir.createSync();
+      final subDir = io.Directory(p.join(tempDir.path, 'canvaskit'))
+        ..createSync();
       io.File(p.join(subDir.path, 'canvaskit.js.map')).writeAsStringSync('map');
 
       cleanup(buildDir: tempDir, swVersion: 'v1');

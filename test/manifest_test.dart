@@ -54,8 +54,8 @@ void main() {
         p.join(tempDir.path, 'index.html'),
       ).writeAsStringSync('<html></html>');
 
-      final assetsDir = io.Directory(p.join(tempDir.path, 'assets'));
-      assetsDir.createSync();
+      final assetsDir = io.Directory(p.join(tempDir.path, 'assets'))
+        ..createSync();
       io.File(
         p.join(assetsDir.path, 'FontManifest.json'),
       ).writeAsStringSync('[]');
