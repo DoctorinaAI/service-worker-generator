@@ -54,9 +54,10 @@ describe('constants', () => {
     expect(BOOTSTRAP_CONFIG_PLACEHOLDER).toBe('"__INJECT_BOOTSTRAP_CONFIG__"');
   });
 
-  it('never-cache list includes bootstrap, index, and sw', () => {
+  it('never-cache list contains bootstrap.js and sw.js (index.html is NOT in it)', () => {
     expect(NEVER_CACHE_FILES).toContain('bootstrap.js');
-    expect(NEVER_CACHE_FILES).toContain('index.html');
     expect(NEVER_CACHE_FILES).toContain('sw.js');
+    // index.html is intentionally excluded — it must flow through networkFirst.
+    expect(NEVER_CACHE_FILES).not.toContain('index.html');
   });
 });

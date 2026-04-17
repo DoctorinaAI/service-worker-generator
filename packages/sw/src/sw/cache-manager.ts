@@ -112,7 +112,22 @@ export async function swapCaches(
   // Load previous manifest if exists
   const previousManifest = await loadPreviousManifest(manifestCache);
 
-  // Move temp resources to content cache in parallel
+  // Step 1: evict stale entries from the content cache *first*, based on
+  // the previous manifest. Doing this before the temp→content copy means a
+  // freshly-precached entry (changed hash, present in temp) cannot be
+  // accidentally deleted by the eviction pass.
+  if (previousManifest) {
+    await Promise.all(
+      Object.entries(previousManifest).map(async ([path, oldEntry]) => {
+        const newEntry = manifest[path];
+        if (!newEntry || newEntry.hash !== oldEntry.hash) {
+          await contentCache.delete(new Request(path));
+        }
+      }),
+    );
+  }
+
+  // Step 2: copy freshly-precached resources from temp → content in parallel.
   const tempKeys = await tempCache.keys();
   await Promise.all(
     tempKeys.map(async (request) => {
@@ -122,17 +137,6 @@ export async function swapCaches(
       }
     }),
   );
-
-  // If we have a previous manifest, remove outdated resources
-  if (previousManifest) {
-    for (const [path, oldEntry] of Object.entries(previousManifest)) {
-      const newEntry = manifest[path];
-      // Resource was removed or hash changed
-      if (!newEntry || newEntry.hash !== oldEntry.hash) {
-        await contentCache.delete(new Request(path));
-      }
-    }
-  }
 
   // Save current manifest for future comparisons
   await saveManifest(manifestCache, manifest);

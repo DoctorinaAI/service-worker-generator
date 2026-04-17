@@ -48,9 +48,11 @@ export const STAGE_PROGRESS = {
 export const SW_CONFIG_PLACEHOLDER = '"__INJECT_SW_CONFIG__"';
 export const BOOTSTRAP_CONFIG_PLACEHOLDER = '"__INJECT_BOOTSTRAP_CONFIG__"';
 
-/** Files that should never be cached by the SW */
-export const NEVER_CACHE_FILES = [
-  'bootstrap.js',
-  'index.html',
-  'sw.js',
-] as const;
+/**
+ * Files the SW should NOT intercept — browser loads them directly.
+ * `bootstrap.js` runs before the SW is active and `sw.js` is the worker
+ * script itself; intercepting either would break bootstrap/update flows.
+ * `index.html` is explicitly absent: it goes through the networkFirst
+ * branch of fetch-handler so navigations get fresh HTML with cache fallback.
+ */
+export const NEVER_CACHE_FILES = ['bootstrap.js', 'sw.js'] as const;
