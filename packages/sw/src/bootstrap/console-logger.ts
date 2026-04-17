@@ -57,7 +57,7 @@ export function logPhase(phase: string, message: string): void {
 export function logProgress(percent: number, message: string): void {
   const bar = progressBar(percent, 20);
   console.log(
-    `%c${bar} ${Math.round(percent)}%%c ${message}`,
+    `%c${bar} ${Math.round(percent)}%%%c ${message}`,
     STYLE_PHASE,
     STYLE_INFO,
   );

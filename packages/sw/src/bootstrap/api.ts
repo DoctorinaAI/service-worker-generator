@@ -74,7 +74,9 @@ export class BootstrapAPI {
 }
 
 /**
- * Install the Bootstrap API as window.Bootstrap.
+ * Install the Bootstrap API as window.Bootstrap and expose
+ * Dart-facing helpers (updateLoadingProgress, removeLoadingIndicator)
+ * as top-level window functions for convenient JS-interop.
  */
 export function installGlobalAPI(api: BootstrapAPI): void {
   const windowAny = window as unknown as Record<string, unknown>;
@@ -85,4 +87,12 @@ export function installGlobalAPI(api: BootstrapAPI): void {
     subscribe: (cb: ProgressCallback) => api.subscribe(cb),
     dispose: () => api.dispose(),
   };
+
+  // Flutter/Dart interop: mutate progress and dismiss the widget from Dart.
+  // Progress is expected in the 0-100 range that the widget already uses.
+  windowAny['updateLoadingProgress'] = (progress: number, text?: string) => {
+    const percent = Math.max(0, Math.min(100, Number(progress) || 0));
+    api.update('dart-init', percent, text ?? api.progress.message);
+  };
+  windowAny['removeLoadingIndicator'] = () => api.dispose();
 }

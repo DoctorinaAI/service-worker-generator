@@ -123,9 +123,14 @@ export async function runPipeline(config: ResolvedConfig): Promise<BootstrapAPI>
     // Stage 4-5: Assets + Dart Entry
     updateProgress('assets', STAGE_PROGRESS.canvaskit + 5, 'Loading application');
 
-    await loadFlutterApp(canvasKitBaseUrl, (percent, message) => {
-      updateProgress('dart-entry', percent, message);
-    });
+    await loadFlutterApp(
+      canvasKitBaseUrl,
+      build.engineRevision,
+      build.builds,
+      (percent, message) => {
+        updateProgress('dart-entry', percent, message);
+      },
+    );
 
     // Clean up SW listener
     if (cleanupSWListener) {

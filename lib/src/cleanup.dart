@@ -7,15 +7,22 @@ const List<String> _flutterFilesToRemove = [
   'flutter_bootstrap.js',
   'flutter_service_worker.js',
   'version.json',
+  '.last_build_id',
 ];
 
 /// Perform post-generation cleanup on the build directory.
 ///
 /// Removes Flutter's deprecated bootstrap/SW files,
-/// optionally removes .js.map files, and updates index.html.
+/// prunes unused canvaskit variants, optionally removes source-map
+/// files, and updates index.html.
+///
+/// [canvaskitKeep] is the set of canvaskit files (relative to [buildDir])
+/// that must be preserved — anything else under `canvaskit/` is deleted.
+/// Pass an empty set to skip canvaskit pruning.
 void cleanup({
   required io.Directory buildDir,
   required String swVersion,
+  Set<String> canvaskitKeep = const {},
   bool keepMaps = false,
 }) {
   // Remove Flutter files
@@ -27,26 +34,66 @@ void cleanup({
     }
   }
 
-  // Remove .js.map files unless --keep-maps
+  // Remove source-map/symbol files unless --keep-maps
   if (!keepMaps) {
     _removeMapFiles(buildDir);
+  }
+
+  // Prune unused canvaskit variants
+  if (canvaskitKeep.isNotEmpty) {
+    _pruneCanvaskit(buildDir, canvaskitKeep);
   }
 
   // Update index.html: replace version placeholders
   _updateIndexHtml(buildDir, swVersion);
 }
 
-/// Recursively remove .js.map and .js.symbols files.
+/// Recursively remove `.js.map`, `.js.symbols`, and `.wasm.map` files.
 void _removeMapFiles(io.Directory dir) {
   final files = dir
       .listSync(recursive: true, followLinks: false)
       .whereType<io.File>()
       .where(
-        (f) => f.path.endsWith('.js.map') || f.path.endsWith('.js.symbols'),
+        (f) =>
+            f.path.endsWith('.js.map') ||
+            f.path.endsWith('.js.symbols') ||
+            f.path.endsWith('.wasm.map'),
       );
 
   for (final file in files) {
     file.deleteSync();
+  }
+}
+
+/// Remove files under `canvaskit/` that are not in [keep].
+/// Also removes any empty subdirectories left behind.
+void _pruneCanvaskit(io.Directory buildDir, Set<String> keep) {
+  final canvaskitDir = io.Directory(p.join(buildDir.path, 'canvaskit'));
+  if (!canvaskitDir.existsSync()) return;
+
+  var removed = 0;
+  for (final entity in canvaskitDir.listSync(recursive: true)) {
+    if (entity is! io.File) continue;
+    final relative = p.url.joinAll(
+      p.split(p.relative(entity.path, from: buildDir.path)),
+    );
+    if (keep.contains(relative)) continue;
+    entity.deleteSync();
+    removed++;
+  }
+
+  // Remove now-empty directories (deepest first).
+  final dirs = canvaskitDir
+      .listSync(recursive: true, followLinks: false)
+      .whereType<io.Directory>()
+      .toList()
+    ..sort((a, b) => b.path.length.compareTo(a.path.length));
+  for (final d in dirs) {
+    if (d.listSync().isEmpty) d.deleteSync();
+  }
+
+  if (removed > 0) {
+    io.stdout.writeln('  Pruned $removed unused canvaskit file(s)');
   }
 }
 

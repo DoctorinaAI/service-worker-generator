@@ -1,3 +1,4 @@
+import type { FlutterBuildEntry } from '../shared/types';
 import { logPhase } from './console-logger';
 
 /**
@@ -6,14 +7,23 @@ import { logPhase } from './console-logger';
  */
 export async function loadFlutterApp(
   canvasKitBaseUrl: string,
+  engineRevision: string,
+  builds: FlutterBuildEntry[],
   onProgress: (percent: number, message: string) => void,
 ): Promise<void> {
+  // Flutter's FlutterLoader.load() reads _flutter.buildConfig to pick the
+  // compatible build. Seed it before loading flutter.js so the loader
+  // doesn't throw "FlutterLoader.load requires _flutter.buildConfig to be set".
+  const w = window as FlutterWindow;
+  w._flutter ??= {};
+  w._flutter.buildConfig = { engineRevision, builds };
+
   // Load flutter.js dynamically
   await loadScript('flutter.js');
   logPhase('Flutter', 'flutter.js loaded');
 
   // Wait for _flutter.loader to be available
-  const flutter = (window as FlutterWindow)._flutter;
+  const flutter = w._flutter;
   if (!flutter?.loader) {
     throw new Error('_flutter.loader not available after loading flutter.js');
   }
@@ -69,6 +79,10 @@ interface FlutterWindow extends Window {
   _flutter?: {
     loader?: {
       load(options: FlutterLoadOptions): Promise<void>;
+    };
+    buildConfig?: {
+      engineRevision: string;
+      builds: FlutterBuildEntry[];
     };
   };
 }

@@ -115,6 +115,7 @@ Future<void> generate(GeneratorConfig config) async {
     cleanup(
       buildDir: buildDir,
       swVersion: config.version,
+      canvaskitKeep: canvaskitFiles,
       keepMaps: config.keepMaps,
     );
   }

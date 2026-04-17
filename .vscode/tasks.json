@@ -206,7 +206,7 @@
         "id": "zap"
       },
       "type": "shell",
-      "command": "dart run sw:generate --input=example/build/web --prefix=example --no-cleanup --theme=auto --logo=icons/Icon-192.png --title='Service Worker' --color=#25D366",
+      "command": "dart run sw:generate --input=example/build/web --prefix=example --theme=auto --logo=icons/Icon-192.png --title='Service Worker' --color=#25D366",
       "group": "none",
       "problemMatcher": [],
       "options": {

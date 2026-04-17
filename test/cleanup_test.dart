@@ -134,5 +134,61 @@ void main() {
         isFalse,
       );
     });
+
+    test('removes .last_build_id and .wasm.map', () {
+      io.File(p.join(tempDir.path, '.last_build_id')).writeAsStringSync('abc');
+      io.File(
+        p.join(tempDir.path, 'main.dart.wasm.map'),
+      ).writeAsStringSync('wasm-map');
+
+      cleanup(buildDir: tempDir, swVersion: 'v1');
+
+      expect(
+        io.File(p.join(tempDir.path, '.last_build_id')).existsSync(),
+        isFalse,
+      );
+      expect(
+        io.File(p.join(tempDir.path, 'main.dart.wasm.map')).existsSync(),
+        isFalse,
+      );
+    });
+
+    test('prunes unused canvaskit variants', () {
+      final ckDir = io.Directory(p.join(tempDir.path, 'canvaskit'))
+        ..createSync();
+      final chromiumDir = io.Directory(p.join(ckDir.path, 'chromium'))
+        ..createSync();
+      io.File(p.join(ckDir.path, 'canvaskit.js')).writeAsStringSync('cjs');
+      io.File(p.join(ckDir.path, 'canvaskit.wasm')).writeAsStringSync('cw');
+      io.File(
+        p.join(chromiumDir.path, 'canvaskit.wasm'),
+      ).writeAsStringSync('x');
+      io.File(p.join(ckDir.path, 'skwasm.js')).writeAsStringSync('sjs');
+      io.File(p.join(ckDir.path, 'skwasm.wasm')).writeAsStringSync('sw');
+
+      cleanup(
+        buildDir: tempDir,
+        swVersion: 'v1',
+        canvaskitKeep: const {'canvaskit/skwasm.js', 'canvaskit/skwasm.wasm'},
+      );
+
+      expect(
+        io.File(p.join(ckDir.path, 'skwasm.js')).existsSync(),
+        isTrue,
+      );
+      expect(
+        io.File(p.join(ckDir.path, 'skwasm.wasm')).existsSync(),
+        isTrue,
+      );
+      expect(
+        io.File(p.join(ckDir.path, 'canvaskit.js')).existsSync(),
+        isFalse,
+      );
+      expect(
+        io.File(p.join(ckDir.path, 'canvaskit.wasm')).existsSync(),
+        isFalse,
+      );
+      expect(chromiumDir.existsSync(), isFalse);
+    });
   });
 }
