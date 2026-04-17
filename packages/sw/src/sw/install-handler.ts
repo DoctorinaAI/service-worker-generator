@@ -54,26 +54,34 @@ async function handleInstall(
 
   // Pre-cache Core and Required resources, notifying clients per file so
   // the bootstrap can show smooth count-based progress during install.
-  await precacheResources(
-    tempCacheName,
-    manifest,
-    [ResourceCategory.Core, ResourceCategory.Required],
-    async (path, entry) => {
-      await notifyClients(self, {
-        type: 'sw-progress',
-        timestamp: Date.now(),
-        resourcesSize: totalResourcesSize,
-        resourcesCount: totalResourcesCount,
-        resourceName: entry.name,
-        resourceUrl: path,
-        resourceKey: path,
-        resourceSize: entry.size,
-        loaded: entry.size,
-        status: 'completed',
-      });
-    },
-  );
+  // `precacheResources` throws if any Core entry fails — that surfaces to
+  // `waitUntil` so the SW install is rejected and the old version keeps
+  // serving traffic.
+  try {
+    await precacheResources(
+      tempCacheName,
+      manifest,
+      [ResourceCategory.Core, ResourceCategory.Required],
+      async (path, entry) => {
+        await notifyClients(self, {
+          type: 'sw-progress',
+          timestamp: Date.now(),
+          resourcesSize: totalResourcesSize,
+          resourcesCount: totalResourcesCount,
+          resourceName: entry.name,
+          resourceUrl: path,
+          resourceKey: path,
+          resourceSize: entry.size,
+          loaded: entry.size,
+          status: 'completed',
+        });
+      },
+    );
+  } catch (error) {
+    // Clean up the half-populated temp cache so the next install starts fresh.
+    await caches.delete(tempCacheName);
+    throw error;
+  }
 
-  // Skip waiting to activate immediately
   await self.skipWaiting();
 }

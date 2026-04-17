@@ -24,13 +24,13 @@ function init(): void {
   const userConfig = parseDataConfig(script);
   const config = resolveConfig(buildConfig, userConfig);
 
-  // Log version banner
   logVersionBanner(buildConfig);
 
-  // Run the pipeline
-  runPipeline(config).then((api) => {
-    installGlobalAPI(api);
-  });
+  // Install the global API synchronously, before any await yields control
+  // to Flutter — Dart's main() may call window.updateLoadingProgress during
+  // the same microtask chain, so those globals must already exist.
+  const api = runPipeline(config);
+  installGlobalAPI(api);
 }
 
 // Start when the page loads

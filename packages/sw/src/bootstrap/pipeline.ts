@@ -1,4 +1,4 @@
-import type { BuildConfig, SWProgressMessage } from '../shared/types';
+import type { SWProgressMessage } from '../shared/types';
 import { STAGE_PROGRESS } from '../shared/constants';
 import type { ResolvedConfig } from './config';
 import { BootstrapAPI } from './api';
@@ -16,22 +16,32 @@ import {
 import { loadFlutterApp } from './flutter-loader';
 
 /**
- * Run the full bootstrap pipeline.
+ * Start the bootstrap pipeline.
+ *
+ * Creates the loading widget and BootstrapAPI synchronously, then kicks off
+ * the async work as fire-and-forget. The API is returned immediately so the
+ * caller can install window globals before any await yields — this lets
+ * Dart code (which runs inside flutter.loader.load) hit a populated
+ * window.updateLoadingProgress from its very first invocation.
  */
-export async function runPipeline(config: ResolvedConfig): Promise<BootstrapAPI> {
-  const { build, ui } = config;
-
-  // Create loading widget and API
+export function runPipeline(config: ResolvedConfig): BootstrapAPI {
+  const { ui } = config;
   const widget = new LoadingWidget(ui);
   const api = new BootstrapAPI(widget);
-
-  // Mount the widget
   widget.mount();
 
-  // Map internal progress (0-100) to configured range
-  const mapProgress = (internal: number): number => {
-    return ui.minProgress + (internal / 100) * (ui.maxProgress - ui.minProgress);
-  };
+  void runPipelineWork(api, config);
+  return api;
+}
+
+async function runPipelineWork(
+  api: BootstrapAPI,
+  config: ResolvedConfig,
+): Promise<void> {
+  const { build, ui } = config;
+
+  const mapProgress = (internal: number): number =>
+    ui.minProgress + (internal / 100) * (ui.maxProgress - ui.minProgress);
 
   const updateProgress = (
     phase: Parameters<typeof api.update>[0],
@@ -54,13 +64,9 @@ export async function runPipeline(config: ResolvedConfig): Promise<BootstrapAPI>
       ? listenForSWMessages((data) => {
           const msg = data as SWProgressMessage;
 
-          // Adopt the count from any message (including the initial
-          // empty-key install announce) so we have a denominator early.
           if (msg.resourcesCount) totalResourcesCount = msg.resourcesCount;
           if (!msg.resourceKey) return;
 
-          // Terminal states advance the counter; 'loading' is the in-flight
-          // announce and 'error' does not count as progress.
           if (
             msg.status === 'completed' ||
             msg.status === 'cached' ||
@@ -76,7 +82,6 @@ export async function runPipeline(config: ResolvedConfig): Promise<BootstrapAPI>
             (done / totalResourcesCount) * 100,
             100,
           );
-          // Map download progress from CanvasKit stage to Assets stage (20% → 80%)
           const internalPercent =
             STAGE_PROGRESS.canvaskit +
             (downloadPercent / 100) *
@@ -135,22 +140,11 @@ export async function runPipeline(config: ResolvedConfig): Promise<BootstrapAPI>
       },
     );
 
-    // Clean up SW listener
-    if (cleanupSWListener) {
-      cleanupSWListener();
-    }
-
-    // Dart takes over from here. onEntrypointLoaded in flutter-loader has
-    // already moved progress to STAGE_PROGRESS.dartEntry (90%); any further
-    // reporting comes from main.dart via window.updateLoadingProgress.
-
-    // Listen for flutter-first-frame as auto-dispose fallback
+    // Auto-dispose on first frame.
     window.addEventListener(
       'flutter-first-frame',
       () => {
-        if (!api.disposed) {
-          api.dispose();
-        }
+        if (!api.disposed) api.dispose();
       },
       { once: true },
     );
@@ -159,7 +153,7 @@ export async function runPipeline(config: ResolvedConfig): Promise<BootstrapAPI>
       error instanceof Error ? error.message : 'Failed to load application';
     console.error('[Bootstrap] Pipeline error:', error);
     api.error(message);
+  } finally {
+    cleanupSWListener?.();
   }
-
-  return api;
 }

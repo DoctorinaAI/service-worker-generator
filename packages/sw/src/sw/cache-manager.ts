@@ -1,8 +1,5 @@
-import type {
-  ResourceCategory,
-  ResourceEntry,
-  ResourceManifest,
-} from '../shared/types';
+import type { ResourceEntry, ResourceManifest } from '../shared/types';
+import { ResourceCategory } from '../shared/types';
 import { MANIFEST_CACHE_SUFFIX, TEMP_CACHE_SUFFIX } from '../shared/constants';
 import { cacheBustUrl, fetchWithRetry } from '../shared/utils';
 
@@ -31,9 +28,12 @@ export function getManifestCacheName(prefix: string): string {
 
 /**
  * Pre-cache resources of specified categories into a cache.
- * Uses cache-busted URLs to avoid stale responses.
- * The optional `onEach` callback fires after each successful cache.put,
- * allowing the install handler to notify clients of precache progress.
+ *
+ * Uses cache-busted URLs to avoid stale responses. Failures on `Core`
+ * entries are aggregated and thrown so the SW install fails fast instead
+ * of activating with a broken precache. `Required`/`Optional` failures are
+ * logged but not fatal — those resources will be refetched lazily by the
+ * cache-first handler.
  */
 export async function precacheResources(
   cacheName: string,
@@ -46,18 +46,38 @@ export async function precacheResources(
     categories.includes(entry.category),
   );
 
+  const coreFailures: string[] = [];
+
   await Promise.all(
     entries.map(async ([path, entry]) => {
       const url = cacheBustUrl(path, entry.hash);
       const request = new Request(url, { cache: 'reload' });
-      const response = await fetchWithRetry(request);
-      if (response.ok) {
-        // Store with the original path (without cache buster) as the key
+      try {
+        const response = await fetchWithRetry(request);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
         await cache.put(new Request(path), response);
         if (onEach) await onEach(path, entry);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        const msg = `[SW] Precache failed for ${path}: ${reason}`;
+        if (entry.category === ResourceCategory.Core) {
+          coreFailures.push(`${path} (${reason})`);
+          console.error(msg);
+        } else {
+          console.warn(msg);
+        }
       }
     }),
   );
+
+  if (coreFailures.length > 0) {
+    throw new Error(
+      `Precache failed for ${coreFailures.length} Core resource(s): ` +
+        coreFailures.join(', '),
+    );
+  }
 }
 
 /**
@@ -92,14 +112,16 @@ export async function swapCaches(
   // Load previous manifest if exists
   const previousManifest = await loadPreviousManifest(manifestCache);
 
-  // Move temp resources to content cache
+  // Move temp resources to content cache in parallel
   const tempKeys = await tempCache.keys();
-  for (const request of tempKeys) {
-    const response = await tempCache.match(request);
-    if (response) {
-      await contentCache.put(request, response);
-    }
-  }
+  await Promise.all(
+    tempKeys.map(async (request) => {
+      const response = await tempCache.match(request);
+      if (response) {
+        await contentCache.put(request, response);
+      }
+    }),
+  );
 
   // If we have a previous manifest, remove outdated resources
   if (previousManifest) {

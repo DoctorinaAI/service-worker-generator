@@ -1,11 +1,9 @@
-import type { ResourceManifest, ResourceEntry, SWProgressMessage } from '../shared/types';
+import type { ResourceManifest, ResourceEntry } from '../shared/types';
 import { ResourceCategory } from '../shared/types';
 import { NEVER_CACHE_FILES } from '../shared/constants';
 import { getResourceKey, fetchWithRetry } from '../shared/utils';
 import { lazyCacheResponse, getContentCacheName } from './cache-manager';
 import { notifyClients } from './notify';
-
-export { fetchWithRetry, fetchWithTimeout } from '../shared/utils';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -22,30 +20,24 @@ export function handleFetch(
 ): void {
   const { request } = event;
 
-  // Only handle GET requests
   if (request.method !== 'GET') return;
 
   const url = new URL(request.url);
-
-  // Only handle same-origin requests
   if (url.origin !== self.location.origin) return;
 
   const resourceKey = getResourceKey(request.url);
   const entry = manifest[resourceKey];
 
-  // Check if this file should never be cached
   if (NEVER_CACHE_FILES.some((f) => resourceKey === f || resourceKey.endsWith(`/${f}`))) {
-    return; // Let the browser handle it normally
+    return;
   }
 
-  // If not in manifest and not root, pass through
   if (!entry && resourceKey !== 'index.html') return;
 
-  // Root / index.html: network-first
   if (resourceKey === 'index.html' || request.mode === 'navigate') {
     event.respondWith(
       networkFirst(
-        request,
+        event,
         cachePrefix,
         version,
         manifest,
@@ -56,10 +48,8 @@ export function handleFetch(
     return;
   }
 
-  // Ignore category: pass through
   if (entry?.category === ResourceCategory.Ignore) return;
 
-  // Core, Required, Optional: cache-first
   event.respondWith(
     cacheFirst(
       request,
@@ -75,67 +65,77 @@ export function handleFetch(
 
 /**
  * Network-first strategy for index.html / navigation requests.
+ *
+ * Prefers a navigationPreload response if available, then falls through to
+ * `fetchWithRetry`. Falls back to the scoped content cache on any network
+ * error *or* non-ok HTTP response so a broken origin cannot replace a good
+ * cached page.
  */
 async function networkFirst(
-  request: Request,
+  event: FetchEvent,
   cachePrefix: string,
   version: string,
   manifest: ResourceManifest,
   totalResourcesSize: number,
   totalResourcesCount: number,
 ): Promise<Response> {
+  const { request } = event;
   const cacheName = getContentCacheName(cachePrefix, version);
   const entry = manifest['index.html'];
 
-  try {
-    const response = await fetchWithRetry(request);
-    if (response.ok) {
-      // Cache the fresh response
-      const cache = await caches.open(cacheName);
-      await cache.put(request, response.clone());
+  const notifyIndex = async (status: 'updated' | 'cached'): Promise<void> => {
+    if (!entry) return;
+    await notifyClients(self, {
+      type: 'sw-progress',
+      timestamp: Date.now(),
+      resourcesSize: totalResourcesSize,
+      resourcesCount: totalResourcesCount,
+      resourceName: 'index.html',
+      resourceUrl: request.url,
+      resourceKey: 'index.html',
+      resourceSize: entry.size,
+      loaded: entry.size,
+      status,
+    });
+  };
 
-      if (entry) {
-        await notifyClients(self, {
-          type: 'sw-progress',
-          timestamp: Date.now(),
-          resourcesSize: totalResourcesSize,
-          resourcesCount: totalResourcesCount,
-          resourceName: 'index.html',
-          resourceUrl: request.url,
-          resourceKey: 'index.html',
-          resourceSize: entry.size,
-          loaded: entry.size,
-          status: 'updated',
-        });
-      }
-    }
-    return response;
-  } catch {
-    // Network failed, try cache
-    const cached = await caches.match(request);
+  const fallbackToCache = async (): Promise<Response> => {
+    const cache = await caches.open(cacheName);
+    const cached = await cache.match(request);
     if (cached) {
-      if (entry) {
-        await notifyClients(self, {
-          type: 'sw-progress',
-          timestamp: Date.now(),
-          resourcesSize: totalResourcesSize,
-          resourcesCount: totalResourcesCount,
-          resourceName: 'index.html',
-          resourceUrl: request.url,
-          resourceKey: 'index.html',
-          resourceSize: entry.size,
-          loaded: entry.size,
-          status: 'cached',
-        });
-      }
+      await notifyIndex('cached');
       return cached;
     }
     return new Response('Offline', { status: 503 });
+  };
+
+  try {
+    // Prefer navigationPreload if enabled.
+    const preload = (await event.preloadResponse) as Response | undefined;
+    let response = preload;
+    if (!response) {
+      response = await fetchWithRetry(request);
+    }
+
+    if (!response.ok) {
+      return await fallbackToCache();
+    }
+
+    const cache = await caches.open(cacheName);
+    await cache.put(request, response.clone());
+    await notifyIndex('updated');
+    return response;
+  } catch {
+    return fallbackToCache();
   }
 }
 
 /**
  * Cache-first strategy for cached resources.
+ *
+ * Looks up the response in the current versioned content cache only. Cache
+ * misses populate the cache for any category except `Ignore` so evicted or
+ * partially-precached Core/Required resources self-heal.
  */
 async function cacheFirst(
   request: Request,
@@ -147,9 +147,9 @@ async function cacheFirst(
   totalResourcesCount: number,
 ): Promise<Response> {
   const cacheName = getContentCacheName(cachePrefix, version);
+  const cache = await caches.open(cacheName);
 
-  // Try cache first
-  const cached = await caches.match(new Request(resourceKey));
+  const cached = await cache.match(new Request(resourceKey));
   if (cached) {
     await notifyClients(self, {
       type: 'sw-progress',
@@ -166,7 +166,6 @@ async function cacheFirst(
     return cached;
   }
 
-  // Cache miss: fetch from network
   try {
     await notifyClients(self, {
       type: 'sw-progress',
@@ -184,10 +183,7 @@ async function cacheFirst(
     const response = await fetchWithRetry(request);
 
     if (response.ok) {
-      // Cache optional resources lazily
-      if (entry.category === ResourceCategory.Optional) {
-        await lazyCacheResponse(cacheName, new Request(resourceKey), response);
-      }
+      await lazyCacheResponse(cacheName, new Request(resourceKey), response);
 
       await notifyClients(self, {
         type: 'sw-progress',
@@ -221,4 +217,3 @@ async function cacheFirst(
     return new Response('Network error', { status: 503 });
   }
 }
-

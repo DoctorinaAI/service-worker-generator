@@ -22,10 +22,15 @@ export async function registerServiceWorker(
   try {
     logPhase('SW', `Registering ${swUrl}`);
 
-    const registration = await navigator.serviceWorker.register(swUrl);
+    // updateViaCache: 'none' stops the browser from reusing a stale sw.js
+    // (up to 24h by default), so freshly deployed SWs propagate immediately.
+    const registration = await navigator.serviceWorker.register(swUrl, {
+      updateViaCache: 'none',
+    });
     logPhase('SW', 'Registered successfully');
 
-    // Wait for activation with timeout
+    wireUpdateDetection(registration);
+
     const activated = await waitForActivation(registration);
     if (activated) {
       logPhase('SW', 'Activated');
@@ -41,6 +46,33 @@ export async function registerServiceWorker(
     );
     return null;
   }
+}
+
+/**
+ * Dispatch a `sw-update-available` CustomEvent on `window` when a new SW
+ * finishes installing while an older controller is still active. Consumers
+ * can listen for this to show an "update available, reload?" UI.
+ */
+function wireUpdateDetection(registration: ServiceWorkerRegistration): void {
+  const announce = (worker: ServiceWorker): void => {
+    const onStateChange = (): void => {
+      if (
+        worker.state === 'installed' &&
+        navigator.serviceWorker.controller !== null
+      ) {
+        logPhase('SW', 'Update available (new version installed)');
+        window.dispatchEvent(
+          new CustomEvent('sw-update-available', { detail: { registration } }),
+        );
+      }
+    };
+    worker.addEventListener('statechange', onStateChange);
+  };
+
+  if (registration.installing) announce(registration.installing);
+  registration.addEventListener('updatefound', () => {
+    if (registration.installing) announce(registration.installing);
+  });
 }
 
 /**

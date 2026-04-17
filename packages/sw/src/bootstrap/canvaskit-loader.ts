@@ -1,6 +1,6 @@
 import type { FlutterBuildEntry } from '../shared/types';
 import { CANVASKIT_CDN_BASE, CANVASKIT_LOCAL_PATH } from '../shared/constants';
-import { fetchWithRetry } from '../sw/fetch-handler';
+import { fetchWithRetry } from '../shared/utils';
 import { logPhase } from './console-logger';
 
 /**
@@ -93,10 +93,16 @@ export async function loadCanvasKit(
     const cdnJsUrl = `${cdnBase}/${variant.jsFile}`;
 
     try {
-      logPhase('CanvasKit', `Trying CDN: ${cdnJsUrl}`);
-      const response = await fetchWithRetry(new Request(cdnJsUrl), 2, 8000);
+      logPhase('CanvasKit', `Probing CDN: ${cdnJsUrl}`);
+      // HEAD avoids downloading the full canvaskit.js just to check
+      // availability — Flutter's loader will fetch it for real via <script>.
+      const response = await fetchWithRetry(
+        new Request(cdnJsUrl, { method: 'HEAD' }),
+        2,
+        8000,
+      );
       if (response.ok) {
-        logPhase('CanvasKit', 'Loaded from CDN');
+        logPhase('CanvasKit', 'CDN available');
         return cdnBase;
       }
     } catch {

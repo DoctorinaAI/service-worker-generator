@@ -28,9 +28,14 @@ async function handleActivate(
 
     // Clean up old versioned caches
     await cleanupOldCaches(cachePrefix, version);
+
+    // Enable navigation preload so network-first navigations start their
+    // fetch in parallel with SW bootup instead of blocking on it.
+    if (self.registration.navigationPreload) {
+      await self.registration.navigationPreload.enable();
+    }
   } catch (error) {
     console.error('[SW] Activate error, clearing all caches:', error);
-    // Clean slate on error
     const allCaches = await caches.keys();
     await Promise.all(
       allCaches
@@ -38,7 +43,6 @@ async function handleActivate(
         .map((name) => caches.delete(name)),
     );
   } finally {
-    // Always claim clients, even on error
     await self.clients.claim();
   }
 }
