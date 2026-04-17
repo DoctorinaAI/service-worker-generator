@@ -1,4 +1,4 @@
-## 1.0.0
+## 0.1.0
 
 Complete rewrite replacing Flutter's default bootstrap with a professional two-artifact system.
 

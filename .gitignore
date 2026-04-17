@@ -38,6 +38,7 @@ packages/sw/dist/
 
 # Generated files
 example/sw.g.js
+reports/
 
 # Playwright
 test-results/
