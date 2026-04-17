@@ -40,16 +40,6 @@ void main() {
         );
       });
 
-      test('canvaskit variant files are core', () {
-        expect(
-          categorizer.categorize('canvaskit/canvaskit.js', 500000),
-          ResourceCategory.core,
-        );
-        expect(
-          categorizer.categorize('canvaskit/canvaskit.wasm', 3000000),
-          ResourceCategory.core,
-        );
-      });
     });
 
     group('required', () {
@@ -70,6 +60,13 @@ void main() {
       test('FontManifest.json is required', () {
         expect(
           categorizer.categorize('assets/FontManifest.json', 200),
+          ResourceCategory.required,
+        );
+      });
+
+      test('manifest.json is required', () {
+        expect(
+          categorizer.categorize('manifest.json', 960),
           ResourceCategory.required,
         );
       });
@@ -145,6 +142,17 @@ void main() {
     });
 
     group('optional', () {
+      test('canvaskit variant files are optional', () {
+        expect(
+          categorizer.categorize('canvaskit/canvaskit.js', 500000),
+          ResourceCategory.optional,
+        );
+        expect(
+          categorizer.categorize('canvaskit/canvaskit.wasm', 3000000),
+          ResourceCategory.optional,
+        );
+      });
+
       test('small png is optional', () {
         expect(
           categorizer.categorize('icons/Icon-192.png', 10000),

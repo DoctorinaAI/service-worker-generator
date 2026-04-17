@@ -30,6 +30,7 @@ const Set<String> _defaultCorePatterns = {
 const Set<String> _defaultRequiredPatterns = {
   'assets/AssetManifest*.json',
   'assets/FontManifest.json',
+  'manifest.json',
 };
 
 const Set<String> _defaultIgnorePatterns = {
@@ -69,7 +70,8 @@ class FileCategorizer {
   /// [ignoreOverrides] are additional glob patterns from the user.
   ///
   /// [canvaskitFiles] are the specific canvaskit variant files
-  /// needed for the selected renderer — these are categorized as core.
+  /// needed for the selected renderer — these are categorized as
+  /// optional (lazy-cached) since bootstrap prefers CDN.
   FileCategorizer({
     Set<String> coreOverrides = const {},
     Set<String> requiredOverrides = const {},
@@ -105,8 +107,10 @@ class FileCategorizer {
       return ResourceCategory.optional;
     }
 
-    // CanvasKit variant files are core
-    if (_canvaskitFiles.contains(path)) return ResourceCategory.core;
+    // CanvasKit variant files are cached lazily — the bootstrap prefers
+    // CDN and only falls back to local files, so pre-caching wastes
+    // bandwidth on variants the browser will never request.
+    if (_canvaskitFiles.contains(path)) return ResourceCategory.optional;
 
     // Auto-categorize by extension and size
     final ext = p.extension(path).toLowerCase();

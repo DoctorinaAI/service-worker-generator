@@ -70,9 +70,9 @@ dart run sw:generate --input=build/web
 - Users don't need Node.js — prebuilt templates ship with the pub package
 
 ### Resource Categories
-- **Core**: canvaskit variant, main.dart.js/wasm/mjs, *.support.wasm
-- **Required**: AssetManifest*.json, FontManifest.json
-- **Optional**: lightweight files (.json, .webp, .ttf, .png, .jpeg < 64KB)
+- **Core**: main.dart.js/wasm/mjs, *.support.wasm
+- **Required**: AssetManifest*.json, FontManifest.json, manifest.json
+- **Optional**: canvaskit variant files (CDN-first, lazy local fallback), lightweight files (.json, .webp, .ttf, .png, .jpeg < 64KB)
 - **Ignore**: *.map, *.symbols, NOTICES, sw.js, bootstrap.js, index.html
 
 ### Caching Strategy
