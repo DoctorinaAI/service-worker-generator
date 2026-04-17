@@ -16,8 +16,8 @@ enum ResourceCategory {
   ignore,
 }
 
-/// Maximum file size for auto-categorization as optional (64 KB).
-const int _optionalMaxSize = 64 * 1024;
+/// Maximum file size for auto-categorization as optional (512 KB).
+const int _optionalMaxSize = 512 * 1024;
 
 /// Default patterns for each category.
 const Set<String> _defaultCorePatterns = {
@@ -46,14 +46,27 @@ const Set<String> _defaultIgnorePatterns = {
   'version.json',
 };
 
-/// File extensions eligible for optional auto-categorization.
+/// File extensions that are always cached as optional regardless of size.
+///
+/// Fonts are declared in `FontManifest.json` and will be fetched by the
+/// app on startup — without them Flutter renders tofu boxes instead of
+/// icons and text. Icon fonts like MaterialIcons (~1.6 MB) and
+/// CupertinoIcons (~250 KB) routinely exceed any reasonable size cap.
+const Set<String> _fontExtensions = {
+  '.ttf',
+  '.otf',
+  '.woff',
+  '.woff2',
+  '.eot',
+};
+
+/// File extensions eligible for optional auto-categorization, size-capped
+/// by [_optionalMaxSize]. Larger files fall through to `ignore` so they
+/// don't bloat the pre-fetch manifest — the browser's HTTP cache still
+/// serves them on repeat loads.
 const Set<String> _optionalExtensions = {
   '.json',
   '.webp',
-  '.ttf',
-  '.woff',
-  '.woff2',
-  '.otf',
   '.png',
   '.jpg',
   '.jpeg',
@@ -112,8 +125,11 @@ class FileCategorizer {
     // bandwidth on variants the browser will never request.
     if (_canvaskitFiles.contains(path)) return ResourceCategory.optional;
 
-    // Auto-categorize by extension and size
+    // Auto-categorize by extension.
+    // Fonts: always optional (app needs them regardless of size).
+    // Other media: optional only if within size cap.
     final ext = p.extension(path).toLowerCase();
+    if (_fontExtensions.contains(ext)) return ResourceCategory.optional;
     if (_optionalExtensions.contains(ext) && size <= _optionalMaxSize) {
       return ResourceCategory.optional;
     }

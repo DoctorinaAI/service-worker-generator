@@ -72,7 +72,7 @@ dart run sw:generate --input=build/web
 ### Resource Categories
 - **Core**: main.dart.js/wasm/mjs, *.support.wasm
 - **Required**: AssetManifest*.json, FontManifest.json, manifest.json
-- **Optional**: canvaskit variant files (CDN-first, lazy local fallback), lightweight files (.json, .webp, .ttf, .png, .jpeg < 64KB)
+- **Optional**: canvaskit variant files (CDN-first, lazy local fallback), fonts (.ttf, .otf, .woff, .woff2, .eot — any size), lightweight files (.json, .webp, .png, .jpeg, .svg, .gif, .ico < 512KB)
 - **Ignore**: *.map, *.symbols, NOTICES, sw.js, bootstrap.js, index.html
 
 ### Caching Strategy

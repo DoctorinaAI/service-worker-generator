@@ -135,9 +135,14 @@ assets/AssetManifest*.json
 assets/FontManifest.json
 ```
 
-### Optional (cached on first fetch, files < 64 KB)
+### Optional (cached on first fetch)
 
-Extensions: `.json`, `.webp`, `.ttf`, `.woff`, `.woff2`, `.otf`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.ico`
+**Fonts — any size** (declared in `FontManifest.json`, required for correct rendering):
+`.ttf`, `.otf`, `.woff`, `.woff2`, `.eot`
+
+**Other media — only when file < 512 KB** (larger files fall through to `ignore`
+and rely on the browser's HTTP cache):
+`.json`, `.webp`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.ico`
 
 ### Ignore (never cached)
 

@@ -181,17 +181,54 @@ void main() {
         );
       });
 
-      test('large png is ignored', () {
+      test('png within 512 KB cap is optional', () {
         expect(
           categorizer.categorize('assets/images/hero.png', 200000),
+          ResourceCategory.optional,
+        );
+      });
+
+      test('png above 512 KB cap is ignored', () {
+        expect(
+          categorizer.categorize('assets/images/hero.png', 600 * 1024),
           ResourceCategory.ignore,
         );
       });
 
-      test('large ttf is ignored', () {
+      test('large ttf is optional (fonts bypass size cap)', () {
         expect(
-          categorizer.categorize('assets/fonts/Large.ttf', 100000),
-          ResourceCategory.ignore,
+          categorizer.categorize(
+            'assets/fonts/CupertinoIcons.ttf',
+            257628,
+          ),
+          ResourceCategory.optional,
+        );
+      });
+
+      test('large otf is optional (fonts bypass size cap)', () {
+        expect(
+          categorizer.categorize(
+            'assets/fonts/MaterialIcons-Regular.otf',
+            1645184,
+          ),
+          ResourceCategory.optional,
+        );
+      });
+
+      test('large woff2 is optional (fonts bypass size cap)', () {
+        expect(
+          categorizer.categorize(
+            'assets/fonts/Inter.woff2',
+            300000,
+          ),
+          ResourceCategory.optional,
+        );
+      });
+
+      test('eot is optional regardless of size', () {
+        expect(
+          categorizer.categorize('assets/fonts/legacy.eot', 500000),
+          ResourceCategory.optional,
         );
       });
 

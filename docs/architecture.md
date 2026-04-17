@@ -67,7 +67,7 @@ User's build/web/{sw.js, bootstrap.js} (final output)
 |----------|-----------|-----------------|-------------|
 | Core | Yes (install) | — | Essential for app startup: main.dart.* |
 | Required | Yes (install) | — | Needed early: AssetManifest, FontManifest, PWA manifest |
-| Optional | No | Yes (lazy) | CanvasKit variants, small images, JSON, fonts < 64KB |
+| Optional | No | Yes (lazy) | CanvasKit variants, fonts (any size), small images/JSON (< 512KB) |
 | Ignore | No | No | Large assets, source maps, debug files |
 
 ### Default Categorization Rules
@@ -83,7 +83,8 @@ User's build/web/{sw.js, bootstrap.js} (final output)
 
 **Optional:**
 - CanvasKit variant files for the selected renderer (lazy — CDN-first)
-- `.json`, `.webp`, `.ttf`, `.woff2`, `.png`, `.jpeg` files under 64KB
+- Fonts (`.ttf`, `.otf`, `.woff`, `.woff2`, `.eot`) — any size, since they're declared in `FontManifest.json` and the app will fetch them on startup
+- `.json`, `.webp`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.ico` files under 512KB
 
 **Ignore:**
 - `*.map`, `*.symbols`, `assets/NOTICES`
