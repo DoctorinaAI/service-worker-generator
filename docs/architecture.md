@@ -25,7 +25,7 @@ The SW receives its configuration (manifest, version, cache prefix) via placehol
 
 Runs in the main window context. Loaded via:
 ```html
-<script defer id="bootstrap" src="bootstrap.js"
+<script defer data-sw-bootstrap src="bootstrap.js"
   data-config='{"logo":"icons/Icon-192.png","title":"My App"}'></script>
 ```
 

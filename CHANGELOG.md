@@ -6,7 +6,7 @@ Complete rewrite replacing Flutter's default bootstrap with a professional two-a
 
 - CLI arguments updated: new options added, some defaults changed
 - Generated output now produces **two files** (`sw.js` + `bootstrap.js`) instead of one
-- Requires `<script defer id="bootstrap" src="bootstrap.js">` in `index.html`
+- Requires `<script defer data-sw-bootstrap src="bootstrap.js">` in `index.html`
 - Old inline JS/CSS loading UI replaced by the built-in loading widget
 
 ### Added

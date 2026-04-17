@@ -271,6 +271,9 @@ export class LoadingWidget {
     const titleColor = isDark ? color : color;
 
     return `
+      html, body {
+        background: ${bg};
+      }
       #sw-loading {
         position: fixed;
         inset: 0;

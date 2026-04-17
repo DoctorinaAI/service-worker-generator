@@ -70,7 +70,7 @@ export function getCanvasKitVariant(
   const useChromium = caps.hasChromiumBreakIterators && caps.hasImageCodecs;
   if (useChromium) {
     return {
-      jsFile: 'canvaskit.js',
+      jsFile: 'chromium/canvaskit.js',
       wasmFile: 'chromium/canvaskit.wasm',
     };
   }
@@ -94,14 +94,21 @@ export async function loadCanvasKit(
 
     try {
       logPhase('CanvasKit', `Probing CDN: ${cdnJsUrl}`);
-      // HEAD avoids downloading the full canvaskit.js just to check
-      // availability — Flutter's loader will fetch it for real via <script>.
+      // Range GET over HEAD: Chromium devtools mark HEAD cross-origin fetches
+      // as net::ERR_ABORTED even on 200 because the body stream is never
+      // finalized. Range bytes=0-0 returns a one-byte 206 that we drain with
+      // arrayBuffer(), so the fetch closes cleanly and DevTools stays quiet.
       const response = await fetchWithRetry(
-        new Request(cdnJsUrl, { method: 'HEAD' }),
+        new Request(cdnJsUrl, {
+          method: 'GET',
+          headers: { Range: 'bytes=0-0' },
+          cache: 'no-store',
+        }),
         2,
         8000,
       );
       if (response.ok) {
+        await response.arrayBuffer();
         logPhase('CanvasKit', 'CDN available');
         return cdnBase;
       }

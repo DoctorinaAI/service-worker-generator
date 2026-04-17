@@ -146,7 +146,7 @@ describe('getCanvasKitVariant', () => {
       caps({ hasImageCodecs: true, hasChromiumBreakIterators: true }),
     );
     expect(result).toEqual({
-      jsFile: 'canvaskit.js',
+      jsFile: 'chromium/canvaskit.js',
       wasmFile: 'chromium/canvaskit.wasm',
     });
   });
@@ -175,7 +175,7 @@ describe('loadCanvasKit', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns the CDN base when HEAD probe succeeds', async () => {
+  it('returns the CDN base when probe succeeds', async () => {
     const spy = installMockFetch(async () => textResponse('ok'));
     const result = await loadCanvasKit(
       'engine-rev-123',
@@ -184,7 +184,8 @@ describe('loadCanvasKit', () => {
     );
     expect(result).toBe(`${CANVASKIT_CDN_BASE}/engine-rev-123`);
     const request = spy.mock.calls[0][0] as Request;
-    expect(request.method).toBe('HEAD');
+    expect(request.method).toBe('GET');
+    expect(request.headers.get('Range')).toBe('bytes=0-0');
     expect(request.url).toContain('engine-rev-123');
   });
 

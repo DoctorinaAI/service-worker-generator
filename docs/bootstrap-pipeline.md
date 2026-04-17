@@ -146,7 +146,7 @@ Periodic progress updates as styled console messages.
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
-  <script defer id="bootstrap" src="bootstrap.js"
+  <script defer data-sw-bootstrap src="bootstrap.js"
     data-config='{
       "logo": "icons/Icon-192.png",
       "title": "My App",

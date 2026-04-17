@@ -30,9 +30,15 @@ export function parseDataConfig(
 
 /**
  * Find the bootstrap script element in the document.
+ *
+ * Uses a data-attribute selector instead of `id="bootstrap"`:
+ * the latter leaks the script node as `window.bootstrap`, which
+ * clashes with popular libraries (e.g. Bootstrap CSS).
  */
 export function findBootstrapScript(): HTMLScriptElement | null {
-  return document.getElementById('bootstrap') as HTMLScriptElement | null;
+  return document.querySelector(
+    'script[data-sw-bootstrap]',
+  ) as HTMLScriptElement | null;
 }
 
 /**

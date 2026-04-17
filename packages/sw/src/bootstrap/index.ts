@@ -5,7 +5,7 @@
  * initialization pipeline featuring progress tracking and a loading widget.
  *
  * Usage in HTML:
- * <script defer id="bootstrap" src="bootstrap.js"
+ * <script defer data-sw-bootstrap src="bootstrap.js"
  *   data-config='{"logo":"icons/Icon-192.png","title":"My App"}'></script>
  */
 
