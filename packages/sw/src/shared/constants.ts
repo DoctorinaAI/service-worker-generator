@@ -34,10 +34,12 @@ export const DEFAULT_MAX_PROGRESS = 90;
 
 /** Progress milestones for each pipeline stage */
 export const STAGE_PROGRESS = {
+  start: 0,
   init: 1,
   sw: 2,
   canvaskit: 20,
   assets: 80,
+  dartEntryLoaded: 85,
   dartEntry: 90,
   dartInit: 100,
 } as const;

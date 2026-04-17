@@ -1,10 +1,9 @@
 import type { BuildConfig, SWProgressMessage } from '../shared/types';
 import { STAGE_PROGRESS } from '../shared/constants';
-import { formatBytes } from '../shared/utils';
 import type { ResolvedConfig } from './config';
 import { BootstrapAPI } from './api';
 import { LoadingWidget } from './loading-widget';
-import { logPhase, logProgress } from './console-logger';
+import { logPhase } from './console-logger';
 import {
   registerServiceWorker,
   listenForSWMessages,
@@ -39,10 +38,57 @@ export async function runPipeline(config: ResolvedConfig): Promise<BootstrapAPI>
     internalPercent: number,
     message: string,
   ): void => {
-    const mapped = mapProgress(internalPercent);
-    api.update(phase, mapped, message);
-    logProgress(mapped, message);
+    api.updateAndLog(phase, mapProgress(internalPercent), message);
   };
+
+  // Stage 0: visible 0% beat so the console shows bootstrap started.
+  updateProgress('init', STAGE_PROGRESS.start, 'Starting');
+
+  // Attach the SW message listener BEFORE registering so we don't miss
+  // install-time progress messages (navigator.serviceWorker does not
+  // buffer messages posted before a listener is attached).
+  const completedKeys = new Set<string>();
+  let totalResourcesCount = 0;
+  const cleanupSWListener: (() => void) | null =
+    'serviceWorker' in navigator
+      ? listenForSWMessages((data) => {
+          const msg = data as SWProgressMessage;
+
+          // Adopt the count from any message (including the initial
+          // empty-key install announce) so we have a denominator early.
+          if (msg.resourcesCount) totalResourcesCount = msg.resourcesCount;
+          if (!msg.resourceKey) return;
+
+          // Terminal states advance the counter; 'loading' is the in-flight
+          // announce and 'error' does not count as progress.
+          if (
+            msg.status === 'completed' ||
+            msg.status === 'cached' ||
+            msg.status === 'updated'
+          ) {
+            completedKeys.add(msg.resourceKey);
+          }
+
+          if (totalResourcesCount === 0) return;
+
+          const done = completedKeys.size;
+          const downloadPercent = Math.min(
+            (done / totalResourcesCount) * 100,
+            100,
+          );
+          // Map download progress from CanvasKit stage to Assets stage (20% → 80%)
+          const internalPercent =
+            STAGE_PROGRESS.canvaskit +
+            (downloadPercent / 100) *
+              (STAGE_PROGRESS.assets - STAGE_PROGRESS.canvaskit);
+
+          updateProgress(
+            'assets',
+            internalPercent,
+            `Loaded ${done} of ${totalResourcesCount} resources`,
+          );
+        })
+      : null;
 
   try {
     // Stage 1: Init
@@ -57,50 +103,7 @@ export async function runPipeline(config: ResolvedConfig): Promise<BootstrapAPI>
 
     // Stage 2: Service Worker
     updateProgress('sw', STAGE_PROGRESS.sw, 'Registering service worker');
-    const swRegistration = await registerServiceWorker(
-      build.swFilename,
-      build.swVersion,
-    );
-
-    // Set up SW message listener for download progress
-    let cleanupSWListener: (() => void) | null = null;
-    const totalResourcesSize = { value: 0 };
-    const loadedResources = new Map<string, { size: number; loaded: number }>();
-
-    if (swRegistration) {
-      cleanupSWListener = listenForSWMessages((data) => {
-        const msg = data as SWProgressMessage;
-        if (!msg.resourceKey) return;
-
-        totalResourcesSize.value = msg.resourcesSize || totalResourcesSize.value;
-        loadedResources.set(msg.resourceKey, {
-          size: msg.resourceSize,
-          loaded: msg.loaded,
-        });
-
-        // Calculate aggregate progress
-        let totalLoaded = 0;
-        let totalSize = 0;
-        for (const r of loadedResources.values()) {
-          totalLoaded += r.loaded;
-          totalSize += r.size;
-        }
-        totalSize = Math.max(totalSize, 3 * 1024 * 1024); // min 3MB fallback
-
-        const downloadPercent = Math.min((totalLoaded / totalSize) * 100, 100);
-        // Map download progress from CanvasKit stage to Assets stage (20% → 80%)
-        const internalPercent =
-          STAGE_PROGRESS.canvaskit +
-          (downloadPercent / 100) *
-            (STAGE_PROGRESS.assets - STAGE_PROGRESS.canvaskit);
-
-        updateProgress(
-          'assets',
-          internalPercent,
-          `Downloading (${formatBytes(totalLoaded)} / ${formatBytes(totalSize)})`,
-        );
-      });
-    }
+    await registerServiceWorker(build.swFilename, build.swVersion);
 
     // Stage 3: CanvasKit
     updateProgress(
@@ -137,8 +140,9 @@ export async function runPipeline(config: ResolvedConfig): Promise<BootstrapAPI>
       cleanupSWListener();
     }
 
-    // Stage 6: Dart takes over
-    updateProgress('dart-init', STAGE_PROGRESS.dartEntry, 'Application started');
+    // Dart takes over from here. onEntrypointLoaded in flutter-loader has
+    // already moved progress to STAGE_PROGRESS.dartEntry (90%); any further
+    // reporting comes from main.dart via window.updateLoadingProgress.
 
     // Listen for flutter-first-frame as auto-dispose fallback
     window.addEventListener(

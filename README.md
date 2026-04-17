@@ -65,6 +65,88 @@ And automatically:
 - Removes `.js.map` and `.js.symbols` files (unless `--keep-maps`)
 - Replaces `{{sw_version}}` placeholders in `index.html`
 
+## Server Configuration
+
+> ⚠️ **Required.** Your HTTP server must serve `bootstrap.js`, `index.html`, and `sw.js` with `Cache-Control: no-cache`. Without this, users can get stuck on an outdated build.
+
+### Why it matters
+
+`bootstrap.js` is regenerated on every build with an embedded config snapshot — engine revision, SW version, manifest filename, and renderer variants are injected directly into the file. If a CDN or browser HTTP cache returns a stale `bootstrap.js`, the client registers an outdated Service Worker and never discovers the new manifest. The Service Worker's own invalidation logic cannot fix this, because it only runs *after* `bootstrap.js` has already loaded.
+
+The same applies to `index.html` (the entry point that loads `bootstrap.js`) and `sw.js` (the browser updates the Service Worker by byte-comparing its response — a stale copy defeats the update check).
+
+### Required headers
+
+| File            | `Cache-Control`                       | Notes                                                                 |
+|-----------------|---------------------------------------|-----------------------------------------------------------------------|
+| `index.html`    | `no-cache`                            | Allows 304 via `ETag`/`Last-Modified` — fast but always revalidated   |
+| `bootstrap.js`  | `no-cache`                            | Content changes every build (embedded config snapshot)                |
+| `sw.js`         | `no-cache`                            | Browser also enforces ≤ 24h SW freshness, but explicit is better      |
+| Everything else | `public, max-age=31536000, immutable` | Safe: the SW manifest handles invalidation via MD5 hashes             |
+
+Use `no-cache`, not `no-store` — `no-cache` lets the browser keep the file on disk but forces a conditional request on every load, so unchanged builds cost only a 304 response.
+
+### Example server configurations
+
+**nginx**
+
+```nginx
+location = /index.html   { add_header Cache-Control "no-cache"; }
+location = /bootstrap.js { add_header Cache-Control "no-cache"; }
+location = /sw.js        { add_header Cache-Control "no-cache"; }
+location / {
+  add_header Cache-Control "public, max-age=31536000, immutable";
+  try_files $uri $uri/ /index.html;
+}
+```
+
+**Apache (`.htaccess`)**
+
+```apache
+<FilesMatch "^(index\.html|bootstrap\.js|sw\.js)$">
+  Header set Cache-Control "no-cache"
+</FilesMatch>
+```
+
+**Netlify (`_headers`)**
+
+```
+/index.html
+  Cache-Control: no-cache
+/bootstrap.js
+  Cache-Control: no-cache
+/sw.js
+  Cache-Control: no-cache
+```
+
+**Firebase Hosting (`firebase.json`)**
+
+```json
+{
+  "hosting": {
+    "headers": [
+      {
+        "source": "/(index.html|bootstrap.js|sw.js)",
+        "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+      }
+    ]
+  }
+}
+```
+
+**Vercel (`vercel.json`)**
+
+```json
+{
+  "headers": [
+    {
+      "source": "/(index.html|bootstrap.js|sw.js)",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+    }
+  ]
+}
+```
+
 ## index.html Setup
 
 Replace Flutter's default `index.html` content with a single script tag:
@@ -249,6 +331,8 @@ These files are always fetched fresh (never stored in the SW cache):
 - `bootstrap.js` — must reflect latest build config
 - `index.html` — must be fresh for updates
 - `sw.js` — browser handles SW updates natively
+
+The same three files also require `Cache-Control: no-cache` at the HTTP layer — see [Server Configuration](#server-configuration).
 
 ## Service Worker
 

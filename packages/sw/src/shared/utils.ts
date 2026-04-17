@@ -1,4 +1,8 @@
-import { RETRY_BASE_DELAY_MS } from './constants';
+import {
+  FETCH_TIMEOUT_MS,
+  MAX_RETRY_ATTEMPTS,
+  RETRY_BASE_DELAY_MS,
+} from './constants';
 
 /**
  * Format bytes into a human-readable string.
@@ -58,4 +62,46 @@ export function backoffDelay(
 export function cacheBustUrl(url: string, hash: string): string {
   const separator = url.includes('?') ? '&' : '?';
   return `${url}${separator}v=${hash}`;
+}
+
+/**
+ * Fetch with timeout using AbortController.
+ */
+export async function fetchWithTimeout(
+  request: Request,
+  timeoutMs = FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(request, { signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/**
+ * Fetch with exponential backoff retry.
+ */
+export async function fetchWithRetry(
+  request: Request,
+  maxAttempts = MAX_RETRY_ATTEMPTS,
+  timeoutMs = FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await fetchWithTimeout(request, timeoutMs);
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts - 1) {
+        const delay = backoffDelay(attempt);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
+  }
+
+  throw lastError;
 }

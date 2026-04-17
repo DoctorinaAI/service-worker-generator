@@ -26,17 +26,46 @@ const totalResourcesSize = Object.values(manifest).reduce(
   0,
 );
 
+// Precache-scope count: Core + Required only. Optional files are cached
+// lazily on first fetch and are not guaranteed to fire during bootstrap,
+// so excluding them keeps the denominator stable for count-based progress.
+const totalResourcesCount = Object.values(manifest).reduce(
+  (n, entry) =>
+    entry.category === ResourceCategory.Core ||
+    entry.category === ResourceCategory.Required
+      ? n + 1
+      : n,
+  0,
+);
+
 // Log initialization
 const resourceCount = Object.keys(manifest).length;
 console.log(
   `[SW] v${version} | prefix: ${cachePrefix} | ` +
-    `resources: ${resourceCount} | size: ${totalResourcesSize} bytes`,
+    `resources: ${resourceCount} | precache: ${totalResourcesCount} | ` +
+    `size: ${totalResourcesSize} bytes`,
 );
 
 // Register event handlers
-self.addEventListener('install', createInstallHandler(cachePrefix, version, manifest, totalResourcesSize));
+self.addEventListener(
+  'install',
+  createInstallHandler(
+    cachePrefix,
+    version,
+    manifest,
+    totalResourcesSize,
+    totalResourcesCount,
+  ),
+);
 self.addEventListener('activate', createActivateHandler(cachePrefix, version, manifest));
 self.addEventListener('fetch', (event: FetchEvent) => {
-  handleFetch(event, manifest, cachePrefix, version, totalResourcesSize);
+  handleFetch(
+    event,
+    manifest,
+    cachePrefix,
+    version,
+    totalResourcesSize,
+    totalResourcesCount,
+  );
 });
 self.addEventListener('message', createMessageHandler(version));

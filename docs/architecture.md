@@ -108,6 +108,8 @@ All cached resources use `?v={hash}` query parameters to prevent stale responses
 - `index.html` — Must always be fresh
 - `sw.js` — Browser handles SW updates via its own mechanism
 
+> These three files also require `Cache-Control: no-cache` at the HTTP layer. See [Server Configuration](../README.md#server-configuration) for the required headers.
+
 ## CanvasKit Loading
 
 ### Variant Selection

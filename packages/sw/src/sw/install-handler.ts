@@ -14,9 +14,18 @@ export function createInstallHandler(
   version: string,
   manifest: ResourceManifest,
   totalResourcesSize: number,
+  totalResourcesCount: number,
 ): (event: ExtendableEvent) => void {
   return (event: ExtendableEvent) => {
-    event.waitUntil(handleInstall(cachePrefix, version, manifest, totalResourcesSize));
+    event.waitUntil(
+      handleInstall(
+        cachePrefix,
+        version,
+        manifest,
+        totalResourcesSize,
+        totalResourcesCount,
+      ),
+    );
   };
 }
 
@@ -25,6 +34,7 @@ async function handleInstall(
   version: string,
   manifest: ResourceManifest,
   totalResourcesSize: number,
+  totalResourcesCount: number,
 ): Promise<void> {
   const tempCacheName = getTempCacheName(cachePrefix, version);
 
@@ -33,6 +43,7 @@ async function handleInstall(
     type: 'sw-progress',
     timestamp: Date.now(),
     resourcesSize: totalResourcesSize,
+    resourcesCount: totalResourcesCount,
     resourceName: '',
     resourceUrl: '',
     resourceKey: '',
@@ -41,11 +52,27 @@ async function handleInstall(
     status: 'loading',
   });
 
-  // Pre-cache Core and Required resources
-  await precacheResources(tempCacheName, manifest, [
-    ResourceCategory.Core,
-    ResourceCategory.Required,
-  ]);
+  // Pre-cache Core and Required resources, notifying clients per file so
+  // the bootstrap can show smooth count-based progress during install.
+  await precacheResources(
+    tempCacheName,
+    manifest,
+    [ResourceCategory.Core, ResourceCategory.Required],
+    async (path, entry) => {
+      await notifyClients(self, {
+        type: 'sw-progress',
+        timestamp: Date.now(),
+        resourcesSize: totalResourcesSize,
+        resourcesCount: totalResourcesCount,
+        resourceName: entry.name,
+        resourceUrl: path,
+        resourceKey: path,
+        resourceSize: entry.size,
+        loaded: entry.size,
+        status: 'completed',
+      });
+    },
+  );
 
   // Skip waiting to activate immediately
   await self.skipWaiting();

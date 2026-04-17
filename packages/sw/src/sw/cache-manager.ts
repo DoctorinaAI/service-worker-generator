@@ -1,6 +1,10 @@
-import type { ResourceCategory, ResourceEntry, ResourceManifest } from '../shared/types';
+import type {
+  ResourceCategory,
+  ResourceEntry,
+  ResourceManifest,
+} from '../shared/types';
 import { MANIFEST_CACHE_SUFFIX, TEMP_CACHE_SUFFIX } from '../shared/constants';
-import { cacheBustUrl } from '../shared/utils';
+import { cacheBustUrl, fetchWithRetry } from '../shared/utils';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -28,11 +32,14 @@ export function getManifestCacheName(prefix: string): string {
 /**
  * Pre-cache resources of specified categories into a cache.
  * Uses cache-busted URLs to avoid stale responses.
+ * The optional `onEach` callback fires after each successful cache.put,
+ * allowing the install handler to notify clients of precache progress.
  */
 export async function precacheResources(
   cacheName: string,
   manifest: ResourceManifest,
   categories: ResourceCategory[],
+  onEach?: (path: string, entry: ResourceEntry) => void | Promise<void>,
 ): Promise<void> {
   const cache = await caches.open(cacheName);
   const entries = Object.entries(manifest).filter(([, entry]) =>
@@ -43,10 +50,11 @@ export async function precacheResources(
     entries.map(async ([path, entry]) => {
       const url = cacheBustUrl(path, entry.hash);
       const request = new Request(url, { cache: 'reload' });
-      const response = await fetch(request);
+      const response = await fetchWithRetry(request);
       if (response.ok) {
         // Store with the original path (without cache buster) as the key
         await cache.put(new Request(path), response);
+        if (onEach) await onEach(path, entry);
       }
     }),
   );

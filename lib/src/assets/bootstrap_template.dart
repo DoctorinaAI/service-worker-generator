@@ -6,12 +6,12 @@
 /// Contains placeholder tokens that the CLI replaces with actual
 /// configuration at generation time.
 const String bootstrapTemplate = r'''
-(function(){"use strict";const L="https://www.gstatic.com/flutter-canvaskit",C="canvaskit",d={init:1,sw:2,canvaskit:20,assets:80,dartEntry:90,dartInit:100};function P(e){if(!e)return{};const t=e.dataset.config;if(!t)return{};try{return JSON.parse(t)}catch{return console.warn("[Bootstrap] Invalid data-config JSON, using defaults"),{}}}function B(){return document.getElementById("bootstrap")}function F(e,t){return{build:e,ui:{logo:t.logo??"",title:t.title??"",theme:t.theme??"auto",color:t.color??"#25D366",showPercentage:t.showPercentage??!0,minProgress:t.minProgress??0,maxProgress:t.maxProgress??90}}}const y="color: #25D366; font-weight: bold; font-size: 14px;",m="color: #888; font-weight: normal;",f="color: #fff; font-weight: bold;",T="color: #25D366; font-weight: bold;",x="color: #aaa;";function W(e){const t=e.builds.find(r=>r.renderer)?.renderer??"unknown",s=e.builds.find(r=>r.compileTarget)?.compileTarget??"unknown";console.log(`%c┌─ Service Worker Bootstrap %c
+(function(){"use strict";const A="https://www.gstatic.com/flutter-canvaskit",E="canvaskit",u={start:0,init:1,sw:2,canvaskit:20,assets:80,dartEntryLoaded:85,dartEntry:90,dartInit:100};function L(s){if(!s)return{};const t=s.dataset.config;if(!t)return{};try{return JSON.parse(t)}catch{return console.warn("[Bootstrap] Invalid data-config JSON, using defaults"),{}}}function I(){return document.getElementById("bootstrap")}function R(s,t){return{build:s,ui:{logo:t.logo??"",title:t.title??"",theme:t.theme??"auto",color:t.color??"#25D366",showPercentage:t.showPercentage??!0,minProgress:t.minProgress??0,maxProgress:t.maxProgress??90}}}const S="color: #25D366; font-weight: bold; font-size: 14px;",p="color: #888; font-weight: normal;",f="color: #fff; font-weight: bold;",T="color: #25D366; font-weight: bold;",C="color: #aaa;";function M(s){const t=s.builds.find(r=>r.renderer)?.renderer??"unknown",e=s.builds.find(r=>r.compileTarget)?.compileTarget??"unknown";console.log(`%c┌─ Service Worker Bootstrap %c
 %cEngine:   %c%s%c
 %cSW:      %c%s%c
 %cRenderer: %c%s%c
 %cTarget:   %c%s%c
-%c└──────────────────────────`,y,"",m,f,e.engineRevision.slice(0,10)+"...","",m,f,e.swVersion,"",m,f,t,"",m,f,s,"",y)}function a(e,t){console.log(`%c[${e}]%c ${t}`,T,x)}function $(e,t){const s=N(e,20);console.log(`%c${s} ${Math.round(e)}%%%c ${t}`,T,x)}function N(e,t){const s=Math.round(e/100*t),r=t-s;return"█".repeat(s)+"░".repeat(r)}class D{constructor(t){this.widget=t}_state={phase:"init",percent:0,message:"Initializing"};subscribers=new Set;_disposed=!1;get progress(){return{...this._state}}get disposed(){return this._disposed}subscribe(t){return this.subscribers.add(t),()=>this.subscribers.delete(t)}update(t,s,r){if(!this._disposed){this._state={phase:t,percent:s,message:r},this.widget.updateProgress(s,r);for(const n of this.subscribers)try{n(this._state)}catch(o){console.error("[Bootstrap] Subscriber error:",o)}}}error(t){this.widget.showError(t)}dispose(){this._disposed||(this._disposed=!0,this.widget.dispose(),this.subscribers.clear())}}function O(e){const t=window;t.Bootstrap={get progress(){return e.progress},subscribe:s=>e.subscribe(s),dispose:()=>e.dispose()},t.updateLoadingProgress=(s,r)=>{const n=Math.max(0,Math.min(100,Number(s)||0));e.update("dart-init",n,r??e.progress.message)},t.removeLoadingIndicator=()=>e.dispose()}function _(e,t=1){if(e===0)return"0 B";const s=1024,r=Math.max(0,t),n=["B","KB","MB","GB"],o=Math.floor(Math.log(e)/Math.log(s));return`${parseFloat((e/Math.pow(s,o)).toFixed(r))} ${n[o]}`}function G(e,t=1e3){const s=t*Math.pow(2,e),r=s*.2*Math.random();return s+r}const v="http://www.w3.org/2000/svg",b=65,w=2*Math.PI*b;class U{constructor(t){this.config=t}container=null;progressCircle=null;statusText=null;percentageText=null;resetContainer=null;styleElement=null;stallTimer=null;currentPercent=0;disposed=!1;mount(){this.injectStyles(),this.container=this.createDOM(),document.body.appendChild(this.container),this.resetStallTimer()}updateProgress(t,s){if(!this.disposed){if(this.currentPercent=Math.max(this.currentPercent,Math.min(t,100)),this.progressCircle){const r=w-this.currentPercent/100*w;this.progressCircle.style.strokeDashoffset=String(r)}this.statusText&&(this.statusText.textContent=s),this.percentageText&&this.config.showPercentage&&(this.percentageText.textContent=`${Math.round(this.currentPercent)}%`),this.resetStallTimer()}}showError(t){this.disposed||!this.statusText||(this.statusText.textContent=t,this.statusText.style.color="#ff4444",this.showResetButton())}dispose(){if(this.disposed)return;this.disposed=!0,this.clearStallTimer(),this.container&&(this.container.style.opacity="0",this.container.style.transition="opacity 0.4s ease-out",this.container.addEventListener("transitionend",()=>{this.container?.remove(),this.styleElement?.remove(),this.container=null,this.styleElement=null},{once:!0}));const t=document.querySelector("flutter-view");t&&(t.style.pointerEvents="auto")}injectStyles(){this.styleElement=document.createElement("style"),this.styleElement.textContent=this.getCSS(),document.head.appendChild(this.styleElement)}createDOM(){const t=document.createElement("div");t.id="sw-loading";const s=document.createElement("div");s.className="sw-logo-container";const r=document.createElementNS(v,"svg");r.setAttribute("class","sw-progress-ring"),r.setAttribute("viewBox","0 0 140 140");const n=document.createElementNS(v,"circle");if(n.setAttribute("class","sw-progress-ring-bg"),n.setAttribute("cx","70"),n.setAttribute("cy","70"),n.setAttribute("r",String(b)),n.setAttribute("vector-effect","non-scaling-stroke"),this.progressCircle=document.createElementNS(v,"circle"),this.progressCircle.setAttribute("class","sw-progress-ring-fill"),this.progressCircle.setAttribute("cx","70"),this.progressCircle.setAttribute("cy","70"),this.progressCircle.setAttribute("r",String(b)),this.progressCircle.setAttribute("vector-effect","non-scaling-stroke"),this.progressCircle.style.strokeDasharray=String(w),this.progressCircle.style.strokeDashoffset=String(w),r.appendChild(n),r.appendChild(this.progressCircle),s.appendChild(r),this.config.logo){const l=document.createElement("img");l.src=this.config.logo,l.className="sw-logo-image",l.alt="Logo",s.appendChild(l)}if(t.appendChild(s),this.config.title){const l=document.createElement("h1");l.className="sw-title",l.textContent=this.config.title,t.appendChild(l)}const o=document.createElement("div");o.className="sw-status",this.statusText=document.createElement("span"),this.statusText.textContent="Initializing";const c=document.createElement("span");c.className="sw-loading-dots",o.appendChild(this.statusText),o.appendChild(c),t.appendChild(o),this.config.showPercentage&&(this.percentageText=document.createElement("div"),this.percentageText.className="sw-percentage",this.percentageText.textContent="0%",t.appendChild(this.percentageText)),this.resetContainer=document.createElement("div"),this.resetContainer.className="sw-reset-container",this.resetContainer.style.display="none";const i=document.createElement("button");return i.className="sw-reset-button",i.textContent="↻ Reset Cache",i.addEventListener("click",()=>this.resetCache()),this.resetContainer.appendChild(i),t.appendChild(this.resetContainer),t}showResetButton(){this.resetContainer&&(this.resetContainer.style.display="block")}resetStallTimer(){this.clearStallTimer(),!this.disposed&&this.currentPercent<100&&(this.stallTimer=setTimeout(()=>{console.warn("[Bootstrap] Loading appears stalled"),this.showResetButton()},3e4))}clearStallTimer(){this.stallTimer&&(clearTimeout(this.stallTimer),this.stallTimer=null)}async resetCache(){const t=this.resetContainer?.querySelector("button");t&&(t.textContent="⏳ Resetting...",t.setAttribute("disabled","true"));try{if("caches"in window){const s=await caches.keys();await Promise.all(s.map(r=>caches.delete(r)))}if("serviceWorker"in navigator){const s=await navigator.serviceWorker.getRegistrations();await Promise.all(s.map(r=>r.unregister()))}localStorage.clear(),sessionStorage.clear()}catch(s){console.error("[Bootstrap] Reset error:",s)}window.location.reload()}getCSS(){const t=this.config.color,s=`${t}80`,r=this.config.theme==="dark"||this.config.theme==="auto"&&window.matchMedia("(prefers-color-scheme: dark)").matches,n=r?"#1a1a2e":"#f4fdf7",o=r?"#b0b0b0":"#666";return`
+%c└──────────────────────────`,S,"",p,f,s.engineRevision.slice(0,10)+"...","",p,f,s.swVersion,"",p,f,t,"",p,f,e,"",S)}function a(s,t){console.log(`%c[${s}]%c ${t}`,T,C)}function P(s,t){const e=B(s,20);console.log(`%c${e} ${Math.round(s)}%%%c ${t}`,T,C)}function B(s,t){const e=Math.round(s/100*t),r=t-e;return"█".repeat(e)+"░".repeat(r)}class W{constructor(t){this.widget=t}_state={phase:"init",percent:0,message:"Initializing"};subscribers=new Set;_disposed=!1;lastLoggedPercent=-1;get progress(){return{...this._state}}get disposed(){return this._disposed}subscribe(t){return this.subscribers.add(t),()=>this.subscribers.delete(t)}update(t,e,r){if(!this._disposed){this._state={phase:t,percent:e,message:r},this.widget.updateProgress(e,r);for(const n of this.subscribers)try{n(this._state)}catch(i){console.error("[Bootstrap] Subscriber error:",i)}}}updateAndLog(t,e,r){if(this._disposed)return;const n=this.lastLoggedPercent,i=this._state.message,o=Math.max(n,Math.min(e,100));this.lastLoggedPercent=o,this.update(t,o,r),(o>n||r!==i)&&P(o,r)}error(t){this.widget.showError(t)}dispose(){this._disposed||(this._disposed=!0,this.widget.dispose(),this.subscribers.clear())}}function $(s){const t=window;t.Bootstrap={get progress(){return s.progress},subscribe:e=>s.subscribe(e),dispose:()=>s.dispose()},t.updateLoadingProgress=(e,r)=>{const n=Math.max(0,Math.min(100,Number(e)||0));s.updateAndLog("dart-init",n,r??s.progress.message)},t.removeLoadingIndicator=()=>s.dispose()}const w="http://www.w3.org/2000/svg",v=65,m=2*Math.PI*v;class F{constructor(t){this.config=t}container=null;logoContainer=null;progressCircle=null;statusText=null;percentageText=null;reloadButton=null;styleElement=null;stallTimer=null;currentPercent=0;disposed=!1;mount(){this.injectStyles(),this.container=this.createDOM(),document.body.appendChild(this.container),this.resetStallTimer()}updateProgress(t,e){if(!this.disposed){if(this.currentPercent=Math.max(this.currentPercent,Math.min(t,100)),this.progressCircle){const r=m-this.currentPercent/100*m;this.progressCircle.style.strokeDashoffset=String(r)}this.statusText&&(this.statusText.textContent=e),this.percentageText&&this.config.showPercentage&&(this.percentageText.textContent=`${Math.round(this.currentPercent)}%`),this.resetStallTimer()}}showError(t){this.disposed||!this.statusText||(this.statusText.textContent=t,this.statusText.style.color="#ff4444",this.showReloadOverlay())}dispose(){if(this.disposed)return;this.disposed=!0,this.clearStallTimer(),this.container&&(this.container.style.opacity="0",this.container.style.transition="opacity 0.4s ease-out",this.container.addEventListener("transitionend",()=>{this.container?.remove(),this.styleElement?.remove(),this.container=null,this.styleElement=null},{once:!0}));const t=document.querySelector("flutter-view");t&&(t.style.pointerEvents="auto")}injectStyles(){this.styleElement=document.createElement("style"),this.styleElement.textContent=this.getCSS(),document.head.appendChild(this.styleElement)}createDOM(){const t=document.createElement("div");t.id="sw-loading";const e=document.createElement("div");e.className="sw-logo-container",this.logoContainer=e;const r=document.createElementNS(w,"svg");r.setAttribute("class","sw-progress-ring"),r.setAttribute("viewBox","0 0 140 140");const n=document.createElementNS(w,"circle");n.setAttribute("class","sw-progress-ring-bg"),n.setAttribute("cx","70"),n.setAttribute("cy","70"),n.setAttribute("r",String(v)),n.setAttribute("vector-effect","non-scaling-stroke"),this.progressCircle=document.createElementNS(w,"circle"),this.progressCircle.setAttribute("class","sw-progress-ring-fill"),this.progressCircle.setAttribute("cx","70"),this.progressCircle.setAttribute("cy","70"),this.progressCircle.setAttribute("r",String(v)),this.progressCircle.setAttribute("vector-effect","non-scaling-stroke"),this.progressCircle.style.strokeDasharray=String(m),this.progressCircle.style.strokeDashoffset=String(m),r.appendChild(n),r.appendChild(this.progressCircle);const i=document.createElement("div");if(i.className="sw-logo-artwork",i.appendChild(r),this.config.logo){const c=document.createElement("img");c.src=this.config.logo,c.className="sw-logo-image",c.alt="Logo",i.appendChild(c)}if(e.appendChild(i),this.reloadButton=document.createElement("button"),this.reloadButton.className="sw-reload-overlay",this.reloadButton.type="button",this.reloadButton.setAttribute("aria-label","Reload"),this.reloadButton.title="Reload",this.reloadButton.innerHTML=this.reloadIconSVG(),this.reloadButton.addEventListener("click",()=>this.resetCache()),e.appendChild(this.reloadButton),t.appendChild(e),this.config.title){const c=document.createElement("h1");c.className="sw-title",c.textContent=this.config.title,t.appendChild(c)}const o=document.createElement("div");o.className="sw-status",this.statusText=document.createElement("span"),this.statusText.textContent="Initializing";const g=document.createElement("span");return g.className="sw-loading-dots",o.appendChild(this.statusText),o.appendChild(g),t.appendChild(o),this.config.showPercentage&&(this.percentageText=document.createElement("div"),this.percentageText.className="sw-percentage",this.percentageText.textContent="0%",t.appendChild(this.percentageText)),t}showReloadOverlay(){this.logoContainer?.classList.add("is-stalled")}resetStallTimer(){this.clearStallTimer(),!this.disposed&&this.currentPercent<100&&(this.stallTimer=setTimeout(()=>{console.warn("[Bootstrap] Loading appears stalled"),this.showReloadOverlay()},3e4))}clearStallTimer(){this.stallTimer&&(clearTimeout(this.stallTimer),this.stallTimer=null)}reloadIconSVG(){return'<svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15.5-6.3L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.3L3 16"/><path d="M3 21v-5h5"/></svg>'}async resetCache(){this.reloadButton&&(this.reloadButton.classList.add("is-loading"),this.reloadButton.setAttribute("disabled","true"));try{if("caches"in window){const t=await caches.keys();await Promise.all(t.map(e=>caches.delete(e)))}if("serviceWorker"in navigator){const t=await navigator.serviceWorker.getRegistrations();await Promise.all(t.map(e=>e.unregister()))}localStorage.clear(),sessionStorage.clear()}catch(t){console.error("[Bootstrap] Reset error:",t)}window.location.reload()}getCSS(){const t=this.config.color,e=`${t}80`,r=this.config.theme==="dark"||this.config.theme==="auto"&&window.matchMedia("(prefers-color-scheme: dark)").matches,n=r?"#1a1a2e":"#f4fdf7",i=r?"#b0b0b0":"#666";return`
       #sw-loading {
         position: fixed;
         inset: 0;
@@ -31,14 +31,28 @@ const String bootstrapTemplate = r'''
       .sw-logo-container {
         position: relative;
         display: inline-block;
+        width: 140px;
+        height: 140px;
         margin-bottom: 2rem;
+      }
+      .sw-logo-artwork {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: filter 0.45s ease, opacity 0.45s ease, transform 0.45s ease;
+      }
+      .sw-logo-container.is-stalled .sw-logo-artwork {
+        filter: blur(6px) saturate(0.8);
+        opacity: 0.55;
+        transform: scale(0.96);
       }
       .sw-progress-ring {
         position: absolute;
-        top: -10px;
-        left: -10px;
-        width: 140px;
-        height: 140px;
+        inset: 0;
+        width: 100%;
+        height: 100%;
         transform: rotate(-90deg);
       }
       .sw-progress-ring-bg {
@@ -52,7 +66,7 @@ const String bootstrapTemplate = r'''
         stroke-width: 4;
         stroke-linecap: round;
         transition: stroke-dashoffset 0.3s ease;
-        filter: drop-shadow(0 0 8px ${s});
+        filter: drop-shadow(0 0 8px ${e});
       }
       .sw-logo-image {
         width: 120px;
@@ -69,7 +83,7 @@ const String bootstrapTemplate = r'''
       .sw-status {
         font-size: 1.1rem;
         font-weight: 500;
-        color: ${o};
+        color: ${i};
         margin-top: 1rem;
       }
       .sw-loading-dots::after {
@@ -89,35 +103,92 @@ const String bootstrapTemplate = r'''
       }
       .sw-percentage {
         font-size: 0.9rem;
-        color: ${o};
+        color: ${i};
         opacity: 0.7;
         margin-top: 0.5rem;
       }
-      .sw-reset-container {
-        margin-top: 2rem;
-      }
-      .sw-reset-button {
-        padding: 12px 24px;
+      .sw-reload-overlay {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 64px;
+        height: 64px;
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        border-radius: 50%;
         background: ${t};
-        border: 2px solid ${t};
-        border-radius: 8px;
-        color: white;
-        font-size: 0.9rem;
-        font-weight: 500;
+        color: #fff;
         cursor: pointer;
-        transition: all 0.3s ease;
+        opacity: 0;
+        pointer-events: none;
+        transform: translate(-50%, -50%) scale(0.6);
+        box-shadow:
+          0 10px 28px rgba(0, 0, 0, 0.28),
+          0 0 0 0 ${e};
+        transition:
+          opacity 0.35s ease,
+          transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1),
+          box-shadow 0.3s ease,
+          background-color 0.3s ease;
       }
-      .sw-reset-button:hover {
+      .sw-logo-container.is-stalled .sw-reload-overlay {
+        opacity: 1;
+        pointer-events: auto;
+        transform: translate(-50%, -50%) scale(1);
+        animation: sw-reload-pulse 2.2s ease-out infinite;
+      }
+      .sw-reload-overlay:hover {
+        transform: translate(-50%, -50%) scale(1.08);
+        box-shadow:
+          0 14px 34px rgba(0, 0, 0, 0.35),
+          0 0 0 6px ${e};
+        animation: none;
+      }
+      .sw-reload-overlay:active {
+        transform: translate(-50%, -50%) scale(0.94);
+        animation: none;
+      }
+      .sw-reload-overlay:focus-visible {
+        outline: none;
+        box-shadow:
+          0 10px 28px rgba(0, 0, 0, 0.28),
+          0 0 0 4px ${e};
+      }
+      .sw-reload-overlay:disabled {
+        cursor: wait;
         opacity: 0.85;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+        animation: none;
       }
-      .sw-reset-button:active { transform: translateY(0); }
-      .sw-reset-button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .sw-reload-overlay svg {
+        transition: transform 0.3s ease;
+      }
+      .sw-reload-overlay:hover svg {
+        transform: rotate(-45deg);
+      }
+      .sw-reload-overlay.is-loading svg {
+        animation: sw-reload-spin 0.9s linear infinite;
+      }
+      @keyframes sw-reload-spin {
+        to { transform: rotate(360deg); }
+      }
+      @keyframes sw-reload-pulse {
+        0% { box-shadow: 0 10px 28px rgba(0,0,0,0.28), 0 0 0 0 ${e}; }
+        70% { box-shadow: 0 10px 28px rgba(0,0,0,0.28), 0 0 0 14px transparent; }
+        100% { box-shadow: 0 10px 28px rgba(0,0,0,0.28), 0 0 0 0 transparent; }
+      }
       @media (max-width: 480px) {
+        .sw-logo-container { width: 120px; height: 120px; }
         .sw-logo-image { width: 100px; height: 100px; }
-        .sw-progress-ring { width: 120px; height: 120px; }
+        .sw-reload-overlay { width: 56px; height: 56px; }
         .sw-title { font-size: 1.6rem; }
       }
-    `}}async function z(e,t){if(!("serviceWorker"in navigator))return a("SW","Service Workers not supported"),null;await Y();const s=`${e}?v=${t}`;try{a("SW",`Registering ${s}`);const r=await navigator.serviceWorker.register(s);return a("SW","Registered successfully"),await V(r)?a("SW","Activated"):a("SW","Activation timed out, continuing without SW"),r}catch(r){return a("SW",`Registration failed: ${r instanceof Error?r.message:String(r)}`),null}}function j(e){const t=s=>{s.data?.type==="sw-progress"&&e(s.data)};return navigator.serviceWorker.addEventListener("message",t),()=>navigator.serviceWorker.removeEventListener("message",t)}async function Y(){try{const e=await navigator.serviceWorker.getRegistrations();for(const t of e)(t.active?.scriptURL.includes("flutter_service_worker")||t.active?.scriptURL.includes("flutter_sw"))&&(await t.unregister(),a("SW","Unregistered old Flutter service worker"))}catch{}}async function V(e){const t=e.installing||e.waiting||e.active;return t?t.state==="activated"?!0:new Promise(s=>{const r=setTimeout(()=>{s(!1)},4e3);t.addEventListener("statechange",()=>{t.state==="activated"&&(clearTimeout(r),s(!0))})}):!1}async function K(e,t=1e4){const s=new AbortController,r=setTimeout(()=>s.abort(),t);try{return await fetch(e,{signal:s.signal})}finally{clearTimeout(r)}}async function H(e,t=3,s=1e4){let r;for(let n=0;n<t;n++)try{return await K(e,s)}catch(o){if(r=o,n<t-1){const c=G(n);await new Promise(i=>setTimeout(i,c))}}throw r}function q(){return{hasImageCodecs:Z()==="blink"&&typeof ImageDecoder<"u",hasChromiumBreakIterators:typeof Intl<"u"&&"v8BreakIterator"in Intl&&"Segmenter"in Intl,supportsWasmGC:tt(),crossOriginIsolated:!!window.crossOriginIsolated,webGLVersion:et()}}function J(e,t){for(const s of e)if(!(!s.compileTarget&&!s.renderer)&&!(s.compileTarget==="dart2wasm"&&!t.supportsWasmGC)&&!(s.renderer==="skwasm"&&(!t.supportsWasmGC||t.webGLVersion<1)))return s;return e.find(s=>s.compileTarget)??null}function X(e,t){if(e.renderer==="skwasm"){let r="skwasm";return(!t.hasImageCodecs||!t.hasChromiumBreakIterators)&&(r="skwasm_heavy"),{jsFile:`${r}.js`,wasmFile:`${r}.wasm`}}return t.hasChromiumBreakIterators&&t.hasImageCodecs?{jsFile:"canvaskit.js",wasmFile:"chromium/canvaskit.wasm"}:{jsFile:"canvaskit.js",wasmFile:"canvaskit.wasm"}}async function Q(e,t,s){const r=X(t,s);if(e){const n=`${L}/${e}`,o=`${n}/${r.jsFile}`;try{if(a("CanvasKit",`Trying CDN: ${o}`),(await H(new Request(o),2,8e3)).ok)return a("CanvasKit","Loaded from CDN"),n}catch{a("CanvasKit","CDN failed, falling back to local")}}return a("CanvasKit",`Using local: ${C}/`),C}function Z(){return navigator.vendor==="Google Inc."||navigator.userAgent.includes("Edg/")?"blink":navigator.vendor==="Apple Computer, Inc."?"webkit":navigator.vendor===""&&navigator.userAgent.includes("Firefox")?"gecko":"unknown"}function tt(){try{const e=new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,95,1,120,0]);return WebAssembly.validate(e)}catch{return!1}}function et(){try{const e=document.createElement("canvas");if(e.width=1,e.height=1,e.getContext("webgl2"))return 2;if(e.getContext("webgl"))return 1}catch{}return-1}async function st(e,t,s,r){const n=window;n._flutter??={},n._flutter.buildConfig={engineRevision:t,builds:s},await rt("flutter.js"),a("Flutter","flutter.js loaded");const o=n._flutter;if(!o?.loader)throw new Error("_flutter.loader not available after loading flutter.js");a("Flutter","Starting Flutter loader"),await o.loader.load({config:{canvasKitBaseUrl:e.endsWith("/")?e:`${e}/`},onEntrypointLoaded:async c=>{r(85,"Initializing Flutter engine"),a("Flutter","Entry point loaded, initializing engine");const i=document.querySelector("flutter-view");i&&(i.style.pointerEvents="none");const l=await c.initializeEngine();r(90,"Starting application"),a("Flutter","Engine initialized, running app"),await l.runApp(),a("Flutter","App started")}})}function rt(e){return new Promise((t,s)=>{const r=document.createElement("script");r.src=e,r.type="application/javascript",r.onload=()=>t(),r.onerror=()=>s(new Error(`Failed to load script: ${e}`)),document.head.appendChild(r)})}async function nt(e){const{build:t,ui:s}=e,r=new U(s),n=new D(r);r.mount();const o=i=>s.minProgress+i/100*(s.maxProgress-s.minProgress),c=(i,l,g)=>{const h=o(l);n.update(i,h,g),$(h,g)};try{c("init",d.init,"Checking environment"),a("Init","Detecting browser capabilities");const i=q();a("Init",`WebGL: ${i.webGLVersion}, WasmGC: ${i.supportsWasmGC}, ImageCodecs: ${i.hasImageCodecs}`),c("sw",d.sw,"Registering service worker");const l=await z(t.swFilename,t.swVersion);let g=null;const h={value:0},I=new Map;l&&(g=j(S=>{const u=S;if(!u.resourceKey)return;h.value=u.resourcesSize||h.value,I.set(u.resourceKey,{size:u.resourceSize,loaded:u.loaded});let E=0,p=0;for(const M of I.values())E+=M.loaded,p+=M.size;p=Math.max(p,3*1024*1024);const ot=Math.min(E/p*100,100),at=d.canvaskit+ot/100*(d.assets-d.canvaskit);c("assets",at,`Downloading (${_(E)} / ${_(p)})`)})),c("canvaskit",d.canvaskit,"Loading rendering engine");const R=J(t.builds,i);if(!R)throw new Error("No compatible Flutter build found for this browser");const it=await Q(t.engineRevision,R,i);c("assets",d.canvaskit+5,"Loading application"),await st(it,t.engineRevision,t.builds,(S,u)=>{c("dart-entry",S,u)}),g&&g(),c("dart-init",d.dartEntry,"Application started"),window.addEventListener("flutter-first-frame",()=>{n.disposed||n.dispose()},{once:!0})}catch(i){const l=i instanceof Error?i.message:"Failed to load application";console.error("[Bootstrap] Pipeline error:",i),n.error(l)}return n}const k="__INJECT_BOOTSTRAP_CONFIG__";function A(){const e=B(),t=P(e),s=F(k,t);W(k),nt(s).then(r=>{O(r)})}document.readyState==="loading"?document.addEventListener("DOMContentLoaded",A,{once:!0}):A()})();
+      @media (prefers-reduced-motion: reduce) {
+        .sw-logo-container.is-stalled .sw-reload-overlay { animation: none; }
+        .sw-reload-overlay, .sw-reload-overlay svg,
+        .sw-logo-artwork { transition: none; }
+      }
+    `}}async function N(s,t){if(!("serviceWorker"in navigator))return a("SW","Service Workers not supported"),null;await D();const e=`${s}?v=${t}`;try{a("SW",`Registering ${e}`);const r=await navigator.serviceWorker.register(e);return a("SW","Registered successfully"),await G(r)?a("SW","Activated"):a("SW","Activation timed out, continuing without SW"),r}catch(r){return a("SW",`Registration failed: ${r instanceof Error?r.message:String(r)}`),null}}function O(s){const t=e=>{e.data?.type==="sw-progress"&&s(e.data)};return navigator.serviceWorker.addEventListener("message",t),()=>navigator.serviceWorker.removeEventListener("message",t)}async function D(){try{const s=await navigator.serviceWorker.getRegistrations();for(const t of s)(t.active?.scriptURL.includes("flutter_service_worker")||t.active?.scriptURL.includes("flutter_sw"))&&(await t.unregister(),a("SW","Unregistered old Flutter service worker"))}catch{}}async function G(s){const t=s.installing||s.waiting||s.active;return t?t.state==="activated"?!0:new Promise(e=>{const r=setTimeout(()=>{e(!1)},4e3);t.addEventListener("statechange",()=>{t.state==="activated"&&(clearTimeout(r),e(!0))})}):!1}function U(s,t=1e3){const e=t*Math.pow(2,s),r=e*.2*Math.random();return e+r}async function j(s,t=1e4){const e=new AbortController,r=setTimeout(()=>e.abort(),t);try{return await fetch(s,{signal:e.signal})}finally{clearTimeout(r)}}async function V(s,t=3,e=1e4){let r;for(let n=0;n<t;n++)try{return await j(s,e)}catch(i){if(r=i,n<t-1){const o=U(n);await new Promise(g=>setTimeout(g,o))}}throw r}function z(){return{hasImageCodecs:J()==="blink"&&typeof ImageDecoder<"u",hasChromiumBreakIterators:typeof Intl<"u"&&"v8BreakIterator"in Intl&&"Segmenter"in Intl,supportsWasmGC:X(),crossOriginIsolated:!!window.crossOriginIsolated,webGLVersion:q()}}function Y(s,t){for(const e of s)if(!(!e.compileTarget&&!e.renderer)&&!(e.compileTarget==="dart2wasm"&&!t.supportsWasmGC)&&!(e.renderer==="skwasm"&&(!t.supportsWasmGC||t.webGLVersion<1)))return e;return s.find(e=>e.compileTarget)??null}function K(s,t){if(s.renderer==="skwasm"){let r="skwasm";return(!t.hasImageCodecs||!t.hasChromiumBreakIterators)&&(r="skwasm_heavy"),{jsFile:`${r}.js`,wasmFile:`${r}.wasm`}}return t.hasChromiumBreakIterators&&t.hasImageCodecs?{jsFile:"canvaskit.js",wasmFile:"chromium/canvaskit.wasm"}:{jsFile:"canvaskit.js",wasmFile:"canvaskit.wasm"}}async function H(s,t,e){const r=K(t,e);if(s){const n=`${A}/${s}`,i=`${n}/${r.jsFile}`;try{if(a("CanvasKit",`Trying CDN: ${i}`),(await V(new Request(i),2,8e3)).ok)return a("CanvasKit","Loaded from CDN"),n}catch{a("CanvasKit","CDN failed, falling back to local")}}return a("CanvasKit",`Using local: ${E}/`),E}function J(){return navigator.vendor==="Google Inc."||navigator.userAgent.includes("Edg/")?"blink":navigator.vendor==="Apple Computer, Inc."?"webkit":navigator.vendor===""&&navigator.userAgent.includes("Firefox")?"gecko":"unknown"}function X(){try{const s=new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,95,1,120,0]);return WebAssembly.validate(s)}catch{return!1}}function q(){try{const s=document.createElement("canvas");if(s.width=1,s.height=1,s.getContext("webgl2"))return 2;if(s.getContext("webgl"))return 1}catch{}return-1}async function Q(s,t,e,r){const n=window;n._flutter??={},n._flutter.buildConfig={engineRevision:t,builds:e},await Z("flutter.js"),a("Flutter","flutter.js loaded");const i=n._flutter;if(!i?.loader)throw new Error("_flutter.loader not available after loading flutter.js");a("Flutter","Starting Flutter loader"),await i.loader.load({config:{canvasKitBaseUrl:s.endsWith("/")?s:`${s}/`},onEntrypointLoaded:async o=>{r(u.dartEntryLoaded,"Initializing Flutter engine"),a("Flutter","Entry point loaded, initializing engine");const g=document.querySelector("flutter-view");g&&(g.style.pointerEvents="none");const c=await o.initializeEngine();r(u.dartEntry,"Starting application"),a("Flutter","Engine initialized, running app"),await c.runApp(),a("Flutter","App started")}})}function Z(s){return new Promise((t,e)=>{const r=document.createElement("script");r.src=s,r.type="application/javascript",r.onload=()=>t(),r.onerror=()=>e(new Error(`Failed to load script: ${s}`)),document.head.appendChild(r)})}async function tt(s){const{build:t,ui:e}=s,r=new F(e),n=new W(r);r.mount();const i=l=>e.minProgress+l/100*(e.maxProgress-e.minProgress),o=(l,d,h)=>{n.updateAndLog(l,i(d),h)};o("init",u.start,"Starting");const g=new Set;let c=0;const _="serviceWorker"in navigator?O(l=>{const d=l;if(d.resourcesCount&&(c=d.resourcesCount),!d.resourceKey||((d.status==="completed"||d.status==="cached"||d.status==="updated")&&g.add(d.resourceKey),c===0))return;const h=g.size,b=Math.min(h/c*100,100),y=u.canvaskit+b/100*(u.assets-u.canvaskit);o("assets",y,`Loaded ${h} of ${c} resources`)}):null;try{o("init",u.init,"Checking environment"),a("Init","Detecting browser capabilities");const l=z();a("Init",`WebGL: ${l.webGLVersion}, WasmGC: ${l.supportsWasmGC}, ImageCodecs: ${l.hasImageCodecs}`),o("sw",u.sw,"Registering service worker"),await N(t.swFilename,t.swVersion),o("canvaskit",u.canvaskit,"Loading rendering engine");const d=Y(t.builds,l);if(!d)throw new Error("No compatible Flutter build found for this browser");const h=await H(t.engineRevision,d,l);o("assets",u.canvaskit+5,"Loading application"),await Q(h,t.engineRevision,t.builds,(b,y)=>{o("dart-entry",b,y)}),_&&_(),window.addEventListener("flutter-first-frame",()=>{n.disposed||n.dispose()},{once:!0})}catch(l){const d=l instanceof Error?l.message:"Failed to load application";console.error("[Bootstrap] Pipeline error:",l),n.error(d)}return n}const x="__INJECT_BOOTSTRAP_CONFIG__";function k(){const s=I(),t=L(s),e=R(x,t);M(x),tt(e).then(r=>{$(r)})}document.readyState==="loading"?document.addEventListener("DOMContentLoaded",k,{once:!0}):k()})();
 ''';

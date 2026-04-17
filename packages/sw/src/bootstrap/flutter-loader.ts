@@ -1,4 +1,5 @@
 import type { FlutterBuildEntry } from '../shared/types';
+import { STAGE_PROGRESS } from '../shared/constants';
 import { logPhase } from './console-logger';
 
 /**
@@ -39,7 +40,7 @@ export async function loadFlutterApp(
     onEntrypointLoaded: async (
       engineInitializer: FlutterEngineInitializer,
     ) => {
-      onProgress(85, 'Initializing Flutter engine');
+      onProgress(STAGE_PROGRESS.dartEntryLoaded, 'Initializing Flutter engine');
       logPhase('Flutter', 'Entry point loaded, initializing engine');
 
       // Disable pointer events during init
@@ -51,7 +52,7 @@ export async function loadFlutterApp(
       }
 
       const appRunner = await engineInitializer.initializeEngine();
-      onProgress(90, 'Starting application');
+      onProgress(STAGE_PROGRESS.dartEntry, 'Starting application');
       logPhase('Flutter', 'Engine initialized, running app');
 
       await appRunner.runApp();

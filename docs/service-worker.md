@@ -52,6 +52,8 @@ interface ResourceEntry {
 - `bootstrap.js`, `sw.js`: Never cached (always fetch fresh)
 - Non-GET requests: Pass-through
 
+> These three files also require `Cache-Control: no-cache` at the HTTP layer. See [Server Configuration](../README.md#server-configuration) for the required headers.
+
 ## Event Handlers
 
 ### Install Event

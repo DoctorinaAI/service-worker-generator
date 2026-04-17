@@ -118,6 +118,7 @@ export interface SWProgressMessage {
   type: 'sw-progress';
   timestamp: number;
   resourcesSize: number;
+  resourcesCount: number;
   resourceName: string;
   resourceUrl: string;
   resourceKey: string;

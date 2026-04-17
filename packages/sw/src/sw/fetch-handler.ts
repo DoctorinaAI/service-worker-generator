@@ -1,13 +1,11 @@
 import type { ResourceManifest, ResourceEntry, SWProgressMessage } from '../shared/types';
 import { ResourceCategory } from '../shared/types';
-import {
-  FETCH_TIMEOUT_MS,
-  MAX_RETRY_ATTEMPTS,
-  NEVER_CACHE_FILES,
-} from '../shared/constants';
-import { getResourceKey, backoffDelay } from '../shared/utils';
+import { NEVER_CACHE_FILES } from '../shared/constants';
+import { getResourceKey, fetchWithRetry } from '../shared/utils';
 import { lazyCacheResponse, getContentCacheName } from './cache-manager';
 import { notifyClients } from './notify';
+
+export { fetchWithRetry, fetchWithTimeout } from '../shared/utils';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -20,6 +18,7 @@ export function handleFetch(
   cachePrefix: string,
   version: string,
   totalResourcesSize: number,
+  totalResourcesCount: number,
 ): void {
   const { request } = event;
 
@@ -45,7 +44,14 @@ export function handleFetch(
   // Root / index.html: network-first
   if (resourceKey === 'index.html' || request.mode === 'navigate') {
     event.respondWith(
-      networkFirst(request, cachePrefix, version, manifest, totalResourcesSize),
+      networkFirst(
+        request,
+        cachePrefix,
+        version,
+        manifest,
+        totalResourcesSize,
+        totalResourcesCount,
+      ),
     );
     return;
   }
@@ -62,6 +68,7 @@ export function handleFetch(
       cachePrefix,
       version,
       totalResourcesSize,
+      totalResourcesCount,
     ),
   );
 }
@@ -75,6 +82,7 @@ async function networkFirst(
   version: string,
   manifest: ResourceManifest,
   totalResourcesSize: number,
+  totalResourcesCount: number,
 ): Promise<Response> {
   const cacheName = getContentCacheName(cachePrefix, version);
   const entry = manifest['index.html'];
@@ -91,6 +99,7 @@ async function networkFirst(
           type: 'sw-progress',
           timestamp: Date.now(),
           resourcesSize: totalResourcesSize,
+          resourcesCount: totalResourcesCount,
           resourceName: 'index.html',
           resourceUrl: request.url,
           resourceKey: 'index.html',
@@ -110,6 +119,7 @@ async function networkFirst(
           type: 'sw-progress',
           timestamp: Date.now(),
           resourcesSize: totalResourcesSize,
+          resourcesCount: totalResourcesCount,
           resourceName: 'index.html',
           resourceUrl: request.url,
           resourceKey: 'index.html',
@@ -134,6 +144,7 @@ async function cacheFirst(
   cachePrefix: string,
   version: string,
   totalResourcesSize: number,
+  totalResourcesCount: number,
 ): Promise<Response> {
   const cacheName = getContentCacheName(cachePrefix, version);
 
@@ -144,6 +155,7 @@ async function cacheFirst(
       type: 'sw-progress',
       timestamp: Date.now(),
       resourcesSize: totalResourcesSize,
+      resourcesCount: totalResourcesCount,
       resourceName: entry.name,
       resourceUrl: request.url,
       resourceKey,
@@ -160,6 +172,7 @@ async function cacheFirst(
       type: 'sw-progress',
       timestamp: Date.now(),
       resourcesSize: totalResourcesSize,
+      resourcesCount: totalResourcesCount,
       resourceName: entry.name,
       resourceUrl: request.url,
       resourceKey,
@@ -180,6 +193,7 @@ async function cacheFirst(
         type: 'sw-progress',
         timestamp: Date.now(),
         resourcesSize: totalResourcesSize,
+        resourcesCount: totalResourcesCount,
         resourceName: entry.name,
         resourceUrl: request.url,
         resourceKey,
@@ -195,6 +209,7 @@ async function cacheFirst(
       type: 'sw-progress',
       timestamp: Date.now(),
       resourcesSize: totalResourcesSize,
+      resourcesCount: totalResourcesCount,
       resourceName: entry.name,
       resourceUrl: request.url,
       resourceKey,
@@ -207,45 +222,3 @@ async function cacheFirst(
   }
 }
 
-/**
- * Fetch with timeout using AbortController.
- */
-export async function fetchWithTimeout(
-  request: Request,
-  timeoutMs = FETCH_TIMEOUT_MS,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(request, { signal: controller.signal });
-    return response;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-/**
- * Fetch with exponential backoff retry.
- */
-export async function fetchWithRetry(
-  request: Request,
-  maxAttempts = MAX_RETRY_ATTEMPTS,
-  timeoutMs = FETCH_TIMEOUT_MS,
-): Promise<Response> {
-  let lastError: unknown;
-
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    try {
-      return await fetchWithTimeout(request, timeoutMs);
-    } catch (error) {
-      lastError = error;
-      if (attempt < maxAttempts - 1) {
-        const delay = backoffDelay(attempt);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  throw lastError;
-}

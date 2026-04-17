@@ -10,10 +10,11 @@ const CIRCUMFERENCE = 2 * Math.PI * PROGRESS_RING_RADIUS;
  */
 export class LoadingWidget {
   private container: HTMLDivElement | null = null;
+  private logoContainer: HTMLDivElement | null = null;
   private progressCircle: SVGCircleElement | null = null;
   private statusText: HTMLSpanElement | null = null;
   private percentageText: HTMLDivElement | null = null;
-  private resetContainer: HTMLDivElement | null = null;
+  private reloadButton: HTMLButtonElement | null = null;
   private styleElement: HTMLStyleElement | null = null;
   private stallTimer: ReturnType<typeof setTimeout> | null = null;
   private currentPercent = 0;
@@ -64,7 +65,7 @@ export class LoadingWidget {
     if (this.disposed || !this.statusText) return;
     this.statusText.textContent = error;
     this.statusText.style.color = '#ff4444';
-    this.showResetButton();
+    this.showReloadOverlay();
   }
 
   /**
@@ -110,6 +111,7 @@ export class LoadingWidget {
     // Logo with progress ring
     const logoContainer = document.createElement('div');
     logoContainer.className = 'sw-logo-container';
+    this.logoContainer = logoContainer;
 
     // SVG progress ring
     const svg = document.createElementNS(SVG_NS, 'svg');
@@ -134,7 +136,11 @@ export class LoadingWidget {
 
     svg.appendChild(bgCircle);
     svg.appendChild(this.progressCircle);
-    logoContainer.appendChild(svg);
+
+    // Artwork wrapper — blurred/dimmed when reload overlay appears
+    const artwork = document.createElement('div');
+    artwork.className = 'sw-logo-artwork';
+    artwork.appendChild(svg);
 
     // Logo image
     if (this.config.logo) {
@@ -142,8 +148,20 @@ export class LoadingWidget {
       img.src = this.config.logo;
       img.className = 'sw-logo-image';
       img.alt = 'Logo';
-      logoContainer.appendChild(img);
+      artwork.appendChild(img);
     }
+
+    logoContainer.appendChild(artwork);
+
+    // Reload icon button overlay (hidden until stall/error)
+    this.reloadButton = document.createElement('button');
+    this.reloadButton.className = 'sw-reload-overlay';
+    this.reloadButton.type = 'button';
+    this.reloadButton.setAttribute('aria-label', 'Reload');
+    this.reloadButton.title = 'Reload';
+    this.reloadButton.innerHTML = this.reloadIconSVG();
+    this.reloadButton.addEventListener('click', () => this.resetCache());
+    logoContainer.appendChild(this.reloadButton);
 
     container.appendChild(logoContainer);
 
@@ -174,24 +192,11 @@ export class LoadingWidget {
       container.appendChild(this.percentageText);
     }
 
-    // Reset button (hidden by default)
-    this.resetContainer = document.createElement('div');
-    this.resetContainer.className = 'sw-reset-container';
-    this.resetContainer.style.display = 'none';
-    const resetBtn = document.createElement('button');
-    resetBtn.className = 'sw-reset-button';
-    resetBtn.textContent = '\u21BB Reset Cache';
-    resetBtn.addEventListener('click', () => this.resetCache());
-    this.resetContainer.appendChild(resetBtn);
-    container.appendChild(this.resetContainer);
-
     return container;
   }
 
-  private showResetButton(): void {
-    if (this.resetContainer) {
-      this.resetContainer.style.display = 'block';
-    }
+  private showReloadOverlay(): void {
+    this.logoContainer?.classList.add('is-stalled');
   }
 
   private resetStallTimer(): void {
@@ -199,7 +204,7 @@ export class LoadingWidget {
     if (!this.disposed && this.currentPercent < 100) {
       this.stallTimer = setTimeout(() => {
         console.warn('[Bootstrap] Loading appears stalled');
-        this.showResetButton();
+        this.showReloadOverlay();
       }, STALLED_TIMEOUT_MS);
     }
   }
@@ -211,11 +216,23 @@ export class LoadingWidget {
     }
   }
 
+  private reloadIconSVG(): string {
+    return (
+      '<svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" ' +
+      'focusable="false" fill="none" stroke="currentColor" stroke-width="2.25" ' +
+      'stroke-linecap="round" stroke-linejoin="round">' +
+      '<path d="M3 12a9 9 0 0 1 15.5-6.3L21 8"/>' +
+      '<path d="M21 3v5h-5"/>' +
+      '<path d="M21 12a9 9 0 0 1-15.5 6.3L3 16"/>' +
+      '<path d="M3 21v-5h5"/>' +
+      '</svg>'
+    );
+  }
+
   private async resetCache(): Promise<void> {
-    const btn = this.resetContainer?.querySelector('button');
-    if (btn) {
-      btn.textContent = '\u23F3 Resetting...';
-      btn.setAttribute('disabled', 'true');
+    if (this.reloadButton) {
+      this.reloadButton.classList.add('is-loading');
+      this.reloadButton.setAttribute('disabled', 'true');
     }
 
     try {
@@ -273,14 +290,28 @@ export class LoadingWidget {
       .sw-logo-container {
         position: relative;
         display: inline-block;
+        width: 140px;
+        height: 140px;
         margin-bottom: 2rem;
+      }
+      .sw-logo-artwork {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: filter 0.45s ease, opacity 0.45s ease, transform 0.45s ease;
+      }
+      .sw-logo-container.is-stalled .sw-logo-artwork {
+        filter: blur(6px) saturate(0.8);
+        opacity: 0.55;
+        transform: scale(0.96);
       }
       .sw-progress-ring {
         position: absolute;
-        top: -10px;
-        left: -10px;
-        width: 140px;
-        height: 140px;
+        inset: 0;
+        width: 100%;
+        height: 100%;
         transform: rotate(-90deg);
       }
       .sw-progress-ring-bg {
@@ -335,31 +366,88 @@ export class LoadingWidget {
         opacity: 0.7;
         margin-top: 0.5rem;
       }
-      .sw-reset-container {
-        margin-top: 2rem;
-      }
-      .sw-reset-button {
-        padding: 12px 24px;
+      .sw-reload-overlay {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 64px;
+        height: 64px;
+        padding: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        border: none;
+        border-radius: 50%;
         background: ${color};
-        border: 2px solid ${color};
-        border-radius: 8px;
-        color: white;
-        font-size: 0.9rem;
-        font-weight: 500;
+        color: #fff;
         cursor: pointer;
-        transition: all 0.3s ease;
+        opacity: 0;
+        pointer-events: none;
+        transform: translate(-50%, -50%) scale(0.6);
+        box-shadow:
+          0 10px 28px rgba(0, 0, 0, 0.28),
+          0 0 0 0 ${colorAlpha};
+        transition:
+          opacity 0.35s ease,
+          transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1),
+          box-shadow 0.3s ease,
+          background-color 0.3s ease;
       }
-      .sw-reset-button:hover {
+      .sw-logo-container.is-stalled .sw-reload-overlay {
+        opacity: 1;
+        pointer-events: auto;
+        transform: translate(-50%, -50%) scale(1);
+        animation: sw-reload-pulse 2.2s ease-out infinite;
+      }
+      .sw-reload-overlay:hover {
+        transform: translate(-50%, -50%) scale(1.08);
+        box-shadow:
+          0 14px 34px rgba(0, 0, 0, 0.35),
+          0 0 0 6px ${colorAlpha};
+        animation: none;
+      }
+      .sw-reload-overlay:active {
+        transform: translate(-50%, -50%) scale(0.94);
+        animation: none;
+      }
+      .sw-reload-overlay:focus-visible {
+        outline: none;
+        box-shadow:
+          0 10px 28px rgba(0, 0, 0, 0.28),
+          0 0 0 4px ${colorAlpha};
+      }
+      .sw-reload-overlay:disabled {
+        cursor: wait;
         opacity: 0.85;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+        animation: none;
       }
-      .sw-reset-button:active { transform: translateY(0); }
-      .sw-reset-button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .sw-reload-overlay svg {
+        transition: transform 0.3s ease;
+      }
+      .sw-reload-overlay:hover svg {
+        transform: rotate(-45deg);
+      }
+      .sw-reload-overlay.is-loading svg {
+        animation: sw-reload-spin 0.9s linear infinite;
+      }
+      @keyframes sw-reload-spin {
+        to { transform: rotate(360deg); }
+      }
+      @keyframes sw-reload-pulse {
+        0% { box-shadow: 0 10px 28px rgba(0,0,0,0.28), 0 0 0 0 ${colorAlpha}; }
+        70% { box-shadow: 0 10px 28px rgba(0,0,0,0.28), 0 0 0 14px transparent; }
+        100% { box-shadow: 0 10px 28px rgba(0,0,0,0.28), 0 0 0 0 transparent; }
+      }
       @media (max-width: 480px) {
+        .sw-logo-container { width: 120px; height: 120px; }
         .sw-logo-image { width: 100px; height: 100px; }
-        .sw-progress-ring { width: 120px; height: 120px; }
+        .sw-reload-overlay { width: 56px; height: 56px; }
         .sw-title { font-size: 1.6rem; }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .sw-logo-container.is-stalled .sw-reload-overlay { animation: none; }
+        .sw-reload-overlay, .sw-reload-overlay svg,
+        .sw-logo-artwork { transition: none; }
       }
     `;
   }
