@@ -271,7 +271,8 @@
       },
       "dependsOn": [
         "ts:build:all",
-        "example:flutter:build:web"
+        "example:flutter:build:web",
+        "example:generate"
       ],
       "dependsOrder": "sequence",
       "group": "build",
@@ -286,22 +287,6 @@
       },
       "dependsOn": [
         "ts:build:all",
-        "example:generate"
-      ],
-      "dependsOrder": "sequence",
-      "group": "build",
-      "problemMatcher": []
-    },
-    {
-      "label": "pipeline:all",
-      "detail": "Full pipeline: build TS → build Flutter → generate SW → run generator",
-      "icon": {
-        "color": "terminal.ansiMagenta",
-        "id": "star-full"
-      },
-      "dependsOn": [
-        "ts:build:all",
-        "example:flutter:build:web",
         "example:generate"
       ],
       "dependsOrder": "sequence",
