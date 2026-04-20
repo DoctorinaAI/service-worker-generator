@@ -106,7 +106,10 @@ async function networkFirst(
       await notifyIndex('cached');
       return cached;
     }
-    return new Response('Offline', { status: 503 });
+    return new Response('Offline', {
+      status: 503,
+      headers: { 'Content-Type': 'text/plain' },
+    });
   };
 
   try {
@@ -197,6 +200,23 @@ async function cacheFirst(
         loaded: entry.size,
         status: 'completed',
       });
+    } else {
+      // Non-OK response is still a user-visible failure: emit an error
+      // progress event so the bootstrap UI can surface it instead of
+      // hanging on 'loading'.
+      await notifyClients(self, {
+        type: 'sw-progress',
+        timestamp: Date.now(),
+        resourcesSize: totalResourcesSize,
+        resourcesCount: totalResourcesCount,
+        resourceName: entry.name,
+        resourceUrl: request.url,
+        resourceKey,
+        resourceSize: entry.size,
+        loaded: 0,
+        status: 'error',
+        error: `HTTP ${response.status}`,
+      });
     }
 
     return response;
@@ -214,6 +234,9 @@ async function cacheFirst(
       status: 'error',
       error: error instanceof Error ? error.message : String(error),
     });
-    return new Response('Network error', { status: 503 });
+    return new Response('Network error', {
+      status: 503,
+      headers: { 'Content-Type': 'text/plain' },
+    });
   }
 }

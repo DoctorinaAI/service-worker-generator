@@ -28,6 +28,10 @@ export const MAX_RETRY_ATTEMPTS = 3;
 /** Base delay for exponential backoff in milliseconds */
 export const RETRY_BASE_DELAY_MS = 1_000;
 
+/** Max parallel fetches during SW install precache. Keeps us under HTTP/2
+ * multiplexing limits and spares memory on large manifests. */
+export const PRECACHE_CONCURRENCY = 6;
+
 /** Default progress range */
 export const DEFAULT_MIN_PROGRESS = 0;
 export const DEFAULT_MAX_PROGRESS = 90;

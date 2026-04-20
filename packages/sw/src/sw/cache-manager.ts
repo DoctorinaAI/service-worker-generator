@@ -1,7 +1,15 @@
 import type { ResourceEntry, ResourceManifest } from '../shared/types';
 import { ResourceCategory } from '../shared/types';
-import { MANIFEST_CACHE_SUFFIX, TEMP_CACHE_SUFFIX } from '../shared/constants';
-import { cacheBustUrl, fetchWithRetry } from '../shared/utils';
+import {
+  MANIFEST_CACHE_SUFFIX,
+  PRECACHE_CONCURRENCY,
+  TEMP_CACHE_SUFFIX,
+} from '../shared/constants';
+import {
+  cacheBustUrl,
+  fetchWithRetry,
+  mapWithConcurrency,
+} from '../shared/utils';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -48,29 +56,27 @@ export async function precacheResources(
 
   const coreFailures: string[] = [];
 
-  await Promise.all(
-    entries.map(async ([path, entry]) => {
-      const url = cacheBustUrl(path, entry.hash);
-      const request = new Request(url, { cache: 'reload' });
-      try {
-        const response = await fetchWithRetry(request);
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        await cache.put(new Request(path), response);
-        if (onEach) await onEach(path, entry);
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        const msg = `[SW] Precache failed for ${path}: ${reason}`;
-        if (entry.category === ResourceCategory.Core) {
-          coreFailures.push(`${path} (${reason})`);
-          console.error(msg);
-        } else {
-          console.warn(msg);
-        }
+  await mapWithConcurrency(entries, PRECACHE_CONCURRENCY, async ([path, entry]) => {
+    const url = cacheBustUrl(path, entry.hash);
+    const request = new Request(url, { cache: 'reload' });
+    try {
+      const response = await fetchWithRetry(request);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
       }
-    }),
-  );
+      await cache.put(new Request(path), response);
+      if (onEach) await onEach(path, entry);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const msg = `[SW] Precache failed for ${path}: ${reason}`;
+      if (entry.category === ResourceCategory.Core) {
+        coreFailures.push(`${path} (${reason})`);
+        console.error(msg);
+      } else {
+        console.warn(msg);
+      }
+    }
+  });
 
   if (coreFailures.length > 0) {
     throw new Error(
@@ -95,6 +101,16 @@ export async function lazyCacheResponse(
 /**
  * Atomic cache swap: move resources from temp cache to content cache.
  * Compares against previous manifest to detect changed resources.
+ *
+ * Ordering matters for crash-resilience:
+ *   1. copy temp → content (idempotent; survives partial crashes)
+ *   2. evict stale entries that are absent from the new manifest
+ *   3. persist the new manifest (only after content is coherent)
+ *   4. drop the temp cache
+ *
+ * If the SW dies between steps, the content cache is never in a state
+ * that advertises the new manifest without the new files, and
+ * `cacheFirst` self-heals any gaps via lazy fetch.
  */
 export async function swapCaches(
   prefix: string,
@@ -112,37 +128,61 @@ export async function swapCaches(
   // Load previous manifest if exists
   const previousManifest = await loadPreviousManifest(manifestCache);
 
-  // Step 1: evict stale entries from the content cache *first*, based on
-  // the previous manifest. Doing this before the temp→content copy means a
-  // freshly-precached entry (changed hash, present in temp) cannot be
-  // accidentally deleted by the eviction pass.
+  // Step 1: copy freshly-precached resources from temp → content in parallel.
+  // Doing copy first means the content cache is always a superset of what's
+  // advertised by the previous manifest during the swap.
+  const tempKeys = await tempCache.keys();
+  const refreshedPaths = new Set<string>();
+  await Promise.all(
+    tempKeys.map(async (request) => {
+      const response = await tempCache.match(request);
+      if (response) {
+        await contentCache.put(request, response);
+        refreshedPaths.add(resourceKeyOf(request.url));
+      }
+    }),
+  );
+
+  // Step 2: evict entries whose old copy is now stale. An entry is stale if
+  //   (a) it vanished from the new manifest, or
+  //   (b) its hash changed AND it was not re-precached this swap (Optional
+  //       tier): we want cacheFirst to lazily refetch the new bytes rather
+  //       than serve the old.
+  // Entries that WERE just re-copied from temp (step 1) must not be touched.
   if (previousManifest) {
     await Promise.all(
       Object.entries(previousManifest).map(async ([path, oldEntry]) => {
         const newEntry = manifest[path];
-        if (!newEntry || newEntry.hash !== oldEntry.hash) {
+        const gone = !newEntry;
+        const staleOptional =
+          !!newEntry &&
+          newEntry.hash !== oldEntry.hash &&
+          !refreshedPaths.has(path);
+        if (gone || staleOptional) {
           await contentCache.delete(new Request(path));
         }
       }),
     );
   }
 
-  // Step 2: copy freshly-precached resources from temp → content in parallel.
-  const tempKeys = await tempCache.keys();
-  await Promise.all(
-    tempKeys.map(async (request) => {
-      const response = await tempCache.match(request);
-      if (response) {
-        await contentCache.put(request, response);
-      }
-    }),
-  );
-
-  // Save current manifest for future comparisons
+  // Step 3: persist the new manifest only after the content cache is coherent.
   await saveManifest(manifestCache, manifest);
 
-  // Delete temp cache
+  // Step 4: drop temp cache.
   await caches.delete(tempCacheName);
+}
+
+/**
+ * Reduce a Cache-key URL to the manifest-relative path. Cache keys in the
+ * SW scope are absolute URLs (`https://host/main.dart.js`) while the
+ * manifest is keyed by relative paths (`main.dart.js`).
+ */
+function resourceKeyOf(url: string): string {
+  try {
+    return new URL(url).pathname.replace(/^\//, '') || 'index.html';
+  } catch {
+    return url;
+  }
 }
 
 /**

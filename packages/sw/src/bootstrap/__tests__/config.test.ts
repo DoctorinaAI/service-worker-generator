@@ -94,4 +94,35 @@ describe('resolveConfig', () => {
     expect(resolved.build.engineRevision).toBe('abc123');
     expect(resolved.build.swVersion).toBe('12345');
   });
+
+  it('applies uiDefaults from buildConfig when user config is empty', () => {
+    const cfg: BuildConfig = {
+      ...buildConfig,
+      uiDefaults: {
+        logo: 'brand.png',
+        title: 'Baked Brand',
+        theme: 'dark',
+        color: '#123456',
+        minProgress: 5,
+        maxProgress: 95,
+      },
+    };
+    const resolved = resolveConfig(cfg, {});
+    expect(resolved.ui.logo).toBe('brand.png');
+    expect(resolved.ui.title).toBe('Baked Brand');
+    expect(resolved.ui.theme).toBe('dark');
+    expect(resolved.ui.color).toBe('#123456');
+    expect(resolved.ui.minProgress).toBe(5);
+    expect(resolved.ui.maxProgress).toBe(95);
+  });
+
+  it('data-config overrides uiDefaults from buildConfig', () => {
+    const cfg: BuildConfig = {
+      ...buildConfig,
+      uiDefaults: { title: 'Baked', color: '#000000' },
+    };
+    const resolved = resolveConfig(cfg, { title: 'Runtime', color: '#ffffff' });
+    expect(resolved.ui.title).toBe('Runtime');
+    expect(resolved.ui.color).toBe('#ffffff');
+  });
 });

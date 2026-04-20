@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { handleFetch } from '../fetch-handler';
+import { notifyClients } from '../notify';
 import type { ResourceManifest } from '../../shared/types';
 import { ResourceCategory } from '../../shared/types';
 import {
@@ -16,6 +17,8 @@ import {
 vi.mock('../notify', () => ({
   notifyClients: vi.fn(async () => undefined),
 }));
+
+const mockedNotify = vi.mocked(notifyClients);
 
 const ORIGIN = self.location.origin;
 
@@ -338,5 +341,23 @@ describe('cacheFirst (via handleFetch for Core/Required/Optional)', () => {
     const response = await event._responded!;
     expect(response.status).toBe(404);
     expect(await cache.match(new Request('main.dart.js'))).toBeUndefined();
+  });
+
+  it('emits an error progress event when the fetch returns a non-ok status', async () => {
+    mockedNotify.mockClear();
+    installMockFetch(async () => textResponse('bad', 500));
+    await mockCaches.open('app-v1');
+
+    const event = makeEvent(`${ORIGIN}/main.dart.js`);
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', 0, 0);
+    await event._responded!;
+
+    const errorCall = mockedNotify.mock.calls.find(
+      ([, msg]) =>
+        (msg as { status?: string; resourceKey?: string }).status === 'error' &&
+        (msg as { resourceKey?: string }).resourceKey === 'main.dart.js',
+    );
+    expect(errorCall).toBeDefined();
+    expect((errorCall![1] as { error?: string }).error).toMatch(/HTTP 500/);
   });
 });

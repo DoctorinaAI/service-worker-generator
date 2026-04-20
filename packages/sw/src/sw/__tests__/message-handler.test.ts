@@ -54,6 +54,24 @@ describe('createMessageHandler', () => {
     });
   });
 
+  it('echoes requestId back on getVersion replies for request correlation', () => {
+    const handler = createMessageHandler('v1');
+    const event = makeEvent({ type: 'getVersion', requestId: 'req-42' });
+    handler(event as unknown as ExtendableMessageEvent);
+    expect(event.source!.postMessage).toHaveBeenCalledWith({
+      type: 'version',
+      version: 'v1',
+      requestId: 'req-42',
+    });
+  });
+
+  it('also accepts skipWaiting as a structured message', () => {
+    const handler = createMessageHandler('v1');
+    const event = makeEvent({ type: 'skipWaiting' });
+    handler(event as unknown as ExtendableMessageEvent);
+    expect(skipWaitingSpy).toHaveBeenCalledOnce();
+  });
+
   it('silently ignores getVersion when there is no source', () => {
     const handler = createMessageHandler('v1');
     const event = makeEvent({ type: 'getVersion' }, false);

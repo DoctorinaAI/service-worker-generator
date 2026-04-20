@@ -291,9 +291,9 @@ describe('swapCaches', () => {
   });
 
   it('keeps the freshly-precached entry when its hash changed vs previous manifest', async () => {
-    // Regression: the previous eviction pass ran AFTER the temp→content
-    // copy, so a hash-changed entry that had just been re-precached was
-    // incorrectly deleted. The fix reorders so eviction runs first.
+    // Regression: copy must run BEFORE eviction so a re-precached hash-
+    // changed entry is present in content when eviction walks the old
+    // manifest, and thus survives the pass.
     const content = await mockCaches.open('app-v1');
     await content.put(new Request('main.dart.js'), textResponse('old-body'));
 

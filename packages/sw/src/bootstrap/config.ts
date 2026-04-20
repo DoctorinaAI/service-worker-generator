@@ -43,21 +43,30 @@ export function findBootstrapScript(): HTMLScriptElement | null {
 
 /**
  * Merge user config with defaults to produce a fully resolved config.
+ *
+ * Precedence: data-config attribute > Dart CLI `uiDefaults` > hardcoded
+ * fallbacks. This lets project owners bake brand defaults into
+ * `bootstrap.js` at build time while still letting a given HTML page
+ * override them per-deployment via the `data-config` attribute.
  */
 export function resolveConfig(
   buildConfig: BuildConfig,
   userConfig: BootstrapConfig,
 ): ResolvedConfig {
+  const d = buildConfig.uiDefaults ?? {};
   return {
     build: buildConfig,
     ui: {
-      logo: userConfig.logo ?? '',
-      title: userConfig.title ?? '',
-      theme: userConfig.theme ?? 'auto',
-      color: userConfig.color ?? '#25D366',
-      showPercentage: userConfig.showPercentage ?? true,
-      minProgress: userConfig.minProgress ?? DEFAULT_MIN_PROGRESS,
-      maxProgress: userConfig.maxProgress ?? DEFAULT_MAX_PROGRESS,
+      logo: userConfig.logo ?? d.logo ?? '',
+      title: userConfig.title ?? d.title ?? '',
+      theme: userConfig.theme ?? d.theme ?? 'auto',
+      color: userConfig.color ?? d.color ?? '#25D366',
+      showPercentage:
+        userConfig.showPercentage ?? d.showPercentage ?? true,
+      minProgress:
+        userConfig.minProgress ?? d.minProgress ?? DEFAULT_MIN_PROGRESS,
+      maxProgress:
+        userConfig.maxProgress ?? d.maxProgress ?? DEFAULT_MAX_PROGRESS,
     },
   };
 }

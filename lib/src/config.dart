@@ -96,11 +96,20 @@ class GeneratorConfig {
     final parser = _buildArgParser();
     final results = parser.parse(args);
 
-    if (results['help'] as bool) {
+    if (results['help'] as bool? ?? false) {
       // ignore: avoid_print
       print('Usage: dart run sw:generate [options]\n');
       // ignore: avoid_print
       print(parser.usage);
+      // ignore: avoid_print
+      print('\nConfig precedence: CLI args > YAML (sw.yaml) > env > defaults');
+      // ignore: avoid_print
+      print(
+        '\nEnvironment variables: SW_INPUT, SW_OUTPUT, SW_BOOTSTRAP_OUTPUT,\n'
+        '  SW_PREFIX, SW_VERSION, SW_GLOB, SW_EXCLUDE_GLOB, SW_CORE,\n'
+        '  SW_REQUIRED, SW_OPTIONAL, SW_IGNORE, SW_THEME, SW_LOGO,\n'
+        '  SW_TITLE, SW_COLOR, SW_MIN_PROGRESS, SW_MAX_PROGRESS',
+      );
       io.exit(0);
     }
 
@@ -108,17 +117,21 @@ class GeneratorConfig {
     final yamlConfig = _loadYamlConfig(results['config'] as String?);
 
     String resolve(String name, String envName, String defaultValue) {
-      final cliValue = results[name] as String?;
-      if (cliValue != null) return cliValue;
+      // `results[name]` returns the ArgParser default when the flag wasn't
+      // explicitly passed, which would shadow YAML/env and break the
+      // advertised precedence. Use `wasParsed` to tell them apart.
+      if (results.wasParsed(name)) return results[name] as String;
       final yamlValue = yamlConfig[name]?.toString();
       if (yamlValue != null) return yamlValue;
-      final envValue = io.Platform.environment[envName];
-      if (envValue != null) return envValue;
+      if (envName.isNotEmpty) {
+        final envValue = io.Platform.environment[envName];
+        if (envValue != null) return envValue;
+      }
       return defaultValue;
     }
 
-    Set<String> resolveGlobs(String name, String defaultValue) {
-      final raw = resolve(name, '', defaultValue);
+    Set<String> resolveGlobs(String name, String envName, String defaultValue) {
+      final raw = resolve(name, envName, defaultValue);
       return raw.isEmpty
           ? const {}
           : raw
@@ -126,6 +139,18 @@ class GeneratorConfig {
                 .map((e) => e.trim())
                 .where((e) => e.isNotEmpty)
                 .toSet();
+    }
+
+    int parseIntOrFail(String name, String envName, int defaultValue) {
+      final raw = resolve(name, envName, defaultValue.toString());
+      final parsed = int.tryParse(raw);
+      if (parsed == null) {
+        io.stderr.writeln(
+          'Error: --$name="$raw" is not a valid integer.',
+        );
+        io.exit(64);
+      }
+      return parsed;
     }
 
     return GeneratorConfig(
@@ -142,12 +167,12 @@ class GeneratorConfig {
         'SW_VERSION',
         DateTime.now().millisecondsSinceEpoch.toString(),
       ),
-      includeGlobs: resolveGlobs('glob', '**'),
-      excludeGlobs: resolveGlobs('no-glob', ''),
-      coreGlobs: resolveGlobs('core', ''),
-      requiredGlobs: resolveGlobs('required', ''),
-      optionalGlobs: resolveGlobs('optional', ''),
-      ignoreGlobs: resolveGlobs('ignore', ''),
+      includeGlobs: resolveGlobs('glob', 'SW_GLOB', '**'),
+      excludeGlobs: resolveGlobs('no-glob', 'SW_EXCLUDE_GLOB', ''),
+      coreGlobs: resolveGlobs('core', 'SW_CORE', ''),
+      requiredGlobs: resolveGlobs('required', 'SW_REQUIRED', ''),
+      optionalGlobs: resolveGlobs('optional', 'SW_OPTIONAL', ''),
+      ignoreGlobs: resolveGlobs('ignore', 'SW_IGNORE', ''),
       keepMaps: results['keep-maps'] as bool? ?? false,
       noCleanup: results['no-cleanup'] as bool? ?? false,
       comments: results['comments'] as bool? ?? false,
@@ -155,8 +180,8 @@ class GeneratorConfig {
       logo: resolve('logo', 'SW_LOGO', ''),
       title: resolve('title', 'SW_TITLE', ''),
       color: resolve('color', 'SW_COLOR', '#25D366'),
-      minProgress: int.tryParse(resolve('min-progress', '', '0')) ?? 0,
-      maxProgress: int.tryParse(resolve('max-progress', '', '90')) ?? 90,
+      minProgress: parseIntOrFail('min-progress', 'SW_MIN_PROGRESS', 0),
+      maxProgress: parseIntOrFail('max-progress', 'SW_MAX_PROGRESS', 90),
     );
   }
 

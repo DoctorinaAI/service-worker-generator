@@ -2,6 +2,8 @@ import 'dart:io' as io;
 
 import 'package:path/path.dart' as p;
 
+import 'files.dart';
+
 /// Files to remove from Flutter build output.
 const List<String> _flutterFilesToRemove = [
   'flutter_bootstrap.js',
@@ -72,11 +74,10 @@ void _pruneCanvaskit(io.Directory buildDir, Set<String> keep) {
   if (!canvaskitDir.existsSync()) return;
 
   var removed = 0;
+  final buildUrl = pathToUrl(buildDir.path);
   for (final entity in canvaskitDir.listSync(recursive: true)) {
     if (entity is! io.File) continue;
-    final relative = p.url.joinAll(
-      p.split(p.relative(entity.path, from: buildDir.path)),
-    );
+    final relative = p.url.relative(pathToUrl(entity.path), from: buildUrl);
     if (keep.contains(relative)) continue;
     entity.deleteSync();
     removed++;

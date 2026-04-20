@@ -14,7 +14,11 @@ import { createMessageHandler } from './message-handler';
 
 declare const self: ServiceWorkerGlobalScope;
 
-// Configuration injected by the Dart CLI at generation time.
+// Configuration injected by the Dart CLI at generation time. The literal
+// below is replaced with a JSON object during `dart run sw:generate`;
+// `injector.dart` throws a StateError if the placeholder is missing, so
+// we don't duplicate that check here (and we can't, because the bundler
+// would DCE it out based on the pre-injection string type).
 const config: SWConfig = "__INJECT_SW_CONFIG__" as unknown as SWConfig;
 
 const { cachePrefix, version, manifest } = config;

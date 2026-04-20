@@ -157,5 +157,52 @@ void main() {
 
       expect(result, contains('"builds":[]'));
     });
+
+    test('omits uiDefaults when nothing was customised', () {
+      const template = 'c="__INJECT_BOOTSTRAP_CONFIG__"';
+      const config = GeneratorConfig(inputDir: 'build/web', version: '1');
+
+      final result = injectBootstrapConfig(
+        template: template,
+        engineRevision: 'rev',
+        swVersion: '1',
+        swFilename: 'sw.js',
+        builds: const [],
+        config: config,
+      );
+
+      expect(result, isNot(contains('uiDefaults')));
+    });
+
+    test('bakes uiDefaults from CLI/YAML config into the bootstrap', () {
+      const template = 'c="__INJECT_BOOTSTRAP_CONFIG__"';
+      const config = GeneratorConfig(
+        inputDir: 'build/web',
+        version: '1',
+        logo: 'icons/logo.png',
+        title: 'My App',
+        theme: 'dark',
+        color: '#ff0000',
+        minProgress: 5,
+        maxProgress: 95,
+      );
+
+      final result = injectBootstrapConfig(
+        template: template,
+        engineRevision: 'rev',
+        swVersion: '1',
+        swFilename: 'sw.js',
+        builds: const [],
+        config: config,
+      );
+
+      expect(result, contains('"uiDefaults":'));
+      expect(result, contains('"logo":"icons/logo.png"'));
+      expect(result, contains('"title":"My App"'));
+      expect(result, contains('"theme":"dark"'));
+      expect(result, contains('"color":"#ff0000"'));
+      expect(result, contains('"minProgress":5'));
+      expect(result, contains('"maxProgress":95'));
+    });
   });
 }

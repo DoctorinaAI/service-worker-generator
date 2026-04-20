@@ -50,10 +50,10 @@ describe('notifyClients', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('keeps posting to remaining clients if one throws (current behavior: surfaces)', async () => {
-    // postMessage is synchronous; we record that notifyClients propagates
-    // throws from the first client synchronously, so the second client is
-    // skipped. This locks the current behavior for regression detection.
+  it('keeps posting to remaining clients if one throws', async () => {
+    // Regression: a single dead client (channel closed) must not abort the
+    // iteration — every healthy client should still receive the progress
+    // message.
     const throwing = createMockClient('bad');
     throwing.postMessage = vi.fn(() => {
       throw new Error('client-gone');
@@ -61,9 +61,18 @@ describe('notifyClients', () => {
     const ok = createMockClient('good');
     const sw = createMockSwScope({ clients: [throwing, ok] });
 
+    const warnSpy = vi
+      .spyOn(console, 'warn')
+      .mockImplementation(() => undefined);
+
     await expect(
       notifyClients(sw as unknown as ServiceWorkerGlobalScope, SAMPLE),
-    ).rejects.toThrow('client-gone');
-    expect(ok.postMessage).not.toHaveBeenCalled();
+    ).resolves.toBeUndefined();
+
+    expect(throwing.postMessage).toHaveBeenCalledWith(SAMPLE);
+    expect(ok.postMessage).toHaveBeenCalledWith(SAMPLE);
+    expect(warnSpy).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
   });
 });

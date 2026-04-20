@@ -15,8 +15,10 @@ import { logVersionBanner } from './console-logger';
 import { installGlobalAPI } from './api';
 import { runPipeline } from './pipeline';
 
-// Build-time configuration injected by the Dart CLI.
-const buildConfig: BuildConfig = "__INJECT_BOOTSTRAP_CONFIG__" as unknown as BuildConfig;
+// Build-time configuration injected by the Dart CLI. See sw/index.ts for
+// why there is no runtime validation here.
+const buildConfig: BuildConfig =
+  "__INJECT_BOOTSTRAP_CONFIG__" as unknown as BuildConfig;
 
 // Initialize when the DOM is ready
 function init(): void {

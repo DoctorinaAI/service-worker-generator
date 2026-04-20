@@ -32,9 +32,17 @@ Future<void> generate(GeneratorConfig config) async {
   // 2. Extract Flutter build info
   io.stdout.writeln('\nParsing Flutter build config...');
   final buildInfo = extractFlutterBuildInfo(buildDir);
-  io.stdout.writeln(
-    '  Engine: ${buildInfo.engineRevision.substring(0, 10)}...',
-  );
+  if (buildInfo.engineRevision.isEmpty) {
+    throw StateError(
+      'Flutter buildConfig is missing engineRevision. '
+      'Re-run "flutter build web" to regenerate flutter_bootstrap.js.',
+    );
+  }
+  final revision = buildInfo.engineRevision;
+  final shortRevision = revision.length > 10
+      ? '${revision.substring(0, 10)}...'
+      : revision;
+  io.stdout.writeln('  Engine: $shortRevision');
   final renderers = getConfiguredRenderers(buildInfo);
   io.stdout.writeln('  Renderers: ${renderers.join(", ")}');
   io.stdout.writeln('  Builds: ${buildInfo.builds.length}');
@@ -87,6 +95,19 @@ Future<void> generate(GeneratorConfig config) async {
     version: config.version,
     manifest: manifest,
   );
+
+  // Warn when the embedded manifest gets unreasonably large: the entire
+  // JSON ships inside sw.js on every install, so a 10 MB+ manifest means
+  // every client pays that on upgrade. Usually means Optional categorisation
+  // is overly permissive.
+  const manifestWarnLimit = 10 * 1024 * 1024;
+  if (swContent.length > manifestWarnLimit) {
+    io.stderr.writeln(
+      'Warning: sw.js is ${_formatBytes(swContent.length)} '
+      '(> ${_formatBytes(manifestWarnLimit)}). Consider tightening '
+      'optional/ignore globs or removing large assets from the manifest.',
+    );
+  }
 
   final bootstrapContent = injectBootstrapConfig(
     template: bootstrapTemplate,

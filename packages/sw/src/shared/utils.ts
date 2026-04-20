@@ -82,6 +82,37 @@ export async function fetchWithTimeout(
 }
 
 /**
+ * Run an array of async tasks with bounded concurrency.
+ *
+ * Precache can touch hundreds of files; without this limiter we'd burst
+ * them all onto the network in one `Promise.all`, which browsers cap
+ * anyway but which also risks triggering origin-side rate-limits and
+ * burning RAM on buffered response clones.
+ */
+export async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const n = items.length;
+  const results = new Array<R>(n);
+  if (n === 0) return results;
+  const size = Math.max(1, Math.min(limit, n));
+  let cursor = 0;
+
+  async function run(): Promise<void> {
+    while (true) {
+      const i = cursor++;
+      if (i >= n) return;
+      results[i] = await worker(items[i]!, i);
+    }
+  }
+
+  await Promise.all(Array.from({ length: size }, run));
+  return results;
+}
+
+/**
  * Fetch with exponential backoff retry.
  */
 export async function fetchWithRetry(
