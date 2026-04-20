@@ -3,8 +3,12 @@ import { STAGE_PROGRESS } from '../shared/constants';
 import { logPhase } from './console-logger';
 
 /**
- * Dynamically load Flutter's flutter.js and call its loader.
- * flutter.js must exist in the build output.
+ * Call Flutter's loader to start the app.
+ *
+ * The generator prepends Flutter's `flutter.js` IIFE to `bootstrap.js` at
+ * generation time, so `window._flutter.loader` is already defined by the
+ * time this runs — no runtime script fetch, no hard dependency on a
+ * separate `flutter.js` file being present on the server.
  */
 export async function loadFlutterApp(
   canvasKitBaseUrl: string,
@@ -12,21 +16,18 @@ export async function loadFlutterApp(
   builds: FlutterBuildEntry[],
   onProgress: (percent: number, message: string) => void,
 ): Promise<void> {
-  // Flutter's FlutterLoader.load() reads _flutter.buildConfig to pick the
-  // compatible build. Seed it before loading flutter.js so the loader
-  // doesn't throw "FlutterLoader.load requires _flutter.buildConfig to be set".
+  // FlutterLoader.load() reads _flutter.buildConfig to pick the compatible
+  // build, so seed it before invoking the loader.
   const w = window as FlutterWindow;
   w._flutter ??= {};
   w._flutter.buildConfig = { engineRevision, builds };
 
-  // Load flutter.js dynamically
-  await loadScript('flutter.js');
-  logPhase('Flutter', 'flutter.js loaded');
-
-  // Wait for _flutter.loader to be available
   const flutter = w._flutter;
   if (!flutter?.loader) {
-    throw new Error('_flutter.loader not available after loading flutter.js');
+    throw new Error(
+      '_flutter.loader not available — flutter.js was not inlined ' +
+        'into bootstrap.js (regenerate with "dart run sw:generate")',
+    );
   }
 
   logPhase('Flutter', 'Starting Flutter loader');
@@ -58,20 +59,6 @@ export async function loadFlutterApp(
       await appRunner.runApp();
       logPhase('Flutter', 'App started');
     },
-  });
-}
-
-/**
- * Load a script dynamically.
- */
-function loadScript(src: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = src;
-    script.type = 'application/javascript';
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error(`Failed to load script: ${src}`));
-    document.head.appendChild(script);
   });
 }
 

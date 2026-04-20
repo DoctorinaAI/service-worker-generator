@@ -43,7 +43,6 @@ const Set<String> _defaultIgnorePatterns = {
   'flutter_bootstrap.js',
   'flutter_service_worker.js',
   'flutter.js',
-  'version.json',
 };
 
 /// File extensions that are always cached as optional regardless of size.

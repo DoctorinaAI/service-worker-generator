@@ -40,13 +40,13 @@ Or add as a dev dependency:
 
 ```yaml
 dev_dependencies:
-  sw: ^0.1.1
+  sw: ^0.1.2
 ```
 
 Pin the minor version in CI to avoid surprise template changes between builds:
 
 ```shell
-dart pub global activate sw ^0.1.1
+dart pub global activate sw ^0.1.2
 ```
 
 ## Quick Start
@@ -74,7 +74,7 @@ And automatically:
 
 - Extracts `engineRevision` and build config from Flutter's output
 - Categorizes all files (Core/Required/Optional/Ignore)
-- Removes Flutter's deprecated files (`flutter_bootstrap.js`, `flutter_service_worker.js`, `version.json`)
+- Removes Flutter's deprecated files (`flutter_bootstrap.js`, `flutter_service_worker.js`, `flutter.js` — its loader is inlined into `bootstrap.js`)
 - Removes `.js.map` and `.js.symbols` files (unless `--keep-maps`)
 - Replaces `{{sw_version}}` placeholders in `index.html`
 
@@ -261,12 +261,13 @@ In your CI pipeline, after `flutter build web`, delete the dev `index.html` and 
 flutter build web --release --wasm --base-href=/ -o build/web
 
 # 2. Swap: prod template replaces dev template inside build/web/
-rm -f build/web/index.html build/web/flutter.js
+rm -f build/web/index.html
 mv build/web/index.prod.html build/web/index.html
 
 # 3. Generate sw.js + bootstrap.js, inject {{sw_version}} into index.html,
-#    and auto-remove flutter_service_worker.js / flutter_bootstrap.js / version.json
-dart pub global activate sw ^0.1.0
+#    and auto-remove flutter_bootstrap.js / flutter_service_worker.js / flutter.js
+#    (flutter.js is inlined into bootstrap.js, so it's dropped from the output).
+dart pub global activate sw ^0.1.2
 dart pub global run sw:generate --version="$(git rev-parse --short=8 HEAD)"
 ```
 

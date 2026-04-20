@@ -89,8 +89,7 @@ User's build/web/{sw.js, bootstrap.js} (final output)
 **Ignore:**
 - `*.map`, `*.symbols`, `assets/NOTICES`
 - `sw.js`, `bootstrap.js`, `index.html`
-- `flutter_bootstrap.js`, `flutter_service_worker.js`, `flutter.js`
-- `version.json`
+- `flutter_bootstrap.js`, `flutter_service_worker.js`, `flutter.js` (`flutter.js` is deleted after its loader is inlined into `bootstrap.js`)
 - Files larger than the optional size threshold
 
 Users can override categorization via CLI args or YAML config using glob patterns.

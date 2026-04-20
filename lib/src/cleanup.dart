@@ -5,10 +5,16 @@ import 'package:path/path.dart' as p;
 import 'files.dart';
 
 /// Files to remove from Flutter build output.
+///
+/// `flutter.js` is embedded into the generated `bootstrap.js` at generation
+/// time, so we remove it from the deployed output — leaving it in place
+/// would invite hosts with SPA rewrites (e.g. Firebase) to serve `index.html`
+/// for a missing `flutter.js`, reintroducing the stale-script trap this
+/// generator is meant to avoid.
 const List<String> _flutterFilesToRemove = [
   'flutter_bootstrap.js',
   'flutter_service_worker.js',
-  'version.json',
+  'flutter.js',
   '.last_build_id',
 ];
 
