@@ -118,7 +118,7 @@ Future<void> generate(GeneratorConfig config) async {
     );
   }
 
-  final bootstrapContent = injectBootstrapConfig(
+  final injectedBootstrap = injectBootstrapConfig(
     template: bootstrapTemplate,
     engineRevision: buildInfo.engineRevision,
     swVersion: effectiveVersion,
@@ -126,6 +126,20 @@ Future<void> generate(GeneratorConfig config) async {
     builds: buildInfo.builds,
     config: config,
   );
+
+  // Prepend Flutter's flutter.js so bootstrap.js is self-contained — no
+  // runtime dependency on flutter.js being served separately. Hosts with
+  // SPA rewrites (Firebase, etc.) otherwise serve index.html for a missing
+  // flutter.js, breaking the loader with "Unexpected token '<'".
+  final flutterJsFile = io.File(p.join(buildDir.path, 'flutter.js'));
+  if (!flutterJsFile.existsSync()) {
+    throw StateError(
+      'flutter.js not found in ${buildDir.path}. '
+      'Re-run "flutter build web" to regenerate it.',
+    );
+  }
+  final bootstrapContent = '${flutterJsFile.readAsStringSync()}\n'
+      '$injectedBootstrap';
 
   // 6. Write output files
   io.File(p.join(buildDir.path, config.swOutput)).writeAsStringSync(swContent);

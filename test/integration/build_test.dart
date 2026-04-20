@@ -110,6 +110,7 @@ void main() {
       io.File(p.join(tempDir.path, 'flutter_service_worker.js')).existsSync(),
       isTrue,
     );
+    expect(io.File(p.join(tempDir.path, 'flutter.js')).existsSync(), isTrue);
     expect(io.File(p.join(tempDir.path, 'version.json')).existsSync(), isTrue);
 
     final config = GeneratorConfig(
@@ -127,7 +128,9 @@ void main() {
       io.File(p.join(tempDir.path, 'flutter_service_worker.js')).existsSync(),
       isFalse,
     );
-    expect(io.File(p.join(tempDir.path, 'version.json')).existsSync(), isFalse);
+    expect(io.File(p.join(tempDir.path, 'flutter.js')).existsSync(), isFalse);
+    // version.json is preserved — app/tooling may read it at runtime.
+    expect(io.File(p.join(tempDir.path, 'version.json')).existsSync(), isTrue);
   });
 
   test('--no-cleanup preserves Flutter files', () async {

@@ -125,17 +125,22 @@ void main() {
         );
       });
 
-      test('version.json is ignored', () {
-        expect(
-          categorizer.categorize('version.json', 100),
-          ResourceCategory.ignore,
-        );
-      });
-
       test('flutter.js is ignored', () {
         expect(
           categorizer.categorize('flutter.js', 50000),
           ResourceCategory.ignore,
+        );
+      });
+    });
+
+    group('preserved', () {
+      test('version.json is categorized as optional (lazy-cached)', () {
+        // version.json is preserved in the build output and picked up by
+        // the manifest; its .json extension + small size puts it in
+        // optional so the SW can lazy-cache it on first fetch.
+        expect(
+          categorizer.categorize('version.json', 100),
+          ResourceCategory.optional,
         );
       });
     });
@@ -279,9 +284,11 @@ void main() {
       });
 
       test('ignore takes precedence over optional', () {
-        // version.json: matches ignore AND has .json extension
+        // flutter.js: matches ignore glob — must not fall through to
+        // any user-supplied optional globs.
+        final c = FileCategorizer(optionalOverrides: {'*.js'});
         expect(
-          categorizer.categorize('version.json', 100),
+          c.categorize('flutter.js', 100),
           ResourceCategory.ignore,
         );
       });

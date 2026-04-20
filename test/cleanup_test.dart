@@ -21,6 +21,9 @@ void main() {
         p.join(tempDir.path, 'flutter_service_worker.js'),
       ).writeAsStringSync('sw');
       io.File(
+        p.join(tempDir.path, 'flutter.js'),
+      ).writeAsStringSync('flutter');
+      io.File(
         p.join(tempDir.path, 'version.json'),
       ).writeAsStringSync('{"version":"1"}');
       io.File(p.join(tempDir.path, 'main.dart.js')).writeAsStringSync('main');
@@ -48,8 +51,17 @@ void main() {
         isFalse,
       );
       expect(
-        io.File(p.join(tempDir.path, 'version.json')).existsSync(),
+        io.File(p.join(tempDir.path, 'flutter.js')).existsSync(),
         isFalse,
+      );
+    });
+
+    test('preserves version.json', () {
+      cleanup(buildDir: tempDir, swVersion: 'v1');
+
+      expect(
+        io.File(p.join(tempDir.path, 'version.json')).existsSync(),
+        isTrue,
       );
     });
 
@@ -116,7 +128,7 @@ void main() {
       // Remove all Flutter files before cleanup
       io.File(p.join(tempDir.path, 'flutter_bootstrap.js')).deleteSync();
       io.File(p.join(tempDir.path, 'flutter_service_worker.js')).deleteSync();
-      io.File(p.join(tempDir.path, 'version.json')).deleteSync();
+      io.File(p.join(tempDir.path, 'flutter.js')).deleteSync();
 
       // Should not throw
       cleanup(buildDir: tempDir, swVersion: 'v1');

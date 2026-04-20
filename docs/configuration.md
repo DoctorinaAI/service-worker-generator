@@ -156,7 +156,6 @@ index.html
 flutter_bootstrap.js
 flutter_service_worker.js
 flutter.js
-version.json
 ```
 
 Plus any file that doesn't match Core, Required, or Optional rules.

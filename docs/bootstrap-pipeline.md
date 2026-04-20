@@ -28,7 +28,7 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
 - Stream-compile WASM for better performance
 
 ### Stage 4: Assets Download (20% → 80%)
-- Load `flutter.js` dynamically (kept in build output)
+- Flutter's `flutter.js` is inlined into `bootstrap.js` at generation time, so `_flutter.loader` is already defined — no runtime fetch of `flutter.js` is performed
 - Call `_flutter.loader.load()` with custom `onEntrypointLoaded` callback
 - Flutter loader handles loading `main.dart.js` or WASM entry point
 - Track download progress via SW notifications

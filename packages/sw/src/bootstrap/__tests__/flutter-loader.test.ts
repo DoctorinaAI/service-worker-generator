@@ -17,59 +17,45 @@ interface FlutterWindow extends Window {
   };
 }
 
-function flushMicrotasks(rounds = 20): Promise<void> {
-  return (async () => {
-    for (let i = 0; i < rounds; i++) await Promise.resolve();
-  })();
-}
-
 /**
- * Patch document.head.appendChild so loading "flutter.js" resolves the
- * script's onload synchronously after the tag is added.
+ * The generator prepends Flutter's `flutter.js` IIFE to bootstrap.js, so
+ * `window._flutter.loader` is already defined by the time `loadFlutterApp`
+ * runs. These tests install a fake loader up-front to mimic that state.
  */
-function installScriptStub(onAppend?: (script: HTMLScriptElement) => void): void {
-  const head = document.head;
-  const original = head.appendChild.bind(head);
-  (head as unknown as { appendChild: (n: Node) => Node }).appendChild = (
-    node: Node,
-  ): Node => {
-    if (node instanceof HTMLScriptElement) {
-      onAppend?.(node);
-      queueMicrotask(() => node.onload?.(new Event('load')));
-    }
-    return original(node);
+function installLoader(
+  load: (opts: unknown) => Promise<void>,
+): ReturnType<typeof vi.fn> {
+  const spy = vi.fn(load);
+  (window as FlutterWindow)._flutter = {
+    ...(window as FlutterWindow)._flutter,
+    loader: { load: spy as unknown as (opts: unknown) => Promise<void> },
   };
+  return spy;
 }
 
 describe('loadFlutterApp', () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
-  let originalAppendChild: typeof document.head.appendChild;
 
   beforeEach(() => {
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
-    originalAppendChild = document.head.appendChild;
   });
 
   afterEach(() => {
-    document.head.appendChild = originalAppendChild;
     delete (window as FlutterWindow)._flutter;
     logSpy.mockRestore();
     vi.restoreAllMocks();
   });
 
-  it('seeds _flutter.buildConfig before loading flutter.js', async () => {
-    installScriptStub(() => {
-      // By the time flutter.js "loads", buildConfig should already exist.
-      (window as FlutterWindow)._flutter!.loader = {
-        load: vi.fn(async () => undefined),
-      };
+  it('seeds _flutter.buildConfig before calling the loader', async () => {
+    let buildConfigAtCall: unknown;
+    installLoader(async () => {
+      buildConfigAtCall = (window as FlutterWindow)._flutter?.buildConfig;
     });
 
     const builds: FlutterBuildEntry[] = [{ renderer: 'canvaskit' }];
-    const promise = loadFlutterApp('/cdn/', 'rev', builds, vi.fn());
-    await flushMicrotasks();
-    await promise;
+    await loadFlutterApp('/cdn/', 'rev', builds, vi.fn());
 
+    expect(buildConfigAtCall).toEqual({ engineRevision: 'rev', builds });
     expect((window as FlutterWindow)._flutter?.buildConfig).toEqual({
       engineRevision: 'rev',
       builds,
@@ -77,12 +63,7 @@ describe('loadFlutterApp', () => {
   });
 
   it('calls flutter.loader.load with canvasKitBaseUrl that always ends in "/"', async () => {
-    const loadSpy = vi.fn<(opts: unknown) => Promise<void>>(
-      async () => undefined,
-    );
-    installScriptStub(() => {
-      (window as FlutterWindow)._flutter!.loader = { load: loadSpy };
-    });
+    const loadSpy = installLoader(async () => undefined);
 
     await loadFlutterApp('/cdn/base', 'rev', [{}], vi.fn());
 
@@ -94,12 +75,7 @@ describe('loadFlutterApp', () => {
   });
 
   it('does not double-append "/" when base already ends with "/"', async () => {
-    const loadSpy = vi.fn<(opts: unknown) => Promise<void>>(
-      async () => undefined,
-    );
-    installScriptStub(() => {
-      (window as FlutterWindow)._flutter!.loader = { load: loadSpy };
-    });
+    const loadSpy = installLoader(async () => undefined);
 
     await loadFlutterApp('/cdn/base/', 'rev', [{}], vi.fn());
 
@@ -114,23 +90,21 @@ describe('loadFlutterApp', () => {
     const runApp = vi.fn(async () => undefined);
     const initializeEngine = vi.fn(async () => ({ runApp }));
 
-    installScriptStub(() => {
-      (window as FlutterWindow)._flutter!.loader = {
-        load: async (opts: unknown) => {
-          const { onEntrypointLoaded } = opts as {
-            onEntrypointLoaded: (init: unknown) => Promise<void>;
-          };
-          await onEntrypointLoaded({ initializeEngine });
-        },
+    installLoader(async (opts: unknown) => {
+      const { onEntrypointLoaded } = opts as {
+        onEntrypointLoaded: (init: unknown) => Promise<void>;
       };
+      await onEntrypointLoaded({ initializeEngine });
     });
 
     await loadFlutterApp('/cdn/', 'rev', [{}], onProgress);
 
-    // First call: entry loaded, second call: engine initialized.
     const messages = onProgress.mock.calls.map((c) => c[1] as string);
     expect(messages).toEqual(
-      expect.arrayContaining(['Initializing Flutter engine', 'Starting application']),
+      expect.arrayContaining([
+        'Initializing Flutter engine',
+        'Starting application',
+      ]),
     );
     expect(initializeEngine).toHaveBeenCalledOnce();
     expect(runApp).toHaveBeenCalledOnce();
@@ -143,15 +117,11 @@ describe('loadFlutterApp', () => {
     const runApp = vi.fn(async () => undefined);
     const initializeEngine = vi.fn(async () => ({ runApp }));
 
-    installScriptStub(() => {
-      (window as FlutterWindow)._flutter!.loader = {
-        load: async (opts: unknown) => {
-          const { onEntrypointLoaded } = opts as {
-            onEntrypointLoaded: (init: unknown) => Promise<void>;
-          };
-          await onEntrypointLoaded({ initializeEngine });
-        },
+    installLoader(async (opts: unknown) => {
+      const { onEntrypointLoaded } = opts as {
+        onEntrypointLoaded: (init: unknown) => Promise<void>;
       };
+      await onEntrypointLoaded({ initializeEngine });
     });
 
     await loadFlutterApp('/cdn/', 'rev', [{}], vi.fn());
@@ -159,29 +129,12 @@ describe('loadFlutterApp', () => {
     view.remove();
   });
 
-  it('throws when flutter.js loads but _flutter.loader is missing', async () => {
-    installScriptStub(() => {
-      // Intentionally don't set up loader.
-    });
+  it('throws when _flutter.loader is not available', async () => {
+    // Simulate bootstrap without the inlined flutter.js IIFE.
+    delete (window as FlutterWindow)._flutter;
+
     await expect(
       loadFlutterApp('/cdn/', 'rev', [{}], vi.fn()),
     ).rejects.toThrow(/_flutter\.loader not available/);
-  });
-
-  it('rejects when flutter.js fails to load', async () => {
-    const head = document.head;
-    const original = head.appendChild.bind(head);
-    (head as unknown as { appendChild: (n: Node) => Node }).appendChild = (
-      node: Node,
-    ): Node => {
-      if (node instanceof HTMLScriptElement) {
-        queueMicrotask(() => node.onerror?.(new Event('error')));
-      }
-      return original(node);
-    };
-
-    await expect(
-      loadFlutterApp('/cdn/', 'rev', [{}], vi.fn()),
-    ).rejects.toThrow(/Failed to load script/);
   });
 });

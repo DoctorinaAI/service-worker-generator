@@ -1,8 +1,20 @@
+## 0.1.2 — 2026-04-20
+
+### Fixed
+
+- **Bootstrap**: production deploys on hosts with SPA rewrites (Firebase Hosting, Netlify with `index.html` fallback, etc.) crashed at `_flutter.loader not available after loading flutter.js` because the server returned `index.html` for the bare `flutter.js` fetch. The bootstrap now inlines Flutter's `flutter.js` IIFE into `bootstrap.js` at generation time, so no runtime fetch of `flutter.js` is performed and the loader is available before the pipeline starts.
+
+### Changed
+
+- **Cleanup**: `version.json` is no longer deleted — it carries Flutter's app version metadata and may be read by the app or external tooling at runtime.
+- **Cleanup**: `flutter.js` is now removed from the deployed output (its loader is inlined into `bootstrap.js`).
+- **Docs**: README "CI step" snippet no longer recommends `rm -f build/web/flutter.js` manually — the generator handles it.
+
 ## 0.1.1 — 2026-04-20
 
 ### Added
 
-`Local Development` section in README.md
+- **Docs**: "Local Development" section in README.md covering the monorepo layout, TypeScript ↔ Dart build pipeline, and commands for running the generator against `example/build/web/`.
 
 ## 0.1.0 — 2026-04-20
 
