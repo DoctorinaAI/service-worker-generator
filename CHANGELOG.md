@@ -1,5 +1,11 @@
 ## 0.1.0 — 2026-04-20
 
+### Added
+
+`Local Development` section in README.md
+
+## 0.1.0 — 2026-04-20
+
 Complete rewrite replacing Flutter's default bootstrap with a professional two-artifact system.
 
 ### Fixed (post-audit hardening)
