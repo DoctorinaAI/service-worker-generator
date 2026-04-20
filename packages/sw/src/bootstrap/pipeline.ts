@@ -30,6 +30,13 @@ export function runPipeline(config: ResolvedConfig): BootstrapAPI {
   const api = new BootstrapAPI(widget);
   widget.mount();
 
+  // Bridge the `sw-update-available` CustomEvent (fired by sw-registration
+  // when a newer SW finishes installing) into `api.onUpdateAvailable`
+  // handlers. The once-flag avoids re-dispatching on subsequent installs,
+  // since handlers typically trigger a reload anyway.
+  const onSwUpdate = (): void => api.notifyUpdateAvailable();
+  window.addEventListener('sw-update-available', onSwUpdate, { once: true });
+
   void runPipelineWork(api, config);
   return api;
 }

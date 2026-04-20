@@ -1,8 +1,10 @@
 import type { ProgressState, BootstrapPhase } from '../shared/types';
 import type { LoadingWidget } from './loading-widget';
 import { logProgress } from './console-logger';
+import { activateWaitingSW } from './sw-registration';
 
 type ProgressCallback = (state: ProgressState) => void;
+type UpdateHandler = () => void | Promise<void>;
 
 /**
  * Global Bootstrap API exposed as window.Bootstrap.
@@ -14,6 +16,7 @@ export class BootstrapAPI {
     message: 'Initializing',
   };
   private subscribers = new Set<ProgressCallback>();
+  private updateHandlers = new Set<UpdateHandler>();
   private _disposed = false;
   private lastLoggedPercent = -1;
 
@@ -81,6 +84,27 @@ export class BootstrapAPI {
   }
 
   /**
+   * Subscribe to "a new service worker has installed and is waiting" events.
+   * Handlers typically prompt the user to reload to pick up the new build.
+   * Returns an unsubscribe function.
+   */
+  onUpdateAvailable(handler: UpdateHandler): () => void {
+    this.updateHandlers.add(handler);
+    return () => this.updateHandlers.delete(handler);
+  }
+
+  /** Internal: fire registered update handlers. Safe if none are set. */
+  notifyUpdateAvailable(): void {
+    for (const h of this.updateHandlers) {
+      try {
+        void h();
+      } catch (error) {
+        console.error('[Bootstrap] onUpdateAvailable handler threw:', error);
+      }
+    }
+  }
+
+  /**
    * Remove loading widget and clean up.
    * Called by Dart when app is ready.
    */
@@ -89,6 +113,7 @@ export class BootstrapAPI {
     this._disposed = true;
     this.widget.dispose();
     this.subscribers.clear();
+    this.updateHandlers.clear();
   }
 }
 
@@ -104,6 +129,20 @@ export function installGlobalAPI(api: BootstrapAPI): void {
       return api.progress;
     },
     subscribe: (cb: ProgressCallback) => api.subscribe(cb),
+    onUpdateAvailable: (h: UpdateHandler) => api.onUpdateAvailable(h),
+    /**
+     * Apply a waiting SW update and reload the page. Resolves to `false`
+     * when no update is pending or SW is unavailable — caller can use that
+     * to decide whether to show "you're up to date" UI.
+     */
+    applyUpdate: async (reload = true): Promise<boolean> => {
+      if (!('serviceWorker' in navigator)) return false;
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (!reg) return false;
+      const ok = await activateWaitingSW(reg);
+      if (ok && reload) window.location.reload();
+      return ok;
+    },
     dispose: () => api.dispose(),
   };
 

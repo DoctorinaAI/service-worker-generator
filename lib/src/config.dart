@@ -162,11 +162,10 @@ class GeneratorConfig {
         'bootstrap.js',
       ),
       cachePrefix: resolve('prefix', 'SW_PREFIX', 'app-cache'),
-      version: resolve(
-        'version',
-        'SW_VERSION',
-        DateTime.now().millisecondsSinceEpoch.toString(),
-      ),
+      // Empty version is a sentinel: the generator will derive it from
+      // the manifest content hash after scanning files. Any CLI/YAML/env
+      // override preempts that derivation.
+      version: resolve('version', 'SW_VERSION', ''),
       includeGlobs: resolveGlobs('glob', 'SW_GLOB', '**'),
       excludeGlobs: resolveGlobs('no-glob', 'SW_EXCLUDE_GLOB', ''),
       coreGlobs: resolveGlobs('core', 'SW_CORE', ''),

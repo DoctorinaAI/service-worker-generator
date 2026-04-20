@@ -146,14 +146,31 @@ function testWasmGC(): boolean {
 }
 
 function detectWebGLVersion(): number {
+  let canvas: HTMLCanvasElement | null = null;
   try {
-    const canvas = document.createElement('canvas');
+    canvas = document.createElement('canvas');
     canvas.width = 1;
     canvas.height = 1;
     if (canvas.getContext('webgl2')) return 2;
     if (canvas.getContext('webgl')) return 1;
   } catch {
     // ignore
+  } finally {
+    // Force-release the WebGL context + the canvas element itself so the
+    // GPU-backed resources can be reclaimed immediately instead of waiting
+    // for GC.
+    if (canvas) {
+      try {
+        const ctx =
+          canvas.getContext('webgl2') ?? canvas.getContext('webgl');
+        const loseCtx = (
+          ctx as WebGLRenderingContext | null
+        )?.getExtension('WEBGL_lose_context');
+        loseCtx?.loseContext();
+      } catch {
+        // ignore
+      }
+    }
   }
   return -1;
 }

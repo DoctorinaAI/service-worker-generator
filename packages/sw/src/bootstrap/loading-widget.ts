@@ -79,16 +79,24 @@ export class LoadingWidget {
     if (this.container) {
       this.container.style.opacity = '0';
       this.container.style.transition = 'opacity 0.4s ease-out';
-      this.container.addEventListener(
-        'transitionend',
-        () => {
-          this.container?.remove();
-          this.styleElement?.remove();
-          this.container = null;
-          this.styleElement = null;
-        },
-        { once: true },
-      );
+
+      // Tear down once — either on the real transitionend, or via a
+      // safety timeout if the browser skips the animation (reduced-motion,
+      // background tab, discarded paint). Without the fallback the widget
+      // + its stylesheet can leak indefinitely.
+      let torn = false;
+      const teardown = (): void => {
+        if (torn) return;
+        torn = true;
+        this.container?.remove();
+        this.styleElement?.remove();
+        this.container = null;
+        this.styleElement = null;
+      };
+      this.container.addEventListener('transitionend', teardown, {
+        once: true,
+      });
+      setTimeout(teardown, 600);
     }
 
     // Enable pointer events on Flutter view

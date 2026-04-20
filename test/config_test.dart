@@ -98,11 +98,10 @@ color: "#112233"
       expect(config.version, '2026.04.20');
     });
 
-    test('default version is a numeric millis timestamp', () {
+    test('default version is empty (generator derives from manifest hash)',
+        () {
       final config = GeneratorConfig.parse(const []);
-      final parsed = int.tryParse(config.version);
-      expect(parsed, isNotNull);
-      expect(parsed, greaterThan(0));
+      expect(config.version, isEmpty);
     });
   });
 }

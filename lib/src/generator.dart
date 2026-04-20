@@ -1,5 +1,7 @@
+import 'dart:convert';
 import 'dart:io' as io;
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:path/path.dart' as p;
 
 import 'assets/bootstrap_template.dart';
@@ -27,7 +29,6 @@ Future<void> generate(GeneratorConfig config) async {
 
   io.stdout.writeln('Generating service worker and bootstrap...');
   io.stdout.writeln('  Input: ${config.inputDir}');
-  io.stdout.writeln('  Version: ${config.version}');
 
   // 2. Extract Flutter build info
   io.stdout.writeln('\nParsing Flutter build config...');
@@ -68,6 +69,14 @@ Future<void> generate(GeneratorConfig config) async {
     excludeGlobs: config.excludeGlobs,
   );
 
+  // Derive a deterministic version from the manifest content when the
+  // caller did not supply one. Same manifest → same version → browsers
+  // skip the SW upgrade dance entirely when nothing changed.
+  final effectiveVersion = config.version.isNotEmpty
+      ? config.version
+      : _hashManifest(manifest);
+  io.stdout.writeln('  Version: $effectiveVersion');
+
   // Print summary by category
   final categoryCounts = <ResourceCategory, int>{};
   final categorySizes = <ResourceCategory, int>{};
@@ -92,7 +101,7 @@ Future<void> generate(GeneratorConfig config) async {
   final swContent = injectSWConfig(
     template: swTemplate,
     cachePrefix: config.cachePrefix,
-    version: config.version,
+    version: effectiveVersion,
     manifest: manifest,
   );
 
@@ -112,7 +121,7 @@ Future<void> generate(GeneratorConfig config) async {
   final bootstrapContent = injectBootstrapConfig(
     template: bootstrapTemplate,
     engineRevision: buildInfo.engineRevision,
-    swVersion: config.version,
+    swVersion: effectiveVersion,
     swFilename: config.swOutput,
     builds: buildInfo.builds,
     config: config,
@@ -135,7 +144,7 @@ Future<void> generate(GeneratorConfig config) async {
     io.stdout.writeln('\nCleaning up...');
     cleanup(
       buildDir: buildDir,
-      swVersion: config.version,
+      swVersion: effectiveVersion,
       canvaskitKeep: canvaskitFiles,
       keepMaps: config.keepMaps,
     );
@@ -175,6 +184,31 @@ Set<String> _findCanvaskitFiles(io.Directory buildDir, Set<String> renderers) {
   return files
       .where((f) => io.File(p.join(buildDir.path, f)).existsSync())
       .toSet();
+}
+
+/// Produce a short content-hash identifier for the manifest. Stable across
+/// runs as long as the build output is byte-identical, so users who rerun
+/// the generator on unchanged inputs get the same SW version (and so their
+/// browsers don't treat it as an update).
+String _hashManifest(Map<String, ResourceEntry> manifest) {
+  // Use the entries' stable metadata (path, hash, size, category). We sort
+  // to insulate against Map iteration order changes.
+  final keys = manifest.keys.toList()..sort();
+  final buffer = StringBuffer();
+  for (final key in keys) {
+    final entry = manifest[key]!;
+    buffer
+      ..write(key)
+      ..write('|')
+      ..write(entry.hash)
+      ..write('|')
+      ..write(entry.size)
+      ..write('|')
+      ..write(entry.category.name)
+      ..write('\n');
+  }
+  final digest = crypto.sha256.convert(utf8.encode(buffer.toString()));
+  return digest.toString().substring(0, 12);
 }
 
 String _formatBytes(int bytes) {

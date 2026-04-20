@@ -93,6 +93,31 @@ export function listenForSWMessages(
 }
 
 /**
+ * Activate a freshly-installed but waiting service worker.
+ *
+ * Sends `skipWaiting` to the registration's waiting worker, waits for the
+ * browser to swap controllers, then resolves. Callers can then trigger a
+ * page reload to pick up the new resources. Resolves to `false` when no
+ * waiting worker is available or SW is unsupported.
+ */
+export async function activateWaitingSW(
+  registration: ServiceWorkerRegistration,
+): Promise<boolean> {
+  const waiting = registration.waiting;
+  if (!waiting) return false;
+
+  const controllerChanged = new Promise<void>((resolve) => {
+    navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), {
+      once: true,
+    });
+  });
+
+  waiting.postMessage({ type: 'skipWaiting' });
+  await controllerChanged;
+  return true;
+}
+
+/**
  * Unregister any existing Flutter service worker.
  */
 async function unregisterFlutterSW(): Promise<void> {

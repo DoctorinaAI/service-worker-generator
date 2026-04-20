@@ -48,9 +48,12 @@ export const STAGE_PROGRESS = {
   dartInit: 100,
 } as const;
 
-/** Placeholder tokens replaced by Dart CLI at generation time */
-export const SW_CONFIG_PLACEHOLDER = '"__INJECT_SW_CONFIG__"';
-export const BOOTSTRAP_CONFIG_PLACEHOLDER = '"__INJECT_BOOTSTRAP_CONFIG__"';
+// The literal placeholder tokens `"__INJECT_SW_CONFIG__"` and
+// `"__INJECT_BOOTSTRAP_CONFIG__"` live inline in sw/index.ts and
+// bootstrap/index.ts respectively. They are intentionally NOT exported
+// from this module — keeping them out of the public surface avoids
+// accidentally bundling them into downstream code that could log or
+// expose the internal build contract.
 
 /**
  * Files the SW should NOT intercept — browser loads them directly.

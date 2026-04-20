@@ -10,8 +10,6 @@ import {
   MAX_RETRY_ATTEMPTS,
   RETRY_BASE_DELAY_MS,
   STAGE_PROGRESS,
-  SW_CONFIG_PLACEHOLDER,
-  BOOTSTRAP_CONFIG_PLACEHOLDER,
   NEVER_CACHE_FILES,
 } from '../constants';
 
@@ -47,11 +45,6 @@ describe('constants', () => {
     expect(STAGE_PROGRESS.assets).toBeLessThan(STAGE_PROGRESS.dartEntry);
     expect(STAGE_PROGRESS.dartEntry).toBeLessThan(STAGE_PROGRESS.dartInit);
     expect(STAGE_PROGRESS.dartInit).toBe(100);
-  });
-
-  it('has placeholder tokens wrapped in double quotes', () => {
-    expect(SW_CONFIG_PLACEHOLDER).toBe('"__INJECT_SW_CONFIG__"');
-    expect(BOOTSTRAP_CONFIG_PLACEHOLDER).toBe('"__INJECT_BOOTSTRAP_CONFIG__"');
   });
 
   it('never-cache list contains bootstrap.js and sw.js (index.html is NOT in it)', () => {
