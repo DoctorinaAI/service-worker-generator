@@ -1,4 +1,10 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
+
+declare global {
+  interface Window {
+    Bootstrap?: { progress?: unknown };
+  }
+}
 
 const BASE_URL = 'http://localhost:8089';
 
@@ -21,7 +27,7 @@ test.describe('Bootstrap E2E', () => {
   test('bootstrap.js is loaded', async ({ page }) => {
     await page.goto(BASE_URL);
 
-    const bootstrapScript = await page.$('script#bootstrap');
+    const bootstrapScript = await page.$('script[data-sw-bootstrap]');
     expect(bootstrapScript).not.toBeNull();
 
     const src = await bootstrapScript?.getAttribute('src');
@@ -42,7 +48,7 @@ test.describe('Bootstrap E2E', () => {
     await page.goto(BASE_URL);
 
     const dataConfig = await page.$eval(
-      'script#bootstrap',
+      'script[data-sw-bootstrap]',
       (el) => el.getAttribute('data-config'),
     );
 
@@ -79,7 +85,7 @@ test.describe('Bootstrap E2E', () => {
     await page.waitForTimeout(2000);
 
     const hasBootstrapAPI = await page.evaluate(() => {
-      return typeof (window as Record<string, unknown>).Bootstrap === 'object';
+      return typeof window.Bootstrap === 'object' && window.Bootstrap !== null;
     });
     expect(hasBootstrapAPI).toBe(true);
   });
@@ -88,12 +94,7 @@ test.describe('Bootstrap E2E', () => {
     await page.goto(BASE_URL);
     await page.waitForTimeout(2000);
 
-    const progress = await page.evaluate(() => {
-      const bootstrap = (window as Record<string, unknown>).Bootstrap as
-        | Record<string, unknown>
-        | undefined;
-      return bootstrap?.progress;
-    });
+    const progress = await page.evaluate(() => window.Bootstrap?.progress);
 
     expect(progress).toBeDefined();
     expect(progress).toHaveProperty('phase');
