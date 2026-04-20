@@ -287,10 +287,7 @@ void main() {
         // flutter.js: matches ignore glob — must not fall through to
         // any user-supplied optional globs.
         final c = FileCategorizer(optionalOverrides: {'*.js'});
-        expect(
-          c.categorize('flutter.js', 100),
-          ResourceCategory.ignore,
-        );
+        expect(c.categorize('flutter.js', 100), ResourceCategory.ignore);
       });
     });
   });

@@ -138,7 +138,8 @@ Future<void> generate(GeneratorConfig config) async {
       'Re-run "flutter build web" to regenerate it.',
     );
   }
-  final bootstrapContent = '${flutterJsFile.readAsStringSync()}\n'
+  final bootstrapContent =
+      '${flutterJsFile.readAsStringSync()}\n'
       '$injectedBootstrap';
 
   // 6. Write output files

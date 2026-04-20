@@ -20,9 +20,7 @@ void main() {
       io.File(
         p.join(tempDir.path, 'flutter_service_worker.js'),
       ).writeAsStringSync('sw');
-      io.File(
-        p.join(tempDir.path, 'flutter.js'),
-      ).writeAsStringSync('flutter');
+      io.File(p.join(tempDir.path, 'flutter.js')).writeAsStringSync('flutter');
       io.File(
         p.join(tempDir.path, 'version.json'),
       ).writeAsStringSync('{"version":"1"}');
@@ -50,10 +48,7 @@ void main() {
         io.File(p.join(tempDir.path, 'flutter_service_worker.js')).existsSync(),
         isFalse,
       );
-      expect(
-        io.File(p.join(tempDir.path, 'flutter.js')).existsSync(),
-        isFalse,
-      );
+      expect(io.File(p.join(tempDir.path, 'flutter.js')).existsSync(), isFalse);
     });
 
     test('preserves version.json', () {
