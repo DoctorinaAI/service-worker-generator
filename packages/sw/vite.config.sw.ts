@@ -14,11 +14,6 @@ export default defineConfig({
       formats: ['iife'],
       fileName: () => 'sw.js',
     },
-    rollupOptions: {
-      output: {
-        inlineDynamicImports: true,
-      },
-    },
   },
   plugins: [viteSingleFile()],
 });

@@ -29,7 +29,6 @@ sentry.properties
 
 # Lock files
 pubspec.lock
-package-lock.json
 
 # Node.js
 node_modules/

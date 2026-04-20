@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { createMessageHandler } from '../message-handler';
 
 interface FakeMessageEvent {
@@ -17,7 +17,7 @@ function makeEvent(data: unknown, hasSource = true): FakeMessageEvent {
 }
 
 describe('createMessageHandler', () => {
-  let skipWaitingSpy: ReturnType<typeof vi.fn>;
+  let skipWaitingSpy: Mock<() => Promise<void>>;
 
   beforeEach(() => {
     skipWaitingSpy = vi.fn(async () => undefined);

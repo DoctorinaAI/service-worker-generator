@@ -14,11 +14,6 @@ export default defineConfig({
       formats: ['iife'],
       fileName: () => 'bootstrap.js',
     },
-    rollupOptions: {
-      output: {
-        inlineDynamicImports: true,
-      },
-    },
   },
   plugins: [viteSingleFile()],
 });

@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { createInstallHandler } from '../install-handler';
 import type { ResourceManifest } from '../../shared/types';
 import { ResourceCategory } from '../../shared/types';
@@ -32,7 +32,7 @@ function makeEvent(): FakeExtendableEvent {
 
 describe('createInstallHandler', () => {
   let mockCaches: MockCacheStorage;
-  let skipWaitingSpy: ReturnType<typeof vi.fn>;
+  let skipWaitingSpy: Mock<() => Promise<void>>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
