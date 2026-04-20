@@ -98,8 +98,7 @@ color: "#112233"
       expect(config.version, '2026.04.20');
     });
 
-    test('default version is empty (generator derives from manifest hash)',
-        () {
+    test('default version is empty (generator derives from manifest hash)', () {
       final config = GeneratorConfig.parse(const []);
       expect(config.version, isEmpty);
     });

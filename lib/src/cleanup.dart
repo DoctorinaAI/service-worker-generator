@@ -84,11 +84,12 @@ void _pruneCanvaskit(io.Directory buildDir, Set<String> keep) {
   }
 
   // Remove now-empty directories (deepest first).
-  final dirs = canvaskitDir
-      .listSync(recursive: true, followLinks: false)
-      .whereType<io.Directory>()
-      .toList()
-    ..sort((a, b) => b.path.length.compareTo(a.path.length));
+  final dirs =
+      canvaskitDir
+          .listSync(recursive: true, followLinks: false)
+          .whereType<io.Directory>()
+          .toList()
+        ..sort((a, b) => b.path.length.compareTo(a.path.length));
   for (final d in dirs) {
     if (d.listSync().isEmpty) d.deleteSync();
   }

@@ -172,18 +172,9 @@ void main() {
         canvaskitKeep: const {'canvaskit/skwasm.js', 'canvaskit/skwasm.wasm'},
       );
 
-      expect(
-        io.File(p.join(ckDir.path, 'skwasm.js')).existsSync(),
-        isTrue,
-      );
-      expect(
-        io.File(p.join(ckDir.path, 'skwasm.wasm')).existsSync(),
-        isTrue,
-      );
-      expect(
-        io.File(p.join(ckDir.path, 'canvaskit.js')).existsSync(),
-        isFalse,
-      );
+      expect(io.File(p.join(ckDir.path, 'skwasm.js')).existsSync(), isTrue);
+      expect(io.File(p.join(ckDir.path, 'skwasm.wasm')).existsSync(), isTrue);
+      expect(io.File(p.join(ckDir.path, 'canvaskit.js')).existsSync(), isFalse);
       expect(
         io.File(p.join(ckDir.path, 'canvaskit.wasm')).existsSync(),
         isFalse,

@@ -52,13 +52,7 @@ const Set<String> _defaultIgnorePatterns = {
 /// app on startup — without them Flutter renders tofu boxes instead of
 /// icons and text. Icon fonts like MaterialIcons (~1.6 MB) and
 /// CupertinoIcons (~250 KB) routinely exceed any reasonable size cap.
-const Set<String> _fontExtensions = {
-  '.ttf',
-  '.otf',
-  '.woff',
-  '.woff2',
-  '.eot',
-};
+const Set<String> _fontExtensions = {'.ttf', '.otf', '.woff', '.woff2', '.eot'};
 
 /// File extensions eligible for optional auto-categorization, size-capped
 /// by [_optionalMaxSize]. Larger files fall through to `ignore` so they

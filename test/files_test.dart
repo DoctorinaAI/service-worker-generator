@@ -34,8 +34,7 @@ void main() {
       final root = await io.Directory.systemTemp.createTemp('sw-files-');
       try {
         io.File(p.join(root.path, 'a.js')).writeAsStringSync('a');
-        final assets = io.Directory(p.join(root.path, 'assets'))
-          ..createSync();
+        final assets = io.Directory(p.join(root.path, 'assets'))..createSync();
         io.File(p.join(assets.path, 'b.json')).writeAsStringSync('b');
 
         final files = filesInDirectory(root);

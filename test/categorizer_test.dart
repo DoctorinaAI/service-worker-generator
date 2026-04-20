@@ -39,7 +39,6 @@ void main() {
           ResourceCategory.core,
         );
       });
-
     });
 
     group('required', () {
@@ -197,10 +196,7 @@ void main() {
 
       test('large ttf is optional (fonts bypass size cap)', () {
         expect(
-          categorizer.categorize(
-            'assets/fonts/CupertinoIcons.ttf',
-            257628,
-          ),
+          categorizer.categorize('assets/fonts/CupertinoIcons.ttf', 257628),
           ResourceCategory.optional,
         );
       });
@@ -217,10 +213,7 @@ void main() {
 
       test('large woff2 is optional (fonts bypass size cap)', () {
         expect(
-          categorizer.categorize(
-            'assets/fonts/Inter.woff2',
-            300000,
-          ),
+          categorizer.categorize('assets/fonts/Inter.woff2', 300000),
           ResourceCategory.optional,
         );
       });

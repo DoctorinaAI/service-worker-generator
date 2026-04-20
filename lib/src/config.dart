@@ -145,9 +145,7 @@ class GeneratorConfig {
       final raw = resolve(name, envName, defaultValue.toString());
       final parsed = int.tryParse(raw);
       if (parsed == null) {
-        io.stderr.writeln(
-          'Error: --$name="$raw" is not a valid integer.',
-        );
+        io.stderr.writeln('Error: --$name="$raw" is not a valid integer.');
         io.exit(64);
       }
       return parsed;
