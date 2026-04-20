@@ -1,4 +1,23 @@
 .vscode/
 .idea/
 .github/
+.claude/
 Dockerfile
+
+# TypeScript source and tooling
+packages/
+node_modules/
+package.json
+package-lock.json
+scripts/
+
+# Dart source and tooling
+test/
+reports/
+build/
+pubspec.lock
+.keep
+
+# Documentation (not needed in pub package)
+docs/
+CLAUDE.md

@@ -8,10 +8,8 @@
         "color": "terminal.ansiGreen",
         "id": "cloud-download"
       },
-      "dependsOn": [],
       "type": "shell",
       "command": "dart pub get",
-      "args": [],
       "group": {
         "kind": "none",
         "isDefault": true
@@ -20,7 +18,6 @@
       "options": {
         "cwd": "${workspaceFolder}"
       },
-      "isBackground": false,
       "presentation": {
         "reveal": "silent",
         "focus": false,
@@ -38,11 +35,7 @@
         "id": "lightbulb-autofix"
       },
       "type": "shell",
-      "command": [
-        "dart format --fix -l 80 lib test"
-      ],
-      "dependsOn": [],
-      "args": [],
+      "command": "dart format --fix -l 80 lib test",
       "group": {
         "kind": "none",
         "isDefault": true
@@ -51,7 +44,150 @@
       "options": {
         "cwd": "${workspaceFolder}"
       },
-      "isBackground": false,
+      "presentation": {
+        "reveal": "silent",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false,
+        "group": "dart"
+      }
+    },
+    {
+      "label": "dart:test",
+      "detail": "Run Dart tests",
+      "icon": {
+        "color": "terminal.ansiGreen",
+        "id": "beaker"
+      },
+      "type": "shell",
+      "command": "dart test",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false,
+        "group": "dart"
+      }
+    },
+    {
+      "label": "ts:install",
+      "detail": "Install TypeScript dependencies",
+      "icon": {
+        "color": "terminal.ansiYellow",
+        "id": "cloud-download"
+      },
+      "type": "shell",
+      "command": "npm install",
+      "group": "none",
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "silent",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false,
+        "group": "ts"
+      }
+    },
+    {
+      "label": "ts:build",
+      "detail": "Build TypeScript (sw.js + bootstrap.js)",
+      "icon": {
+        "color": "terminal.ansiYellow",
+        "id": "tools"
+      },
+      "type": "shell",
+      "command": "npm run build",
+      "group": "build",
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "silent",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false,
+        "group": "ts"
+      }
+    },
+    {
+      "label": "ts:build:all",
+      "detail": "Build TypeScript and copy to Dart string constants",
+      "icon": {
+        "color": "terminal.ansiYellow",
+        "id": "package"
+      },
+      "type": "shell",
+      "command": "npm run build:all",
+      "group": "build",
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false,
+        "group": "ts"
+      }
+    },
+    {
+      "label": "ts:test",
+      "detail": "Run TypeScript tests (Vitest)",
+      "icon": {
+        "color": "terminal.ansiYellow",
+        "id": "beaker"
+      },
+      "type": "shell",
+      "command": "npm run test",
+      "group": "test",
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false,
+        "group": "ts"
+      }
+    },
+    {
+      "label": "example:flutter:pub:get",
+      "detail": "Get dependencies for the example Flutter project",
+      "icon": {
+        "color": "terminal.ansiGreen",
+        "id": "cloud-download"
+      },
+      "type": "shell",
+      "command": "flutter pub get",
+      "group": {
+        "kind": "none",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}/example"
+      },
       "presentation": {
         "reveal": "silent",
         "focus": false,
@@ -69,30 +205,108 @@
         "id": "github-action"
       },
       "type": "shell",
-      "command": [
-        "flutter pub get",
-        // --wasm
-        " && flutter build web --release --no-tree-shake-icons --no-web-resources-cdn --base-href=/ -o build/web"
-      ],
-      "dependsOn": [],
-      "args": [],
-      "group": {
-        "kind": "none",
-        "isDefault": true
-      },
+      "command": "flutter build web --release --no-tree-shake-icons --no-web-resources-cdn --base-href=/ -o build/web",
+      "group": "none",
       "problemMatcher": [],
       "options": {
         "cwd": "${workspaceFolder}/example"
       },
-      "isBackground": false,
+      "dependsOn": [
+        "example:flutter:pub:get"
+      ],
+      "dependsOrder": "sequence",
       "presentation": {
-        "reveal": "silent",
+        "reveal": "always",
         "focus": false,
         "panel": "shared",
         "showReuseMessage": false,
         "clear": false,
-        "group": "dart"
+        "group": "example"
       }
+    },
+    {
+      "label": "example:generate",
+      "detail": "Run SW generator on example build output",
+      "icon": {
+        "color": "terminal.ansiBlue",
+        "id": "zap"
+      },
+      "type": "shell",
+      "command": "dart run sw:generate --input=example/build/web --prefix=example --theme=auto --logo=icons/Icon-192.png --title='Service Worker' --color=#25D366",
+      "group": "none",
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "focus": false,
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": false,
+        "group": "example"
+      }
+    },
+    {
+      "label": "dart:test:full",
+      "detail": "Build example Flutter web, then run Dart tests",
+      "icon": {
+        "color": "terminal.ansiGreen",
+        "id": "beaker"
+      },
+      "dependsOn": [
+        "example:flutter:build:web",
+        "dart:test"
+      ],
+      "dependsOrder": "sequence",
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "pipeline:full",
+      "detail": "Full pipeline: build TS → build Flutter → generate SW",
+      "icon": {
+        "color": "terminal.ansiMagenta",
+        "id": "rocket"
+      },
+      "dependsOn": [
+        "ts:build:all",
+        "example:flutter:build:web"
+      ],
+      "dependsOrder": "sequence",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "pipeline:generate",
+      "detail": "Build TS + run generator (skip Flutter build)",
+      "icon": {
+        "color": "terminal.ansiMagenta",
+        "id": "play"
+      },
+      "dependsOn": [
+        "ts:build:all",
+        "example:generate"
+      ],
+      "dependsOrder": "sequence",
+      "group": "build",
+      "problemMatcher": []
+    },
+    {
+      "label": "pipeline:all",
+      "detail": "Full pipeline: build TS → build Flutter → generate SW → run generator",
+      "icon": {
+        "color": "terminal.ansiMagenta",
+        "id": "star-full"
+      },
+      "dependsOn": [
+        "ts:build:all",
+        "example:flutter:build:web",
+        "example:generate"
+      ],
+      "dependsOrder": "sequence",
+      "group": "build",
+      "problemMatcher": []
     }
   ]
 }

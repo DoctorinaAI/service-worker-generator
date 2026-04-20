@@ -1,6 +1,10 @@
 library;
 
-export 'src/comments.dart';
+export 'src/categorizer.dart';
+export 'src/cleanup.dart';
+export 'src/config.dart';
 export 'src/files.dart';
-export 'src/flutter.dart';
-export 'src/service_worker_builder.dart';
+export 'src/flutter_build.dart';
+export 'src/generator.dart';
+export 'src/injector.dart';
+export 'src/manifest.dart';
