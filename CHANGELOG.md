@@ -1,3 +1,14 @@
+## 0.1.3 — 2026-04-20
+
+### Fixed
+
+- **Bootstrap**: `Bootstrap.onUpdateAvailable` handlers were silently dropped on `flutter-first-frame` because `BootstrapAPI.dispose()` cleared the `updateHandlers` Set alongside the (correctly load-phase-scoped) progress `subscribers`. Update handlers are now retained for the lifetime of the page, so apps reliably receive the "new SW installed" signal after the loading widget disappears. (`packages/sw/src/bootstrap/api.ts`)
+- **Bootstrap**: the `sw-update-available` DOM bridge listener installed by `runPipeline` was registered with `{ once: true }`, so a long-lived tab encountering a second deploy never notified handlers. The listener is now permanent for the page lifetime; `wireUpdateDetection` already dispatches at most once per SW install. (`packages/sw/src/bootstrap/pipeline.ts`)
+
+### Changed
+
+- **Bootstrap**: `BootstrapAPI.notifyUpdateAvailable` now routes async-handler rejections to `console.error` instead of leaving an "Uncaught (in promise)" warning that masks the real error. (`packages/sw/src/bootstrap/api.ts`)
+
 ## 0.1.2 — 2026-04-20
 
 ### Fixed

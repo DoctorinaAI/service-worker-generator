@@ -32,10 +32,13 @@ export function runPipeline(config: ResolvedConfig): BootstrapAPI {
 
   // Bridge the `sw-update-available` CustomEvent (fired by sw-registration
   // when a newer SW finishes installing) into `api.onUpdateAvailable`
-  // handlers. The once-flag avoids re-dispatching on subsequent installs,
-  // since handlers typically trigger a reload anyway.
+  // handlers. NOT once-bound: a long-lived tab can encounter multiple
+  // deploys, and each must reach registered handlers (the user may dismiss
+  // the first prompt and stay on the tab through a second release). The
+  // underlying event is dispatched at most once per SW install, so no
+  // debouncing is needed at this layer.
   const onSwUpdate = (): void => api.notifyUpdateAvailable();
-  window.addEventListener('sw-update-available', onSwUpdate, { once: true });
+  window.addEventListener('sw-update-available', onSwUpdate);
 
   void runPipelineWork(api, config);
   return api;

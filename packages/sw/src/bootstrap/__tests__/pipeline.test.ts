@@ -63,16 +63,57 @@ if (!window.matchMedia) {
       }) as unknown as MediaQueryList;
 }
 
+// Vitest's jsdom environment shares one `window` across every `it()` in a
+// file. `runPipeline` installs a permanent (not `{once:true}`) bridge listener
+// for `sw-update-available` plus a `flutter-first-frame` listener — both
+// would survive into later tests and double-fire handlers from prior cases.
+// We track listeners added during each test by spying on
+// `window.addEventListener` and remove them in `afterEach`.
+type TrackedListener = {
+  type: string;
+  listener: EventListenerOrEventListenerObject;
+};
+
+function trackWindowListeners(): {
+  added: TrackedListener[];
+  restore: () => void;
+} {
+  const added: TrackedListener[] = [];
+  const original = window.addEventListener.bind(window);
+  const spy = vi
+    .spyOn(window, 'addEventListener')
+    .mockImplementation((
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ) => {
+      added.push({ type, listener });
+      return original(type, listener, options);
+    });
+  return {
+    added,
+    restore: () => {
+      for (const { type, listener } of added) {
+        window.removeEventListener(type, listener);
+      }
+      spy.mockRestore();
+    },
+  };
+}
+
 describe('runPipeline', () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
+  let listenerTracker: ReturnType<typeof trackWindowListeners>;
 
   beforeEach(() => {
     document.body.innerHTML = '';
     document.head.innerHTML = '';
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    listenerTracker = trackWindowListeners();
   });
 
   afterEach(() => {
+    listenerTracker.restore();
     logSpy.mockRestore();
     vi.restoreAllMocks();
     vi.doUnmock('../sw-registration');
@@ -138,5 +179,52 @@ describe('runPipeline', () => {
     for (let i = 0; i < 30; i++) await Promise.resolve();
     window.dispatchEvent(new Event('flutter-first-frame'));
     expect(api.disposed).toBe(true);
+  });
+
+  it('routes sw-update-available to onUpdateAvailable handlers after flutter-first-frame dispose', async () => {
+    const api = runPipeline(resolved());
+    const handler = vi.fn();
+    api.onUpdateAvailable(handler);
+
+    // Let the pipeline progress past sw registration so the bridge listener
+    // is definitely installed (it is installed synchronously in runPipeline,
+    // but yielding mirrors real ordering).
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+
+    window.dispatchEvent(new Event('flutter-first-frame'));
+    expect(api.disposed).toBe(true);
+
+    window.dispatchEvent(new CustomEvent('sw-update-available'));
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('dispatches multiple sw-update-available events without one-shot debounce', async () => {
+    const api = runPipeline(resolved());
+    const handler = vi.fn();
+    api.onUpdateAvailable(handler);
+
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+
+    window.dispatchEvent(new CustomEvent('sw-update-available'));
+    window.dispatchEvent(new CustomEvent('sw-update-available'));
+    window.dispatchEvent(new CustomEvent('sw-update-available'));
+
+    expect(handler).toHaveBeenCalledTimes(3);
+  });
+
+  it('accepts late subscriptions registered after dispose and fires them on next event', async () => {
+    const api = runPipeline(resolved());
+    for (let i = 0; i < 30; i++) await Promise.resolve();
+    window.dispatchEvent(new Event('flutter-first-frame'));
+    expect(api.disposed).toBe(true);
+
+    // A consumer wiring its handler lazily (e.g., a Dart controller built
+    // by a router after the loading widget is gone) must still observe the
+    // next SW update.
+    const handler = vi.fn();
+    api.onUpdateAvailable(handler);
+    window.dispatchEvent(new CustomEvent('sw-update-available'));
+
+    expect(handler).toHaveBeenCalledOnce();
   });
 });
