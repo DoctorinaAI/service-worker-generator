@@ -11,3 +11,5 @@ tags:
     timeout: 1x
   smoke:
     timeout: 2x
+  integration:
+    timeout: 2x
