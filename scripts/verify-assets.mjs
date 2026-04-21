@@ -37,7 +37,7 @@ for (const { dist, dart } of artifacts) {
   }
 
   if (!existsSync(dartPath)) {
-    console.error(`MISSING: ${dart} — run 'npm run prebuild' first`);
+    console.error(`MISSING: ${dart} — run 'npm run build:all' first`);
     ok = false;
     continue;
   }
@@ -51,7 +51,7 @@ for (const { dist, dart } of artifacts) {
     console.log(`  OK: ${dist} (${hash}) matches ${dart}`);
   } else {
     console.error(`MISMATCH: ${dart} does not contain current ${dist}`);
-    console.error(`  Run 'npm run prebuild' to update.`);
+    console.error(`  Run 'npm run build:all' to update.`);
     ok = false;
   }
 }
