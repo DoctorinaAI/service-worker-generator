@@ -280,4 +280,52 @@ describe('installGlobalAPI', () => {
     fn();
     expect(api.disposed).toBe(true);
   });
+
+  it('window.Bootstrap.applyUpdate activates a waiting worker and reloads', async () => {
+    installGlobalAPI(api);
+    const reloadSpy = vi
+      .spyOn(window.location, 'reload')
+      .mockImplementation(() => undefined);
+    const postMessage = vi.fn();
+    const waiting = { postMessage };
+    const getRegistration = vi.fn(async () => ({ waiting }));
+    const addEventListener = vi.fn(
+      (
+        type: string,
+        listener: EventListenerOrEventListenerObject,
+        options?: boolean | AddEventListenerOptions,
+      ) => {
+        if (type === 'controllerchange') {
+          setTimeout(() => {
+            if (typeof listener === 'function') {
+              listener(new Event('controllerchange'));
+            } else {
+              listener.handleEvent(new Event('controllerchange'));
+            }
+          }, 0);
+        }
+        return undefined;
+      },
+    );
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: {
+        getRegistration,
+        addEventListener,
+      },
+    });
+    const bootstrap = (window as unknown as Record<string, unknown>)[
+      'Bootstrap'
+    ] as {
+      applyUpdate: (reload?: boolean) => Promise<boolean>;
+    };
+
+    await expect(bootstrap.applyUpdate()).resolves.toBe(true);
+
+    expect(getRegistration).toHaveBeenCalledOnce();
+    expect(postMessage).toHaveBeenCalledWith({ type: 'skipWaiting' });
+    expect(reloadSpy).toHaveBeenCalledOnce();
+
+    delete (navigator as unknown as { serviceWorker?: unknown }).serviceWorker;
+  });
 });

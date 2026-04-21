@@ -53,7 +53,7 @@ describe('createInstallHandler', () => {
     vi.restoreAllMocks();
   });
 
-  it('precaches Core + Required resources into the temp cache and skipWaiting', async () => {
+  it('precaches Core + Required resources into the temp cache without auto-activating', async () => {
     installMockFetch(async (req) => textResponse(`body:${req.url}`));
     const manifest: ResourceManifest = {
       'main.dart.js': {
@@ -88,7 +88,7 @@ describe('createInstallHandler', () => {
     expect(await temp!.match('AssetManifest.json')).toBeDefined();
     expect(await temp!.match('logo.png')).toBeUndefined();
 
-    expect(skipWaitingSpy).toHaveBeenCalledOnce();
+    expect(skipWaitingSpy).not.toHaveBeenCalled();
   });
 
   it('deletes the temp cache and rethrows when a Core precache fails', async () => {
@@ -111,7 +111,7 @@ describe('createInstallHandler', () => {
     expect(skipWaitingSpy).not.toHaveBeenCalled();
   });
 
-  it('tolerates Required/Optional failures and still completes install', async () => {
+  it('tolerates Required/Optional failures and still completes install without auto-activating', async () => {
     // Collapse retry backoff to zero so the Required failure path is fast.
     const origSetTimeout = globalThis.setTimeout;
     vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
@@ -146,7 +146,7 @@ describe('createInstallHandler', () => {
     expect(temp).toBeDefined();
     expect(await temp!.match('good.js')).toBeDefined();
     expect(await temp!.match('bad.json')).toBeUndefined();
-    expect(skipWaitingSpy).toHaveBeenCalledOnce();
+    expect(skipWaitingSpy).not.toHaveBeenCalled();
   });
 
   it('emits a progress notification through notifyClients', async () => {
