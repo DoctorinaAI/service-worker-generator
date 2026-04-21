@@ -14,6 +14,7 @@ on:
     paths:
       - "bin/**.dart"
       - "lib/**.dart"
+      - "lib/src/assets/**"
       - "test/**.dart"
       - "packages/sw/src/**"
       - "scripts/**"
@@ -34,6 +35,7 @@ on:
     paths:
       - "bin/**.dart"
       - "lib/**.dart"
+      - "lib/src/assets/**"
       - "test/**.dart"
       - "packages/sw/src/**"
       - "scripts/**"
@@ -75,11 +77,13 @@ jobs:
       - name: 🧪 Run tests
         run: npm test
 
-      - name: 🏗️ Build artifacts
-        run: npm run build
+      - name: 🏗️ Build artifacts and sync generated Dart assets
+        run: npm run build:all
 
       - name: ✅ Verify committed assets match build output
-        run: npm run verify
+        run: |
+          npm run verify
+          git diff --exit-code -- lib/src/assets/sw_template.dart lib/src/assets/bootstrap_template.dart
 
   checkout:
     name: "Dart"
