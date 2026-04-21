@@ -25,7 +25,7 @@ jobs:
         run: npm ci
 
       - name: 🏗️ Build and verify
-        run: npm run build && npm run verify
+        run: npm run check:assets
 
   deploy:
     name: "Deploy to Pub.dev"

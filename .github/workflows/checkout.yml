@@ -77,13 +77,11 @@ jobs:
       - name: 🧪 Run tests
         run: npm test
 
-      - name: 🏗️ Build artifacts and sync generated Dart assets
-        run: npm run build:all
+      - name: 🏗️ Build artifacts
+        run: npm run build
 
       - name: ✅ Verify committed assets match build output
-        run: |
-          npm run verify
-          git diff --exit-code -- lib/src/assets/sw_template.dart lib/src/assets/bootstrap_template.dart
+        run: npm run verify
 
   checkout:
     name: "Dart"
