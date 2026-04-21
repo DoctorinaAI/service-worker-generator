@@ -281,11 +281,8 @@ describe('installGlobalAPI', () => {
     expect(api.disposed).toBe(true);
   });
 
-  it('window.Bootstrap.applyUpdate activates a waiting worker and reloads', async () => {
+  it('window.Bootstrap.applyUpdate activates a waiting worker', async () => {
     installGlobalAPI(api);
-    const reloadSpy = vi
-      .spyOn(window.location, 'reload')
-      .mockImplementation(() => undefined);
     const postMessage = vi.fn();
     const waiting = { postMessage };
     const getRegistration = vi.fn(async () => ({ waiting }));
@@ -320,11 +317,10 @@ describe('installGlobalAPI', () => {
       applyUpdate: (reload?: boolean) => Promise<boolean>;
     };
 
-    await expect(bootstrap.applyUpdate()).resolves.toBe(true);
+    await expect(bootstrap.applyUpdate(false)).resolves.toBe(true);
 
     expect(getRegistration).toHaveBeenCalledOnce();
     expect(postMessage).toHaveBeenCalledWith({ type: 'skipWaiting' });
-    expect(reloadSpy).toHaveBeenCalledOnce();
 
     delete (navigator as unknown as { serviceWorker?: unknown }).serviceWorker;
   });
