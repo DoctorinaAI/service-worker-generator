@@ -7,6 +7,7 @@ import { logPhase } from './console-logger';
 import {
   registerServiceWorker,
   listenForSWMessages,
+  reloadIfForeignController,
 } from './sw-registration';
 import {
   detectBrowserCaps,
@@ -106,6 +107,17 @@ async function runPipelineWork(
       : null;
 
   try {
+    // Preflight: a foreign SW controller (Flutter's default SW, or an older
+    // sw.js on a different path) can serve a mismatched mix of cached old
+    // and network-fresh files during the transition deploy. That surfaces as
+    // `WebAssembly.instantiate(): Import #N "X"` deep inside Flutter's
+    // wasm loader. Detect and recover via a one-shot reload before any
+    // fetch runs; the call bails early if there's no controller, the
+    // controller matches, or we already reloaded once this tab session.
+    if (await reloadIfForeignController(build.swFilename)) {
+      return;
+    }
+
     // Stage 1: Init
     updateProgress('init', STAGE_PROGRESS.init, 'Checking environment');
     logPhase('Init', 'Detecting browser capabilities');
