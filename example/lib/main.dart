@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:sw_example/src/initialization.dart';
 import 'package:sw_example/src/update/app_update_available_widget.dart';
-import 'package:sw_example/src/update/platform/update_check_api_factory.dart';
+import 'package:sw_example/src/update/platform/update_check.dart';
 import 'package:sw_example/src/update/update_check_controller.dart';
 import 'package:sw_example/src/update/update_check_state.dart';
 
@@ -12,8 +12,7 @@ void main() => runZonedGuarded<void>(
     await initializeApp();
     runApp(const App());
   },
-  (error, stackTrace) =>
-      print('Top level exception: $error'), // ignore: avoid_print
+  (error, stackTrace) => print('Top level exception: $error'), // ignore: avoid_print
 );
 
 /// {@template app}
@@ -24,8 +23,7 @@ class App extends StatelessWidget {
   const App({super.key});
 
   @override
-  Widget build(BuildContext context) =>
-      const MaterialApp(title: 'Application', home: CounterScreen());
+  Widget build(BuildContext context) => const MaterialApp(title: 'Application', home: CounterScreen());
 }
 
 /// {@template counter_screen}
@@ -40,10 +38,7 @@ class CounterScreen extends StatefulWidget {
 }
 
 class _CounterScreenState extends State<CounterScreen> {
-  static const String _appVersion = String.fromEnvironment(
-    'APP_VERSION',
-    defaultValue: '1.0.0',
-  );
+  static const String _appVersion = String.fromEnvironment('APP_VERSION', defaultValue: '1.0.0');
 
   int _count = 0;
   late final UpdateCheckController _updateCheckController;
@@ -51,10 +46,7 @@ class _CounterScreenState extends State<CounterScreen> {
   @override
   void initState() {
     super.initState();
-    _updateCheckController = UpdateCheckController(
-      updateCheckApi: createUpdateCheckApi(),
-      version: _appVersion,
-    );
+    _updateCheckController = UpdateCheckController(updateCheckApi: createUpdateCheckApi(), version: _appVersion);
     _updateCheckController.checkForUpdates();
   }
 
@@ -72,13 +64,7 @@ class _CounterScreenState extends State<CounterScreen> {
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
       title: const Text('Application'),
-      actions: [
-        IconButton(
-          onPressed: _count == 0 ? null : _reset,
-          icon: const Icon(Icons.refresh),
-          tooltip: 'Reset',
-        ),
-      ],
+      actions: [IconButton(onPressed: _count == 0 ? null : _reset, icon: const Icon(Icons.refresh), tooltip: 'Reset')],
     ),
     body: SafeArea(
       child: ListenableBuilder(
@@ -86,18 +72,13 @@ class _CounterScreenState extends State<CounterScreen> {
         builder: (context, _) => Column(
           children: [
             if (_updateCheckController.state is! IdleUpdateCheckState)
-              AppUpdateAvailableWidget(
-                updateCheckController: _updateCheckController,
-              ),
+              AppUpdateAvailableWidget(updateCheckController: _updateCheckController),
             Expanded(
               child: Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      '$_count',
-                      style: Theme.of(context).textTheme.displayLarge,
-                    ),
+                    Text('$_count', style: Theme.of(context).textTheme.displayLarge),
                     const SizedBox(height: 16),
                     FilledButton.icon(
                       onPressed: _increment,

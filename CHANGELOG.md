@@ -1,3 +1,9 @@
+## 0.1.5 — 2026-04-22
+
+### Changed
+
+- **Example**: simplified the platform-specific update-check wiring with a conditional-import entrypoint and clarified the example update API contract for the user-approved refresh flow. (`example/lib/src/update/platform/update_check.dart`, `example/lib/src/update/platform/update_check_js.dart`, `example/lib/src/update/platform/update_check_vm.dart`, `example/lib/src/update/update_check_api.dart`)
+
 ## 0.1.4 — 2026-04-22
 
 ### Fixed

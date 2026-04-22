@@ -18,6 +18,7 @@ This example Flutter Web app showcases:
 - **Intelligent Loading**: Implements efficient loading strategies with progress tracking
 - **Offline Support**: Demonstrates how the service worker enables offline functionality
 - **Progressive Loading**: Shows smooth loading experience with detailed progress indicators
+- **Update Banner**: In generated web builds, the example listens for update events, rechecks `sw.js` while the tab stays open, and shows a dismissible "A new version is available, press Update to refresh" banner; Update Now activates the waiting worker and reloads once.
 - **Cache Management**: Includes built-in cache reset and management capabilities
 
 ## Globally Available Functions

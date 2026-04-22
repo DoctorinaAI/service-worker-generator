@@ -22,6 +22,7 @@ A complete **Flutter Web bootstrap replacement** that generates an optimized Ser
 - **Stall Detection** — Shows "Reset Cache" button after 30s without progress
 - **Console Logging** — Styled version banner and progress logging in browser console
 - **Global API** — `window.Bootstrap` for Dart integration (dispose, progress, subscribe)
+- **Update Prompt API** — Use `Bootstrap.onUpdateAvailable()` to show a "new version available" prompt, then call `Bootstrap.applyUpdate()` to activate the waiting Service Worker and reload into the new build.
 - **Flexible Configuration** — CLI args, YAML config file, and environment variables (priority: CLI > YAML > env)
 - **Cross-Platform** — Works on Windows, macOS, and Linux
 
@@ -388,6 +389,8 @@ external JSObject get bootstrapProgress;
 | `Bootstrap.dispose()`           | Remove loading widget, clean up listeners                   |
 | `Bootstrap.progress`            | Current state: `{ phase, percent, message }`                |
 | `Bootstrap.subscribe(callback)` | Subscribe to progress changes, returns unsubscribe function |
+| `Bootstrap.onUpdateAvailable(handler)` | Runs when a newer Service Worker has installed and is waiting; notifications stay active for the whole page session, even after the loading widget is gone. |
+| `Bootstrap.applyUpdate(reload = true)` | Activates the waiting Service Worker and reloads the page into the updated build. |
 
 Alternatively, the loading widget auto-disposes on the `flutter-first-frame` event.
 
