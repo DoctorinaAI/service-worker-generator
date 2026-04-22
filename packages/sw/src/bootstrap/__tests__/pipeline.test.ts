@@ -11,6 +11,7 @@ import { BootstrapAPI } from '../api';
 vi.mock('../sw-registration', () => ({
   registerServiceWorker: vi.fn(async () => null),
   listenForSWMessages: vi.fn(() => () => undefined),
+  reloadIfForeignController: vi.fn(async () => false),
 }));
 vi.mock('../canvaskit-loader', () => ({
   detectBrowserCaps: vi.fn(() => ({

@@ -1,3 +1,18 @@
+## 0.1.4 — 2026-04-22
+
+### Fixed
+
+- **Bootstrap**: `WebAssembly.instantiate(): Import #N "X": module is not an object or function` failures on first load after a deploy. When an old SW kept controlling the page while a new SW installed in the background, any file missing from the old SW's manifest fell through to the network (fresh) while cached files stayed stale — so Flutter would load a fresh `main.dart.mjs` against a stale `main.dart.wasm` and the import schemas would disagree. Bootstrap now force-activates a pre-existing waiting worker at registration time via `{type:'skipWaiting'}` + `controllerchange`, so subsequent `fetch(main.dart.wasm)` / `import(main.dart.mjs)` go through the new SW with a coherent cache. Bounded by `SW_REGISTRATION_TIMEOUT_MS`; falls back to the old `waitForActivation` path on timeout. (`packages/sw/src/bootstrap/sw-registration.ts`)
+- **Bootstrap**: pages controlled by a foreign SW at a different script path (e.g., an old `flutter_service_worker.js` left from a pre-migration deploy) can serve a similarly incoherent mix of files. Bootstrap now detects this pre-registration and performs a one-shot `location.reload()` after unregistering the offending registration. A `sessionStorage` guard prevents reload loops if the handoff doesn't take. (`packages/sw/src/bootstrap/sw-registration.ts`, `packages/sw/src/bootstrap/pipeline.ts`)
+
+### Changed
+
+- **Bootstrap**: foreign-controller cleanup is surgical — only the registration whose active worker equals the current `navigator.serviceWorker.controller` is unregistered. Unrelated registrations at other scopes (typically `firebase-messaging-sw.js` for push notifications) are left intact so their subscriptions survive the recovery. (`packages/sw/src/bootstrap/sw-registration.ts`)
+
+### Scope note
+
+- The pre-existing-waiting auto-activation is intentionally bootstrap-only: once the app is running, updates continue through the existing `sw-update-available` → `applyUpdate` user-approval flow, so running sessions are never yanked out from under the user.
+
 ## 0.1.3 — 2026-04-20
 
 ### Fixed
