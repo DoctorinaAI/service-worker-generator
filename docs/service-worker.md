@@ -60,7 +60,7 @@ interface ResourceEntry {
 1. Open temp cache (`{prefix}-temp-{version}`)
 2. Fetch all Core and Required resources with cache-busted URLs
 3. Store responses in temp cache
-4. Call `self.skipWaiting()`
+4. Leave the new worker in `waiting` until the client explicitly opts in
 5. Notify clients of progress during pre-caching
 
 ### Activate Event
@@ -156,6 +156,6 @@ type SWProgressStatus =
 ### Update Flow
 1. Browser detects new `sw.js` (byte comparison)
 2. New SW installs in background (pre-caches into temp cache)
-3. Old SW continues serving until all tabs close
-4. New SW activates → atomic cache swap → old caches cleaned
-5. `skipWaiting` message can force immediate activation
+3. New SW waits while the currently active worker keeps serving traffic
+4. Client calls `skipWaiting` only after the user accepts the update prompt
+5. New SW activates → atomic cache swap → old caches cleaned → `clients.claim()`

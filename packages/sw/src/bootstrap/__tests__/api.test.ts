@@ -69,18 +69,24 @@ describe('BootstrapAPI', () => {
     spy.mockRestore();
   });
 
-  it('dispose marks disposed, disposes widget, clears subscribers', () => {
-    const cb = vi.fn();
-    api.subscribe(cb);
+  it('dispose marks disposed, disposes widget, clears subscribers, retains updateHandlers', () => {
+    const progressCb = vi.fn();
+    const updateCb = vi.fn();
+    api.subscribe(progressCb);
+    api.onUpdateAvailable(updateCb);
     api.dispose();
 
     expect(api.disposed).toBe(true);
     expect(widget.dispose).toHaveBeenCalledOnce();
 
-    // Further updates are no-ops
+    // Further progress updates are no-ops (load-phase scoped).
     api.update('sw', 50, 'ignored');
-    expect(cb).not.toHaveBeenCalled();
+    expect(progressCb).not.toHaveBeenCalled();
     expect(widget.updateProgress).not.toHaveBeenCalled();
+
+    // Update handlers survive dispose (app-lifetime scoped) — see api.ts.
+    api.notifyUpdateAvailable();
+    expect(updateCb).toHaveBeenCalledOnce();
   });
 
   it('dispose is idempotent', () => {
@@ -92,6 +98,76 @@ describe('BootstrapAPI', () => {
   it('error() forwards message to widget.showError', () => {
     api.error('boom');
     expect(widget.showError).toHaveBeenCalledWith('boom');
+  });
+
+  describe('onUpdateAvailable', () => {
+    it('fires registered handlers on notifyUpdateAvailable', () => {
+      const a = vi.fn();
+      const b = vi.fn();
+      api.onUpdateAvailable(a);
+      api.onUpdateAvailable(b);
+
+      api.notifyUpdateAvailable();
+
+      expect(a).toHaveBeenCalledOnce();
+      expect(b).toHaveBeenCalledOnce();
+    });
+
+    it('returns an unsubscribe function', () => {
+      const handler = vi.fn();
+      const unsubscribe = api.onUpdateAvailable(handler);
+      unsubscribe();
+
+      api.notifyUpdateAvailable();
+
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('handlers survive dispose and still fire on subsequent notifyUpdateAvailable', () => {
+      const handler = vi.fn();
+      api.onUpdateAvailable(handler);
+      api.dispose();
+
+      api.notifyUpdateAvailable();
+
+      expect(handler).toHaveBeenCalledOnce();
+    });
+
+    it('a synchronous handler that throws does not stop other handlers', () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      const sibling = vi.fn();
+      api.onUpdateAvailable(() => {
+        throw new Error('boom');
+      });
+      api.onUpdateAvailable(sibling);
+
+      api.notifyUpdateAvailable();
+
+      expect(sibling).toHaveBeenCalledOnce();
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[Bootstrap] onUpdateAvailable handler threw:',
+        expect.any(Error),
+      );
+      errorSpy.mockRestore();
+    });
+
+    it('routes async-handler rejections to console.error', async () => {
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      api.onUpdateAvailable(async () => {
+        throw new Error('async boom');
+      });
+
+      api.notifyUpdateAvailable();
+      // Flush microtasks so the rejected Promise's .catch runs.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[Bootstrap] onUpdateAvailable async handler rejected:',
+        expect.any(Error),
+      );
+      errorSpy.mockRestore();
+    });
   });
 
   describe('updateAndLog', () => {
@@ -203,5 +279,49 @@ describe('installGlobalAPI', () => {
     ] as () => void;
     fn();
     expect(api.disposed).toBe(true);
+  });
+
+  it('window.Bootstrap.applyUpdate activates a waiting worker', async () => {
+    installGlobalAPI(api);
+    const postMessage = vi.fn();
+    const waiting = { postMessage };
+    const getRegistration = vi.fn(async () => ({ waiting }));
+    const addEventListener = vi.fn(
+      (
+        type: string,
+        listener: EventListenerOrEventListenerObject,
+        options?: boolean | AddEventListenerOptions,
+      ) => {
+        if (type === 'controllerchange') {
+          setTimeout(() => {
+            if (typeof listener === 'function') {
+              listener(new Event('controllerchange'));
+            } else {
+              listener.handleEvent(new Event('controllerchange'));
+            }
+          }, 0);
+        }
+        return undefined;
+      },
+    );
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: {
+        getRegistration,
+        addEventListener,
+      },
+    });
+    const bootstrap = (window as unknown as Record<string, unknown>)[
+      'Bootstrap'
+    ] as {
+      applyUpdate: (reload?: boolean) => Promise<boolean>;
+    };
+
+    await expect(bootstrap.applyUpdate(false)).resolves.toBe(true);
+
+    expect(getRegistration).toHaveBeenCalledOnce();
+    expect(postMessage).toHaveBeenCalledWith({ type: 'skipWaiting' });
+
+    delete (navigator as unknown as { serviceWorker?: unknown }).serviceWorker;
   });
 });

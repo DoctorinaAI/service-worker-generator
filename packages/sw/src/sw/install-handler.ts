@@ -8,6 +8,10 @@ declare const self: ServiceWorkerGlobalScope;
 /**
  * Handle the SW install event.
  * Pre-caches Core and Required resources into a temp cache.
+ *
+ * Intentionally does not call `skipWaiting()`: the newly installed worker
+ * should remain in `waiting` until the client explicitly accepts the update
+ * via the message-driven activation flow.
  */
 export function createInstallHandler(
   cachePrefix: string,
@@ -82,6 +86,4 @@ async function handleInstall(
     await caches.delete(tempCacheName);
     throw error;
   }
-
-  await self.skipWaiting();
 }

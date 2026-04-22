@@ -5,6 +5,7 @@
     "build": "npm -w packages/sw run build",
     "copy-assets": "node scripts/copy-assets.mjs",
     "build:all": "npm run build && npm run copy-assets",
+    "check:assets": "npm run build && npm run verify",
     "verify": "node scripts/verify-assets.mjs",
     "test": "npm -w packages/sw run test",
     "check": "npm -w packages/sw run check"

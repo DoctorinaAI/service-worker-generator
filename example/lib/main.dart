@@ -2,6 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:sw_example/src/initialization.dart';
+import 'package:sw_example/src/update/app_update_available_widget.dart';
+import 'package:sw_example/src/update/platform/update_check_api_factory.dart';
+import 'package:sw_example/src/update/update_check_controller.dart';
+import 'package:sw_example/src/update/update_check_state.dart';
 
 void main() => runZonedGuarded<void>(
   () async {
@@ -36,11 +40,33 @@ class CounterScreen extends StatefulWidget {
 }
 
 class _CounterScreenState extends State<CounterScreen> {
+  static const String _appVersion = String.fromEnvironment(
+    'APP_VERSION',
+    defaultValue: '1.0.0',
+  );
+
   int _count = 0;
+  late final UpdateCheckController _updateCheckController;
+
+  @override
+  void initState() {
+    super.initState();
+    _updateCheckController = UpdateCheckController(
+      updateCheckApi: createUpdateCheckApi(),
+      version: _appVersion,
+    );
+    _updateCheckController.checkForUpdates();
+  }
 
   void _increment() => setState(() => _count++);
 
   void _reset() => setState(() => _count = 0);
+
+  @override
+  void dispose() {
+    _updateCheckController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -55,16 +81,32 @@ class _CounterScreenState extends State<CounterScreen> {
       ],
     ),
     body: SafeArea(
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
+      child: ListenableBuilder(
+        listenable: _updateCheckController,
+        builder: (context, _) => Column(
           children: [
-            Text('$_count', style: Theme.of(context).textTheme.displayLarge),
-            const SizedBox(height: 16),
-            FilledButton.icon(
-              onPressed: _increment,
-              icon: const Icon(Icons.add),
-              label: const Text('Increment'),
+            if (_updateCheckController.state is! IdleUpdateCheckState)
+              AppUpdateAvailableWidget(
+                updateCheckController: _updateCheckController,
+              ),
+            Expanded(
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '$_count',
+                      style: Theme.of(context).textTheme.displayLarge,
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                      onPressed: _increment,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Increment'),
+                    ),
+                  ],
+                ),
+              ),
             ),
           ],
         ),

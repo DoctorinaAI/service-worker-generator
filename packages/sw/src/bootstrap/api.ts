@@ -93,11 +93,32 @@ export class BootstrapAPI {
     return () => this.updateHandlers.delete(handler);
   }
 
-  /** Internal: fire registered update handlers. Safe if none are set. */
+  /**
+   * Internal: fire registered update handlers. Safe if none are set.
+   *
+   * Intentionally `_disposed`-agnostic. The `sw-update-available` event can
+   * legitimately arrive any time during the page session — typically several
+   * seconds after `flutter-first-frame` has already triggered `dispose()` —
+   * so the handler set must remain reachable past dispose. See `dispose()`
+   * below and the bridge listener installed by `runPipeline` in
+   * `pipeline.ts`.
+   *
+   * Async handlers (`UpdateHandler` is `() => void | Promise<void>`) have
+   * their rejections routed to `console.error` so they don't surface as
+   * "Uncaught (in promise)" warnings that mask the real error.
+   */
   notifyUpdateAvailable(): void {
     for (const h of this.updateHandlers) {
       try {
-        void h();
+        const result = h();
+        if (result && typeof (result as PromiseLike<void>).then === 'function') {
+          (result as Promise<void>).catch((error) =>
+            console.error(
+              '[Bootstrap] onUpdateAvailable async handler rejected:',
+              error,
+            ),
+          );
+        }
       } catch (error) {
         console.error('[Bootstrap] onUpdateAvailable handler threw:', error);
       }
@@ -105,15 +126,22 @@ export class BootstrapAPI {
   }
 
   /**
-   * Remove loading widget and clean up.
-   * Called by Dart when app is ready.
+   * Remove loading widget and clean up. Called by Dart when the app is
+   * ready (typically via `window.removeLoadingIndicator()` or the
+   * automatic `flutter-first-frame` listener in `pipeline.ts`).
+   *
+   * `updateHandlers` are intentionally NOT cleared here. They model
+   * app-lifetime concerns — a newer Service Worker can install at any
+   * moment during the session (see `wireUpdateDetection` in
+   * `sw-registration.ts`) — whereas `subscribers` and the loading widget
+   * are load-phase only. Clearing update handlers here would silently
+   * kill the "update available" UX after the loading screen disappears.
    */
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
     this.widget.dispose();
     this.subscribers.clear();
-    this.updateHandlers.clear();
   }
 }
 

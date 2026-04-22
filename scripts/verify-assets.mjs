@@ -12,46 +12,53 @@ import { readFileSync, existsSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { createHash } from 'crypto';
 import { fileURLToPath } from 'url';
+import {
+  artifacts,
+  normalizeTextForComparison,
+  renderDartAsset,
+} from './asset-utils.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 
-const artifacts = [
-  { dist: 'packages/sw/dist/sw.js', dart: 'lib/src/assets/sw_template.dart' },
-  {
-    dist: 'packages/sw/dist/bootstrap.js',
-    dart: 'lib/src/assets/bootstrap_template.dart',
-  },
-];
-
 let ok = true;
 
-for (const { dist, dart } of artifacts) {
-  const distPath = resolve(root, dist);
-  const dartPath = resolve(root, dart);
+for (const artifact of artifacts) {
+  const distPath = resolve(root, artifact.input);
+  const dartPath = resolve(root, artifact.output);
 
   if (!existsSync(distPath)) {
-    console.error(`MISSING: ${dist} — run 'npm run build' first`);
+    console.error(`MISSING: ${artifact.input} — run 'npm run build' first`);
     ok = false;
     continue;
   }
 
   if (!existsSync(dartPath)) {
-    console.error(`MISSING: ${dart} — run 'npm run prebuild' first`);
+    console.error(`MISSING: ${artifact.output} — run 'npm run build:all' first`);
     ok = false;
     continue;
   }
 
   const jsContent = readFileSync(distPath, 'utf-8');
-  const dartContent = readFileSync(dartPath, 'utf-8');
+  const actualDartContent = readFileSync(dartPath, 'utf-8');
+  const expectedDartContent = renderDartAsset(artifact, jsContent);
 
-  // Check that the Dart file contains the JS content
-  if (dartContent.includes(jsContent.trim())) {
+  if (
+    normalizeTextForComparison(actualDartContent) ===
+    normalizeTextForComparison(expectedDartContent)
+  ) {
     const hash = createHash('md5').update(jsContent).digest('hex').slice(0, 8);
-    console.log(`  OK: ${dist} (${hash}) matches ${dart}`);
+    console.log(`  OK: ${artifact.input} (${hash}) matches ${artifact.output}`);
   } else {
-    console.error(`MISMATCH: ${dart} does not contain current ${dist}`);
-    console.error(`  Run 'npm run prebuild' to update.`);
+    const distHash = createHash('md5').update(jsContent).digest('hex').slice(0, 8);
+    const actualHash = createHash('md5')
+      .update(normalizeTextForComparison(actualDartContent))
+      .digest('hex')
+      .slice(0, 8);
+    console.error(`MISMATCH: ${artifact.output} does not match current ${artifact.input}`);
+    console.error(`  dist hash: ${distHash}`);
+    console.error(`  dart hash: ${actualHash}`);
+    console.error(`  Run 'npm run build:all' to update.`);
     ok = false;
   }
 }
