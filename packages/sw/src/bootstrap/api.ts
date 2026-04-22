@@ -111,8 +111,8 @@ export class BootstrapAPI {
     for (const h of this.updateHandlers) {
       try {
         const result = h();
-        if (result instanceof Promise) {
-          result.catch((error) =>
+        if (result && typeof (result as PromiseLike<void>).then === 'function') {
+          (result as Promise<void>).catch((error) =>
             console.error(
               '[Bootstrap] onUpdateAvailable async handler rejected:',
               error,
