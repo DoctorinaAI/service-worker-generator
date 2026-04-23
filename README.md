@@ -57,6 +57,7 @@ dart pub global activate sw ^0.1.2
 flutter build web --release --wasm --base-href=/ -o build/web
 
 # 2. Swap the dev index.html for the prod template (see "Local Development")
+#    (web/index.prod.html must keep an explicit <base href="/" />)
 cp web/index.prod.html build/web/index.html
 
 # 3. Generate service worker and bootstrap
@@ -193,6 +194,8 @@ Replace Flutter's default `index.html` content with a single script tag:
 </html>
 ```
 
+The explicit `<base href="/" />` is intentional for the production template and should not be replaced with `$FLUTTER_BASE_HREF`. If you deploy under a subpath, keep the base href explicit there too, and make sure it still ends with `/`.
+
 The loading widget, progress tracking, service worker registration, and Flutter initialization are all handled by `bootstrap.js` automatically.
 
 ### Bootstrap Configuration (data-config)
@@ -252,6 +255,8 @@ Flutter populates `flutter_bootstrap.js` on build; during `flutter run` it is se
 ### Prod template — `web/index.prod.html`
 
 Replace Flutter's loader with the `bootstrap.js` tag shown in [index.html Setup](#indexhtml-setup). This file is **not** touched by `flutter build` — it is a static asset copied into `build/web/` next to the dev `index.html`.
+
+> **Important.** Keep an explicit `<base href="/" />` in `web/index.prod.html` for the default root deployment flow. Do **not** leave `$FLUTTER_BASE_HREF` in the prod template. If you change the base href for a subpath deployment, it must still end with `/` (for example, `/my-app/`).
 
 ### CI step — swap templates before generating
 
@@ -384,13 +389,13 @@ external void bootstrapDispose();
 external JSObject get bootstrapProgress;
 ```
 
-| Method                          | Description                                                 |
-| ------------------------------- | ----------------------------------------------------------- |
-| `Bootstrap.dispose()`           | Remove loading widget, clean up listeners                   |
-| `Bootstrap.progress`            | Current state: `{ phase, percent, message }`                |
-| `Bootstrap.subscribe(callback)` | Subscribe to progress changes, returns unsubscribe function |
+| Method                                 | Description                                                                                                                                                 |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Bootstrap.dispose()`                  | Remove loading widget, clean up listeners                                                                                                                   |
+| `Bootstrap.progress`                   | Current state: `{ phase, percent, message }`                                                                                                                |
+| `Bootstrap.subscribe(callback)`        | Subscribe to progress changes, returns unsubscribe function                                                                                                 |
 | `Bootstrap.onUpdateAvailable(handler)` | Runs when a newer Service Worker has installed and is waiting; notifications stay active for the whole page session, even after the loading widget is gone. |
-| `Bootstrap.applyUpdate(reload = true)` | Activates the waiting Service Worker and reloads the page into the updated build. |
+| `Bootstrap.applyUpdate(reload = true)` | Activates the waiting Service Worker and reloads the page into the updated build.                                                                           |
 
 Alternatively, the loading widget auto-disposes on the `flutter-first-frame` event.
 
