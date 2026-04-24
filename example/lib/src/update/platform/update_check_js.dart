@@ -29,20 +29,25 @@ const Duration _registrationUpdateInterval = Duration(minutes: 15);
 /// deploy boundary.
 const Duration _visibilityDebounce = Duration(seconds: 30);
 
-/// The first 10 seconds after page load belong to the SW layer.
-/// sw's `activateWaitingAtBootstrap` is still settling, and any
-/// racing install from a just-initiated reload (Update Now / F5 /
-/// navigation) is SW plumbing — not a user-actionable decision. Ignore
-/// update events in this window; a resulting waiting worker is picked
-/// up silently on the next natural reload via `activateWaitingAtBootstrap`,
-/// the 15-min [_registrationUpdateInterval] poll, or
-/// `visibilitychange` triggering [_runRegistrationUpdate].
+/// Window after page load during which update events are treated as
+/// racing-install fallout from the navigation that just loaded the
+/// page. The response to events in this window is navigation-type-
+/// aware; see [UpdateCheckApiImpl._markUpdatePending] for the
+/// dispatch rules. After the window elapses, any update event is a
+/// genuine mid-session decision point and surfaces through the banner
+/// path.
 ///
-/// This keeps each user-initiated Update Now to exactly one page reload
-/// and matches the design contract documented in sw's CHANGELOG:
-/// "The pre-existing-waiting auto-activation is intentionally
-/// bootstrap-only: once the app is running, updates continue through
-/// the existing sw-update-available → applyUpdate user-approval flow."
+/// Sized at 10 seconds to comfortably cover sw internal
+/// `SW_REGISTRATION_TIMEOUT_MS` (4 seconds) plus slack for
+/// asset-heavy installs, while remaining short enough that events
+/// arriving after the window reliably represent genuine mid-session
+/// updates.
+///
+/// Matches the design contract documented in sw:
+/// the pre-existing-waiting auto-activation is intentionally
+/// bootstrap-only; once the app is running, updates continue through
+/// the existing `sw-update-available` → `applyUpdate` user-approval
+/// flow.
 const Duration _earlyLoadWindow = Duration(seconds: 10);
 
 /// JS interop binding for `window.Bootstrap`, installed by sw 0.1.x's
@@ -86,8 +91,7 @@ final class UpdateCheckApiImpl implements UpdateCheckApi {
 
   /// Broadcast so the controller can subscribe (and re-subscribe)
   /// without forcing the API to know how many listeners it has.
-  final StreamController<void> _updateController =
-      StreamController<void>.broadcast();
+  final StreamController<void> _updateController = StreamController<void>.broadcast();
 
   /// 15-min `registration.update()` poll. Cancelled in [dispose].
   Timer? _registrationUpdateTimer;
@@ -121,10 +125,7 @@ final class UpdateCheckApiImpl implements UpdateCheckApi {
       return;
     }
     try {
-      await bootstrap
-          .applyUpdate(true.toJS)
-          .toDart
-          .timeout(_applyUpdateTimeout);
+      await bootstrap.applyUpdate(true.toJS).toDart.timeout(_applyUpdateTimeout);
     } on Object {
       // applyUpdate hung (no controllerchange) or threw at the interop
       // boundary — force a reload so the user is never stranded on the
@@ -159,27 +160,55 @@ final class UpdateCheckApiImpl implements UpdateCheckApi {
 
   /// Handle a pending-update signal from `Bootstrap.onUpdateAvailable`.
   ///
-  /// Events arriving within [_earlyLoadWindow] of page load are treated
-  /// as racing-install fallout from a reload the user just initiated —
-  /// the SW layer (sw's `activateWaitingAtBootstrap`) will silently
-  /// apply any resulting waiting worker on the next natural reload. We
-  /// surface only updates that arrive AFTER the user has had meaningful
-  /// time to engage with the loaded app; those are genuine decision
-  /// points and get the banner treatment through the controller.
+  /// Events arriving within [_earlyLoadWindow] of page load are
+  /// racing-install fallout from whatever just loaded the page; the
+  /// response splits by `PerformanceNavigationTiming.type`:
+  ///
+  /// - `'navigate'` (fresh entry — user typed URL, clicked an external
+  ///   link, opened a new tab): silently auto-apply via
+  ///   [updateApplication] so the user lands on the latest version
+  ///   immediately. One extra silent reload is acceptable here — the
+  ///   user just arrived and has no in-flight interaction to disrupt.
+  /// - anything else (`'reload'`, `'back_forward'`, `'prerender'`):
+  ///   defer. The user just triggered a reload (Update Now / F5 /
+  ///   back-forward); a second silent reload on top would feel like a
+  ///   glitch. sw `activateWaitingAtBootstrap`, the 15-min
+  ///   [_runRegistrationUpdate] poll, and `visibilitychange` refreshes
+  ///   together pick up any waiting worker on the next natural reload.
+  ///
+  /// After [_earlyLoadWindow] passes, any event is a genuine mid-session
+  /// decision point and surfaces as a banner through the controller.
   void _markUpdatePending() {
     if (_disposed) return;
     if (web.window.performance.now() < _earlyLoadWindow.inMilliseconds) {
+      if (_isFreshNavigation()) {
+        unawaited(updateApplication());
+      }
       return;
     }
     _updatePending = true;
     if (!_updateController.isClosed) _updateController.add(null);
   }
 
+  /// Returns `true` when the current page was reached via a fresh
+  /// navigation (typed URL, clicked external link, new tab opened to
+  /// this URL). Returns `false` for `'reload'`, `'back_forward'`,
+  /// `'prerender'`, or when the Navigation Timing entry is unavailable.
+  ///
+  /// Backed by the W3C-standard `PerformanceNavigationTiming.type`
+  /// field, exposed via [web.window.performance.getEntriesByType].
+  bool _isFreshNavigation() {
+    try {
+      final entries = web.window.performance.getEntriesByType('navigation').toDart;
+      if (entries.isEmpty) return false;
+      return (entries.first as web.PerformanceNavigationTiming).type == 'navigate';
+    } on Object {
+      return false;
+    }
+  }
+
   void _startRegistrationUpdateTimer() {
-    _registrationUpdateTimer = Timer.periodic(
-      _registrationUpdateInterval,
-      (_) => unawaited(_runRegistrationUpdate()),
-    );
+    _registrationUpdateTimer = Timer.periodic(_registrationUpdateInterval, (_) => unawaited(_runRegistrationUpdate()));
   }
 
   void _startVisibilityListener() {
