@@ -6,8 +6,8 @@ import 'dart:async';
 /// waiting?" and "fire when one appears".
 abstract class UpdateCheckApi {
   /// `true` once a newer Service Worker has finished installing and is
-  /// waiting (either signalled via `Bootstrap.onUpdateAvailable` or
-  /// detected by the one-shot startup probe).
+  /// waiting to take control, as signalled through
+  /// `Bootstrap.onUpdateAvailable` (sw 0.1.x's post-install event).
   bool get hasPendingUpdate;
 
   /// Fires whenever a newer Service Worker becomes available. The
