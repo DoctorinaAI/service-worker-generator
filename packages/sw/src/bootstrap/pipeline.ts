@@ -83,28 +83,24 @@ async function runPipelineWork(
   //     is what produced `Loaded 5 of 4 resources`.
   const completedKeys = new Set<string>();
   let totalResourcesCount = 0;
-  let warnedAboutVersion = false;
+  let foreignVersion: string | null = null;
+  let sawOwnVersion = false;
   const cleanupSWListener: (() => void) | null =
     'serviceWorker' in navigator
       ? listenForSWMessages((data) => {
           const msg = data as SWProgressMessage;
 
           if (msg.swVersion !== build.swVersion) {
-            // Expected during an update load, while the old controller is
-            // still talking. But if it is *every* message, this bootstrap
-            // and the worker came from different builds — usually a
-            // `bootstrap.js` served from the HTTP cache without
-            // `Cache-Control: no-cache` — and the counter would otherwise
-            // sit still with nothing to explain it.
-            if (!warnedAboutVersion) {
-              warnedAboutVersion = true;
-              console.warn(
-                `[Bootstrap] Ignoring sw-progress from v${msg.swVersion}; ` +
-                  `this build is v${build.swVersion}`,
-              );
-            }
+            // Routine during an update load: the old controller keeps
+            // reporting against its own manifest while the new worker
+            // installs, and the two denominators need not agree. Warning
+            // here would fire on every healthy update, so only record it —
+            // whether it was *every* message is not knowable until the
+            // listener is torn down, and that is where it gets reported.
+            foreignVersion = msg.swVersion;
             return;
           }
+          sawOwnVersion = true;
 
           // Latch the denominator once. A single worker reports a constant
           // `resourcesCount`, so this only guards against a mid-load change
@@ -123,9 +119,12 @@ async function runPipelineWork(
             completedKeys.add(msg.resourceKey);
           }
 
-          // `completedKeys` is a subset of the counted set, so the clamp is
-          // unreachable — it stays as a last line of defence, because the
-          // number it guards is rendered straight to the user.
+          // Within one worker `completedKeys` is a subset of the counted
+          // set. The clamp covers the case that survives the version
+          // filter: two builds generated with the same explicit
+          // `--version` report different counted sets under one identity,
+          // and their union can outrun the latched total. The number it
+          // guards is rendered straight to the user.
           const done = Math.min(completedKeys.size, totalResourcesCount);
           const downloadPercent = (done / totalResourcesCount) * 100;
           const internalPercent =
@@ -212,5 +211,16 @@ async function runPipelineWork(
     api.error(message);
   } finally {
     cleanupSWListener?.();
+    // Every message came from a worker that is not this build, so the
+    // counter never had a denominator to fill. Usually a `bootstrap.js`
+    // served from the HTTP cache without `Cache-Control: no-cache`.
+    if (foreignVersion !== null && !sawOwnVersion) {
+      console.warn(
+        `[Bootstrap] No sw-progress from v${build.swVersion}; every message ` +
+          `came from v${String(foreignVersion)}. This bootstrap and the ` +
+          `service worker are from different builds, so the resource ` +
+          `counter stayed empty.`,
+      );
+    }
   }
 }

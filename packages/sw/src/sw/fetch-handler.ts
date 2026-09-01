@@ -1,7 +1,11 @@
 import type { ResourceManifest, ResourceEntry } from '../shared/types';
 import { ResourceCategory } from '../shared/types';
 import { NEVER_CACHE_FILES, RESERVED_PATH_PREFIXES } from '../shared/constants';
-import { getResourceKey, fetchWithRetry } from '../shared/utils';
+import {
+  getResourceKey,
+  fetchWithRetry,
+  replayableResponse,
+} from '../shared/utils';
 import { lazyCacheResponse, getContentCacheName } from './cache-manager';
 import type { ProgressReporter } from './progress';
 
@@ -134,24 +138,42 @@ async function networkFirst(
     return fallbackToCache();
   }
 
+  // A navigation request carries redirect mode "manual", so a same-origin
+  // 3xx arrives opaque: `type` is "opaqueredirect", `status` is 0 and `ok`
+  // is false. That is not a failure. Handing it back is precisely what lets
+  // the browser follow the redirect; reading it as a failure would answer
+  // every redirecting URL on the origin with the app shell instead.
+  if (response.type === 'opaqueredirect' || response.status === 0) {
+    return response;
+  }
+
   if (!response.ok) {
     return fallbackToCache();
   }
 
-  // A redirected response cannot be replayed for a later navigation —
-  // browsers reject it when the request's redirect mode is not "follow" —
-  // so it must never become the cached shell.
-  if (isShellRequest && !response.redirected) {
+  if (isShellRequest) {
+    let stored = false;
     try {
       const cache = await caches.open(cacheName);
-      await cache.put(new Request(INDEX_KEY), response.clone());
+      // Store a replayable copy: a response carrying the `redirected` flag
+      // is rejected by the browser when it is later served for a
+      // navigation, which would break exactly the offline load the
+      // pre-cached shell exists for.
+      await cache.put(
+        new Request(INDEX_KEY),
+        await replayableResponse(response.clone()),
+      );
+      stored = true;
     } catch (error) {
       // Quota pressure is routine for a wasm-sized app. A cache we could
       // not write is a worse offline story, not a reason to withhold a
       // page the origin just served.
       console.warn('[SW] App-shell cache write failed:', error);
     }
-    await notifyIndex('updated');
+    // Report the refresh only when it happened. Announcing an update we
+    // failed to store would hide quota pressure from the one channel
+    // built to surface resource state.
+    if (stored) await notifyIndex('updated');
   }
 
   return response;

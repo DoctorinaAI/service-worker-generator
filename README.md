@@ -424,10 +424,13 @@ dart run sw:generate \
 These files are always fetched fresh (never stored in the SW cache):
 
 - `bootstrap.js` — must reflect latest build config
-- `index.html` — must be fresh for updates
 - `sw.js` — browser handles SW updates natively
 
-The same three files also require `Cache-Control: no-cache` at the HTTP layer — see [Server Configuration](#server-configuration).
+`index.html` is a special case: it is pre-cached as the app shell so an
+offline navigation has something to resolve to, but it is served
+network-first, so an online visitor always gets the copy the origin holds.
+It still requires `Cache-Control: no-cache` at the HTTP layer, alongside the
+two files above — see [Server Configuration](#server-configuration).
 
 ## Service Worker
 
@@ -435,7 +438,7 @@ The same three files also require `Cache-Control: no-cache` at the HTTP layer �
 
 | Resource           | Strategy      | Details                                         |
 | ------------------ | ------------- | ----------------------------------------------- |
-| `index.html` (`/`) | Network-first | Fresh from network, cache fallback for offline  |
+| Navigations        | Network-first | Fresh from network, pre-cached shell for offline |
 | Core + Required    | Pre-cached    | Cached during SW install with cache-busted URLs |
 | Optional           | Lazy cache    | Cached on first fetch for repeat visits         |
 | Ignore             | Pass-through  | Not cached, always from network                 |

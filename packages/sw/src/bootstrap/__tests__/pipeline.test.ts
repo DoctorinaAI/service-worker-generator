@@ -256,6 +256,10 @@ describe('runPipeline — SW progress counter', () => {
     delete (navigator as unknown as { serviceWorker?: unknown }).serviceWorker;
   });
 
+  /** Let the mocked pipeline run to its `finally`. */
+  const settle = (): Promise<void> =>
+    new Promise((resolve) => setTimeout(resolve, 0));
+
   /**
    * Start the pipeline and hand back the callback it registered with
    * `listenForSWMessages`, so tests can play SW messages into it directly.
@@ -326,6 +330,50 @@ describe('runPipeline — SW progress counter', () => {
       send({ resourceKey: key });
     }
     expect(api.progress.message).toBe('Loaded 4 of 4 resources');
+  });
+
+  it('clamps when two builds report under one pinned version', () => {
+    // The version filter separates workers by identity, so it cannot help
+    // when a caller pins `--version` to a constant across builds: two
+    // different counted sets arrive under the same name, the denominator
+    // is latched from whoever spoke first, and their union outruns it.
+    // This is the original "Loaded 5 of 4" shape, reached the only way it
+    // still can be.
+    const { api, send } = startAndCapture();
+    for (const key of ['a', 'b', 'c', 'd']) send({ resourceKey: key });
+    expect(api.progress.message).toBe('Loaded 4 of 4 resources');
+
+    send({ resourceKey: 'e', resourcesCount: 9 });
+    expect(api.progress.message).toBe('Loaded 4 of 4 resources');
+  });
+
+  it('stays quiet about a foreign worker on a healthy update load', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { send } = startAndCapture();
+    // The outgoing controller talks first; the installing worker answers.
+    send({ resourceKey: 'version.json', swVersion: 'v0', resourcesCount: 9 });
+    send({ resourceKey: 'main.dart.wasm' });
+    await settle();
+
+    expect(warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('No sw-progress'),
+    );
+  });
+
+  it('reports at teardown when every message came from another build', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { api, send } = startAndCapture();
+    send({ resourceKey: 'main.dart.wasm', swVersion: 'v0', resourcesCount: 9 });
+    send({ resourceKey: 'manifest.json', swVersion: 'v0', resourcesCount: 9 });
+    await settle();
+
+    // Nothing was countable, so the counter never rendered...
+    expect(api.progress.message).not.toContain('resources');
+    // ...and the reason is said once, after it is knowable.
+    const messages = warn.mock.calls.map((call) => String(call[0]));
+    const reports = messages.filter((m) => m.includes('No sw-progress'));
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toContain('v0');
   });
 
   it('does not count in-flight or failed resources', () => {

@@ -95,6 +95,41 @@ async function shellInCache(caches: MockCacheStorage): Promise<string | null> {
   return hit ? await hit.text() : null;
 }
 
+/**
+ * A 200 that reports `redirected: true`, the way a host returns it after
+ * normalizing a URL. `Response` has no constructor option for the flag.
+ */
+function redirectedResponse(body: string): Response {
+  // `clone()` has to stay redirected too, or the caller under test quietly
+  // gets a clean response and the guard is never exercised.
+  const wrap = (inner: Response): Response =>
+    new Proxy(inner, {
+      get(target, prop) {
+        if (prop === 'redirected') return true;
+        if (prop === 'clone') return () => wrap(target.clone());
+        const value = Reflect.get(target, prop);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as Response;
+  return wrap(textResponse(body));
+}
+
+/**
+ * Pretend the worker is registered under `scope` for the duration of a
+ * test. Resource keys are scope-relative, and every deployment under a
+ * `<base href>` other than `/` depends on that.
+ */
+function withScope(scope: string): () => void {
+  const target = self as unknown as { registration?: unknown };
+  const had = 'registration' in target;
+  const previous = target.registration;
+  target.registration = { scope };
+  return () => {
+    if (had) target.registration = previous;
+    else delete target.registration;
+  };
+}
+
 /** Make retries instant so offline paths don't burn the test timeout. */
 function fastRetries(): void {
   const realSetTimeout = globalThis.setTimeout;
@@ -164,23 +199,60 @@ describe('navigation handling — app-shell integrity', () => {
     expect(await response.text()).toBe(SHELL);
   });
 
-  it('does not store a redirected response as the shell', async () => {
-    // A navigation response that followed a redirect cannot be replayed for
-    // a later navigation: the browser rejects `respondWith` with a redirected
-    // response when the request's redirect mode is not "follow".
-    const redirected = new Proxy(textResponse('<html>elsewhere</html>'), {
-      get(target, prop) {
-        if (prop === 'redirected') return true;
-        const value = Reflect.get(target, prop);
-        return typeof value === 'function' ? value.bind(target) : value;
-      },
-    });
+  it('stores a shell that followed a redirect as a replayable copy', async () => {
+    // A response carrying the `redirected` flag cannot be replayed for a
+    // later navigation: the browser rejects it when the request's redirect
+    // mode is not "follow". Dropping the response would leave the shell
+    // slot empty on a host that normalizes `/index.html` to `/`, so the
+    // body is kept and only the flag is shed.
+    const redirected = redirectedResponse('<html>canonical</html>');
     installMockFetch(async () => redirected);
 
     const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
     handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
     await event._responded!;
 
+    const cached = await mockCaches.peek(CONTENT_CACHE)?.match(new Request('index.html'));
+    expect(cached).toBeDefined();
+    expect(cached!.redirected).toBe(false);
+    expect(await cached!.text()).toBe('<html>canonical</html>');
+  });
+
+  it('precaches a redirected shell as a replayable copy', async () => {
+    // Install is the only writer of the shell on a cold profile, so the
+    // same guarantee has to hold there — a redirected copy stored here
+    // fails every offline navigation for the life of the deploy.
+    installMockFetch(async () => redirectedResponse(SHELL));
+
+    await precacheResources(CONTENT_CACHE, manifest(), COUNTED_CATEGORIES);
+
+    const cached = await mockCaches.peek(CONTENT_CACHE)?.match(new Request('index.html'));
+    expect(cached).toBeDefined();
+    expect(cached!.redirected).toBe(false);
+    expect(await cached!.text()).toBe(SHELL);
+  });
+
+  it('lets the browser follow a same-origin redirect instead of answering it', async () => {
+    // A navigation carries redirect mode "manual", so a 3xx comes back
+    // opaque: status 0, `ok` false. Treating that as a failure would hand
+    // the app shell to every redirecting URL on the origin.
+    const opaque = new Proxy(textResponse('', 200), {
+      get(target, prop) {
+        if (prop === 'type') return 'opaqueredirect';
+        if (prop === 'status') return 0;
+        if (prop === 'ok') return false;
+        const value = Reflect.get(target, prop);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }) as Response;
+    installMockFetch(async () => opaque);
+
+    const event = makeEvent(`${ORIGIN}/legacy/path`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    const response = await event._responded!;
+
+    expect(response.type).toBe('opaqueredirect');
+    // Crucially not the shell: the redirect is passed back untouched.
     expect(await shellInCache(mockCaches)).toBe(SHELL);
   });
 
@@ -286,5 +358,69 @@ describe('precache ↔ fetch-handler cache keys', () => {
     const counted = Object.keys(manifest()).filter((k) => reporter.isCounted(k));
     expect(fetched.sort()).toEqual(counted.sort());
     expect(reporter.resourcesCount).toBe(counted.length);
+  });
+});
+
+describe('navigation handling — app served from a subpath', () => {
+  let mockCaches: MockCacheStorage;
+  let restoreScope: () => void;
+
+  beforeEach(() => {
+    mockCaches = installMockCaches();
+    restoreScope = withScope(`${ORIGIN}/app/`);
+  });
+
+  afterEach(() => {
+    restoreScope();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('still passes host-reserved paths straight to the network', async () => {
+    // The guard matches on a resource key, so the key has to be relative to
+    // the worker's scope. Matching the absolute pathname would make
+    // `app/__/auth/handler` miss the `__/` prefix and route Firebase Auth
+    // through the app-shell branch — the exact breakage the prefix list
+    // exists to prevent, silently reintroduced by a `<base href>`.
+    installMockFetch(async () => textResponse(AUTH_PAGE));
+
+    const event = makeEvent(`${ORIGIN}/app/__/auth/handler`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+
+    expect(event.respondWith).not.toHaveBeenCalled();
+  });
+
+  it('treats the scope root as a request for the shell', async () => {
+    installMockFetch(async () => textResponse(SHELL));
+
+    const event = makeEvent(`${ORIGIN}/app/`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    await event._responded!;
+
+    expect(await shellInCache(mockCaches)).toBe(SHELL);
+  });
+
+  it('serves a deep route from the pre-cached shell while offline', async () => {
+    installMockFetch(async () => textResponse(SHELL));
+    await precacheResources(CONTENT_CACHE, manifest(), COUNTED_CATEGORIES);
+
+    fastRetries();
+    installMockFetch(async () => {
+      throw new Error('offline');
+    });
+    const event = makeEvent(`${ORIGIN}/app/chat/42`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    const response = await event._responded!;
+
+    expect(await response.text()).toBe(SHELL);
+  });
+
+  it('leaves a same-origin URL outside the scope to the network', async () => {
+    installMockFetch(async () => textResponse('<html>other app</html>'));
+
+    const event = makeEvent(`${ORIGIN}/other/index.html`);
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+
+    expect(event.respondWith).not.toHaveBeenCalled();
   });
 });

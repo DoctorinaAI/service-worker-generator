@@ -15,6 +15,9 @@ interface ProgressMessage {
 declare global {
   interface Window {
     __swProgress?: ProgressMessage[];
+    /** Quiescence bookkeeping for `settleProgress`. */
+    __swSeen?: number;
+    __swSeenAt?: number;
   }
 }
 
@@ -36,6 +39,33 @@ async function recordProgress(page: Page): Promise<void> {
 
 async function progressMessages(page: Page): Promise<ProgressMessage[]> {
   return page.evaluate(() => window.__swProgress ?? []);
+}
+
+/**
+ * Wait until the worker has reported something and then gone quiet.
+ *
+ * A fixed sleep is the wrong instrument here: it is simultaneously too long
+ * on a fast machine and too short on a loaded CI runner, and five of them in
+ * a loop is most of a Playwright timeout spent on purpose.
+ */
+async function settleProgress(page: Page, budgetMs = 15_000): Promise<void> {
+  await page.waitForFunction(() => (window.__swProgress?.length ?? 0) > 0, undefined, {
+    timeout: budgetMs,
+  });
+  await page.waitForFunction(
+    () => {
+      const seen = window.__swProgress?.length ?? 0;
+      const now = Date.now();
+      if (window.__swSeen !== seen) {
+        window.__swSeen = seen;
+        window.__swSeenAt = now;
+        return false;
+      }
+      return now - (window.__swSeenAt ?? now) > 750;
+    },
+    undefined,
+    { timeout: budgetMs, polling: 100 },
+  );
 }
 
 /** Counter lines printed by the loading overlay, in order. */
@@ -92,33 +122,39 @@ test.describe('startup progress counter', () => {
     const counter = watchCounter(page);
 
     await page.goto(BASE_URL);
-    await page.waitForTimeout(6000);
+    await settleProgress(page);
 
     assertCounterHolds(await progressMessages(page));
     expect(counter.filter((s) => s.done > s.total)).toEqual([]);
   });
 
   test('warm load never counts past its total', async ({ page }) => {
+    await recordProgress(page);
     await clearSiteData(page);
     await page.goto(BASE_URL);
-    await page.waitForTimeout(6000);
+    await settleProgress(page);
 
-    await recordProgress(page);
     const counter = watchCounter(page);
     await page.reload();
-    await page.waitForTimeout(6000);
+    await settleProgress(page);
 
     assertCounterHolds(await progressMessages(page));
     expect(counter.filter((s) => s.done > s.total)).toEqual([]);
   });
 
   test('five consecutive cold loads never overflow', async ({ page }) => {
+    // Five real page loads of a release build: worth its own budget rather
+    // than the default per-test timeout.
+    test.setTimeout(120_000);
+    // Installed once. `addInitScript` accumulates, so registering it per
+    // iteration would run five recorders on the last load and push every
+    // message five times.
+    await recordProgress(page);
     const counter = watchCounter(page);
     for (let run = 0; run < 5; run++) {
       await clearSiteData(page);
-      await recordProgress(page);
       await page.goto(BASE_URL);
-      await page.waitForTimeout(4000);
+      await settleProgress(page);
       assertCounterHolds(await progressMessages(page));
     }
     expect(counter.filter((s) => s.done > s.total)).toEqual([]);

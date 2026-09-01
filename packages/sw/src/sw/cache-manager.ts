@@ -8,7 +8,9 @@ import {
 import {
   cacheBustUrl,
   fetchWithRetry,
+  getResourceKey,
   mapWithConcurrency,
+  replayableResponse,
 } from '../shared/utils';
 
 declare const self: ServiceWorkerGlobalScope;
@@ -59,13 +61,18 @@ export async function precacheResources(
   await mapWithConcurrency(entries, PRECACHE_CONCURRENCY, async ([path, entry]) => {
     const url = cacheBustUrl(path, entry.hash);
     const request = new Request(url, { cache: 'reload' });
+    let stored = false;
     try {
       const response = await fetchWithRetry(request);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
-      await cache.put(new Request(path), response);
-      if (onEach) await onEach(path, entry);
+      // The shell is precached here and replayed for navigations later, so
+      // a host that redirects `index.html?v=…` would otherwise leave us
+      // with a copy the browser refuses to serve. Cheap for everything
+      // else: a response that was not redirected is passed straight back.
+      await cache.put(new Request(path), await replayableResponse(response));
+      stored = true;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       const msg = `[SW] Precache failed for ${path}: ${reason}`;
@@ -74,6 +81,18 @@ export async function precacheResources(
         console.error(msg);
       } else {
         console.warn(msg);
+      }
+    }
+
+    // Reported outside the try above. Inside it, a progress callback that
+    // threw would be recorded as a precache failure for a resource that is
+    // sitting in the cache — and for a Core entry that fails the whole
+    // install over telemetry.
+    if (stored && onEach) {
+      try {
+        await onEach(path, entry);
+      } catch (error) {
+        console.warn(`[SW] Precache progress report failed for ${path}:`, error);
       }
     }
   });
@@ -138,7 +157,7 @@ export async function swapCaches(
       const response = await tempCache.match(request);
       if (response) {
         await contentCache.put(request, response);
-        refreshedPaths.add(resourceKeyOf(request.url));
+        refreshedPaths.add(getResourceKey(request.url));
       }
     }),
   );
@@ -170,19 +189,6 @@ export async function swapCaches(
 
   // Step 4: drop temp cache.
   await caches.delete(tempCacheName);
-}
-
-/**
- * Reduce a Cache-key URL to the manifest-relative path. Cache keys in the
- * SW scope are absolute URLs (`https://host/main.dart.js`) while the
- * manifest is keyed by relative paths (`main.dart.js`).
- */
-function resourceKeyOf(url: string): string {
-  try {
-    return new URL(url).pathname.replace(/^\//, '') || 'index.html';
-  } catch {
-    return url;
-  }
 }
 
 /**

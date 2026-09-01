@@ -62,6 +62,38 @@ interface ResourceEntry {
 
 > `index.html`, `bootstrap.js` and `sw.js` also require `Cache-Control: no-cache` at the HTTP layer. See [Server Configuration](../README.md#server-configuration) for the required headers.
 
+### Resource keys are scope-relative
+
+Every lookup and every guard in the fetch handler is keyed by a
+manifest-relative path. The manifest is keyed the way the build directory is
+laid out (`main.dart.wasm`), so a URL is reduced against the worker's
+`registration.scope` before anything looks at it: with `<base href="/app/">`,
+`/app/__/auth/handler` becomes `__/auth/handler`.
+
+This matters beyond cache hits. `RESERVED_PATH_PREFIXES` — the list that
+keeps the host's own namespace (`__/`, where Firebase serves its Auth
+handler and iframe) away from the app-shell branch — matches on a key. Keyed
+by absolute pathname it would simply stop matching under a base href, and
+the app shell would start answering sign-in navigations.
+
+A same-origin URL outside the scope is left as-is; it misses the manifest
+and falls through to the network.
+
+### Redirects
+
+A navigation request carries redirect mode `manual`, so a same-origin 3xx
+comes back opaque: `type` is `opaqueredirect`, `status` is `0`, `ok` is
+`false`. The fetch handler passes it straight back, which is what lets the
+browser follow the redirect. Reading it as a failure would answer every
+redirecting URL on the origin with the app shell.
+
+A response that *did* follow a redirect (`redirected === true`) cannot be
+replayed for a later navigation — the browser rejects it. Both writers of
+the shell, install-time pre-cache and the network-first refresh, store a
+rebuilt copy with the flag dropped, so a host that normalizes
+`/index.html` to `/` does not poison the offline path.
+
+
 ## Event Handlers
 
 ### Install Event
