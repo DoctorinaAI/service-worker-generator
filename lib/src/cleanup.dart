@@ -52,9 +52,9 @@ void cleanup({
     _pruneCanvaskit(buildDir, canvaskitKeep);
   }
 
-  // Update index.html: replace version placeholders. Idempotent, and the
-  // generator already ran it before hashing the manifest — this call only
-  // covers callers that use [cleanup] on its own.
+  // Update index.html: replace version placeholders. A no-op in the normal
+  // pipeline, where the generator already substituted and re-hashed the
+  // entry; this call only covers callers that use [cleanup] on its own.
   applyIndexHtmlVersion(buildDir, swVersion);
 }
 
@@ -112,10 +112,13 @@ void _pruneCanvaskit(io.Directory buildDir, Set<String> keep) {
 /// Returns `true` when the file was rewritten. Idempotent: once the
 /// placeholders are gone, a second call is a no-op.
 ///
-/// The generator calls this *before* hashing the manifest, because
-/// `index.html` is a manifest entry now — recording the hash and size of a
-/// file that is about to be rewritten would make the manifest describe
-/// something the origin never serves.
+/// The generator calls this itself, after building the manifest and
+/// deriving the version, and then refreshes the `index.html` entry from the
+/// rewritten file. The shell is a manifest entry now, so leaving the entry
+/// describing the pre-substitution bytes would make the manifest describe a
+/// file the origin never serves. Under `--no-cleanup` the generator skips
+/// the call and the placeholders survive, which the manifest then describes
+/// accurately.
 bool applyIndexHtmlVersion(io.Directory buildDir, String version) {
   final indexFile = io.File(p.join(buildDir.path, 'index.html'));
   if (!indexFile.existsSync()) return false;

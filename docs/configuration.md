@@ -41,7 +41,15 @@ dart run sw:generate [options]
 | `--optional` | Additional glob patterns for Optional category |
 | `--ignore` | Additional glob patterns for Ignore category |
 
+
 These are additive — they extend the default patterns, not replace them.
+
+Patterns are matched in a fixed order: **core → required → ignore →
+optional**, and the first match wins. A pattern that already matches a
+built-in higher-priority default therefore cannot demote a file:
+`--ignore="index.html"` is silently ineffective, because `index.html` is a
+built-in Required pattern. Use `--exclude` to keep a file out of the
+manifest entirely.
 
 ### Loading Widget
 
@@ -59,7 +67,7 @@ These are additive — they extend the default patterns, not replace them.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--keep-maps` | `false` | Keep `.js.map` and `.js.symbols` files |
-| `--no-cleanup` | `false` | Skip Flutter file cleanup |
+| `--no-cleanup` | `false` | Leave the input tree alone: keep Flutter's files and leave `{{sw_version}}` unsubstituted |
 | `--comments` | `false` | Include comments in output |
 | `--config` | `sw.yaml` | Path to YAML config file |
 
