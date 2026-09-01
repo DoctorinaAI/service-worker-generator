@@ -27,7 +27,14 @@ const Set<String> _defaultCorePatterns = {
   '*.support.wasm',
 };
 
+/// Patterns for resources the app needs before it can render anything.
+///
+/// `index.html` belongs here even though the fetch handler serves it
+/// network-first: pre-caching the app shell is what makes an offline
+/// navigation resolvable, and it puts the shell inside the progress-counted
+/// set instead of alongside it.
 const Set<String> _defaultRequiredPatterns = {
+  'index.html',
   'assets/AssetManifest*.json',
   'assets/FontManifest.json',
   'manifest.json',
@@ -39,7 +46,6 @@ const Set<String> _defaultIgnorePatterns = {
   'assets/NOTICES',
   'sw.js',
   'bootstrap.js',
-  'index.html',
   'flutter_bootstrap.js',
   'flutter_service_worker.js',
   'flutter.js',

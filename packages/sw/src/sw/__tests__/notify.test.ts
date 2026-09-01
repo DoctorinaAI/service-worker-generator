@@ -9,6 +9,7 @@ import { createMockSwScope, createMockClient } from '../../__tests__/helpers';
 const SAMPLE: SWProgressMessage = {
   type: 'sw-progress',
   timestamp: 1,
+  swVersion: 'v1',
   resourcesSize: 1,
   resourcesCount: 1,
   resourceName: 'x',
@@ -17,6 +18,7 @@ const SAMPLE: SWProgressMessage = {
   resourceSize: 1,
   loaded: 1,
   status: 'completed',
+  counted: true,
 };
 
 describe('notifyClients', () => {

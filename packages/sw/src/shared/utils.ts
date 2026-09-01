@@ -17,9 +17,39 @@ export function formatBytes(bytes: number, decimals = 1): string {
 }
 
 /**
+ * Path the worker is registered under, relative to the origin root, with a
+ * trailing slash: `''` at the root, `app/` for an app served from `/app/`.
+ *
+ * Derived from `registration.scope` rather than `location`, because the two
+ * disagree for a worker that redirects or is served through a rewrite, and
+ * scope is what actually bounds the fetch events we see. Returns `''`
+ * outside a service worker, so the shared module stays importable from the
+ * bootstrap bundle.
+ */
+export function getScopePath(): string {
+  try {
+    const scope = (
+      self as unknown as { registration?: { scope?: string } }
+    ).registration?.scope;
+    if (!scope) return '';
+    const path = new URL(scope).pathname;
+    return path.startsWith('/') ? path.slice(1) : path;
+  } catch {
+    return '';
+  }
+}
+
+/**
  * Normalize a URL to a resource key.
  * Strips query params, hashes, and trailing slashes.
  * Handles base URL and relative paths.
+ *
+ * The result is relative to the worker's scope, because that is the space
+ * the manifest is keyed in: a build deployed under `<base href="/app/">`
+ * still ships `main.dart.wasm`, not `app/main.dart.wasm`. Skipping the
+ * re-basing does not merely lose cache hits — it silently disarms every
+ * guard that matches on a key, including RESERVED_PATH_PREFIXES, which is
+ * what keeps the host's own `/__/` namespace away from the app shell.
  */
 export function getResourceKey(url: string, baseUrl?: string): string {
   try {
@@ -33,11 +63,45 @@ export function getResourceKey(url: string, baseUrl?: string): string {
     if (path.startsWith('/')) {
       path = path.slice(1);
     }
+    // Re-base onto the worker's scope. The scope root itself arrives here
+    // with its trailing slash already stripped, so it needs its own case.
+    const scope = getScopePath();
+    if (scope) {
+      if (path.startsWith(scope)) {
+        path = path.slice(scope.length);
+      } else if (`${path}/` === scope) {
+        path = '';
+      }
+      // A same-origin URL outside the scope is left alone: it will miss the
+      // manifest and fall through to the network, which is what we want.
+    }
     // Root path maps to index.html
     return path || 'index.html';
   } catch {
     return url;
   }
+}
+
+/**
+ * Return a response that a browser will accept for a navigation.
+ *
+ * A response whose `redirected` flag is set cannot be replayed for a
+ * request whose redirect mode is not "follow" — the browser rejects it and
+ * the navigation fails outright. A shell fetched from a host that
+ * normalizes `/index.html` to `/` is exactly that, so storing it verbatim
+ * would turn every later offline navigation into an error page. Rebuilding
+ * keeps the body, status and headers and drops only the flag.
+ *
+ * Only call this for responses that are already known to be `ok`.
+ */
+export async function replayableResponse(response: Response): Promise<Response> {
+  if (!response.redirected) return response;
+  const body = await response.arrayBuffer();
+  return new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 }
 
 /**

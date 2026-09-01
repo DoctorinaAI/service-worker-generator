@@ -79,8 +79,10 @@ void main() {
         ResourceCategory.required,
       );
 
-      // index.html is ignored and should NOT be in manifest
-      expect(manifest.containsKey('index.html'), isFalse);
+      // The app shell is pre-cached, so it must be in the manifest —
+      // that is what lets an offline navigation resolve.
+      expect(manifest.containsKey('index.html'), isTrue);
+      expect(manifest['index.html']!.category, ResourceCategory.required);
     });
 
     test('excludes files matching exclude globs', () async {

@@ -68,15 +68,48 @@ async function runPipelineWork(
   // Attach the SW message listener BEFORE registering so we don't miss
   // install-time progress messages (navigator.serviceWorker does not
   // buffer messages posted before a listener is attached).
+  //
+  // Two rules keep the counter honest, and both are load-bearing:
+  //
+  //  1. Only this build's worker may speak. During an update load an older
+  //     worker still controls the page and broadcasts its own manifest's
+  //     totals to every client, including this one. Its denominator need
+  //     not match ours, and the last message to arrive would otherwise
+  //     decide which one we render against.
+  //  2. Only resources inside the counted set are added to the numerator.
+  //     The SW reports every resource it serves, but `resourcesCount`
+  //     covers the pre-cached set alone; lazily-cached resources served by
+  //     the fetch handler are outside it. Counting them against that total
+  //     is what produced `Loaded 5 of 4 resources`.
   const completedKeys = new Set<string>();
   let totalResourcesCount = 0;
+  let foreignVersion: string | null = null;
+  let sawOwnVersion = false;
   const cleanupSWListener: (() => void) | null =
     'serviceWorker' in navigator
       ? listenForSWMessages((data) => {
           const msg = data as SWProgressMessage;
 
-          if (msg.resourcesCount) totalResourcesCount = msg.resourcesCount;
-          if (!msg.resourceKey) return;
+          if (msg.swVersion !== build.swVersion) {
+            // Routine during an update load: the old controller keeps
+            // reporting against its own manifest while the new worker
+            // installs, and the two denominators need not agree. Warning
+            // here would fire on every healthy update, so only record it —
+            // whether it was *every* message is not knowable until the
+            // listener is torn down, and that is where it gets reported.
+            foreignVersion = msg.swVersion;
+            return;
+          }
+          sawOwnVersion = true;
+
+          // Latch the denominator once. A single worker reports a constant
+          // `resourcesCount`, so this only guards against a mid-load change
+          // ever becoming possible again.
+          if (!totalResourcesCount && msg.resourcesCount) {
+            totalResourcesCount = msg.resourcesCount;
+          }
+          if (!totalResourcesCount) return;
+          if (!msg.counted || !msg.resourceKey) return;
 
           if (
             msg.status === 'completed' ||
@@ -86,13 +119,14 @@ async function runPipelineWork(
             completedKeys.add(msg.resourceKey);
           }
 
-          if (totalResourcesCount === 0) return;
-
-          const done = completedKeys.size;
-          const downloadPercent = Math.min(
-            (done / totalResourcesCount) * 100,
-            100,
-          );
+          // Within one worker `completedKeys` is a subset of the counted
+          // set. The clamp covers the case that survives the version
+          // filter: two builds generated with the same explicit
+          // `--version` report different counted sets under one identity,
+          // and their union can outrun the latched total. The number it
+          // guards is rendered straight to the user.
+          const done = Math.min(completedKeys.size, totalResourcesCount);
+          const downloadPercent = (done / totalResourcesCount) * 100;
           const internalPercent =
             STAGE_PROGRESS.canvaskit +
             (downloadPercent / 100) *
@@ -177,5 +211,16 @@ async function runPipelineWork(
     api.error(message);
   } finally {
     cleanupSWListener?.();
+    // Every message came from a worker that is not this build, so the
+    // counter never had a denominator to fill. Usually a `bootstrap.js`
+    // served from the HTTP cache without `Cache-Control: no-cache`.
+    if (foreignVersion !== null && !sawOwnVersion) {
+      console.warn(
+        `[Bootstrap] No sw-progress from v${build.swVersion}; every message ` +
+          `came from v${String(foreignVersion)}. This bootstrap and the ` +
+          `service worker are from different builds, so the resource ` +
+          `counter stayed empty.`,
+      );
+    }
   }
 }

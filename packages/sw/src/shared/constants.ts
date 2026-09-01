@@ -63,3 +63,17 @@ export const STAGE_PROGRESS = {
  * branch of fetch-handler so navigations get fresh HTML with cache fallback.
  */
 export const NEVER_CACHE_FILES = ['bootstrap.js', 'sw.js'] as const;
+
+/**
+ * Same-origin path prefixes whose navigations the SW must not answer.
+ *
+ * Hosts reserve namespaces that they serve themselves and exclude from the
+ * SPA rewrite. Firebase Hosting owns `/__/*`, which is where Firebase Auth
+ * puts `/__/auth/handler` and `/__/auth/iframe` when `authDomain` is the
+ * app's own domain — both same-origin navigations (the iframe included).
+ * Routing them through the app's navigation handler would run a sign-in
+ * document through `fetchWithRetry`, which downgrades a navigation
+ * request's mode and turns a 3xx into an opaque redirect, and would answer
+ * it from the app shell whenever the origin hiccups.
+ */
+export const RESERVED_PATH_PREFIXES = ['__/'] as const;

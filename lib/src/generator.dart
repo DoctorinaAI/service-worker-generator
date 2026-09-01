@@ -9,9 +9,13 @@ import 'assets/sw_template.dart';
 import 'categorizer.dart';
 import 'cleanup.dart';
 import 'config.dart';
+import 'files.dart';
 import 'flutter_build.dart';
 import 'injector.dart';
 import 'manifest.dart';
+
+/// Manifest key of the app shell — the one entry the generator writes to.
+const String _shellKey = 'index.html';
 
 /// Run the full generation pipeline.
 Future<void> generate(GeneratorConfig config) async {
@@ -76,6 +80,27 @@ Future<void> generate(GeneratorConfig config) async {
       ? config.version
       : _hashManifest(manifest);
   io.stdout.writeln('  Version: $effectiveVersion');
+
+  // Stamp the version into index.html *now*, then re-hash it. The shell is
+  // a manifest entry, so its recorded hash and size must describe the file
+  // that actually ships, and this is the last write to it. Substituting
+  // after the manifest was built — as `cleanup` used to — left the entry
+  // describing a file the origin never serves.
+  //
+  // Gated on `noCleanup` because rewriting the input tree is exactly what
+  // that flag exists to prevent; skipping it leaves the placeholders in
+  // place, which the manifest then describes accurately.
+  if (!config.noCleanup && applyIndexHtmlVersion(buildDir, effectiveVersion)) {
+    final shell = manifest[_shellKey];
+    if (shell != null) {
+      manifest[_shellKey] = ResourceEntry(
+        name: shell.name,
+        size: indexHtml.statSync().size,
+        hash: await md5(indexHtml),
+        category: shell.category,
+      );
+    }
+  }
 
   // Print summary by category
   final categoryCounts = <ResourceCategory, int>{};
@@ -205,6 +230,14 @@ Set<String> _findCanvaskitFiles(io.Directory buildDir, Set<String> renderers) {
 /// runs as long as the build output is byte-identical, so users who rerun
 /// the generator on unchanged inputs get the same SW version (and so their
 /// browsers don't treat it as an update).
+///
+/// The shell is stamped with this value and re-hashed afterwards, which
+/// looks circular but is not: the version is derived from the manifest as
+/// it was *before* the substitution, and the only run that substitutes is
+/// one that also runs `cleanup` — which removes `flutter_bootstrap.js` and
+/// so makes a second run on the same directory fail loudly rather than
+/// silently derive a different version. Under `--no-cleanup` nothing is
+/// rewritten at all.
 String _hashManifest(Map<String, ResourceEntry> manifest) {
   // Use the entries' stable metadata (path, hash, size, category). We sort
   // to insulate against Map iteration order changes.

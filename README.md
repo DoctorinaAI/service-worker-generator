@@ -41,14 +41,20 @@ Or add as a dev dependency:
 
 ```yaml
 dev_dependencies:
-  sw: ^0.1.2
+  sw: 0.1.6-dev
 ```
 
-Pin the minor version in CI to avoid surprise template changes between builds:
+Pin the exact version in CI. `sw.js` and `bootstrap.js` are the app's boot
+path, so a template change should arrive through a reviewed bump rather than
+on the next unrelated build:
 
 ```shell
-dart pub global activate sw ^0.1.2
+dart pub global activate sw 0.1.6-dev
 ```
+
+Note that a pre-release is not matched by a caret constraint — `0.1.6-dev`
+sorts *before* `0.1.6`, so it falls outside `^0.1.6`. Pin it exactly, or
+write `^0.1.6-dev` to accept the pre-release now and the release later.
 
 ## Quick Start
 
@@ -273,7 +279,7 @@ mv build/web/index.prod.html build/web/index.html
 # 3. Generate sw.js + bootstrap.js, inject {{sw_version}} into index.html,
 #    and auto-remove flutter_bootstrap.js / flutter_service_worker.js / flutter.js
 #    (flutter.js is inlined into bootstrap.js, so it's dropped from the output).
-dart pub global activate sw ^0.1.2
+dart pub global activate sw 0.1.6-dev
 dart pub global run sw:generate --version="$(git rev-parse --short=8 HEAD)"
 ```
 
@@ -424,10 +430,13 @@ dart run sw:generate \
 These files are always fetched fresh (never stored in the SW cache):
 
 - `bootstrap.js` — must reflect latest build config
-- `index.html` — must be fresh for updates
 - `sw.js` — browser handles SW updates natively
 
-The same three files also require `Cache-Control: no-cache` at the HTTP layer — see [Server Configuration](#server-configuration).
+`index.html` is a special case: it is pre-cached as the app shell so an
+offline navigation has something to resolve to, but it is served
+network-first, so an online visitor always gets the copy the origin holds.
+It still requires `Cache-Control: no-cache` at the HTTP layer, alongside the
+two files above — see [Server Configuration](#server-configuration).
 
 ## Service Worker
 
@@ -435,7 +444,7 @@ The same three files also require `Cache-Control: no-cache` at the HTTP layer �
 
 | Resource           | Strategy      | Details                                         |
 | ------------------ | ------------- | ----------------------------------------------- |
-| `index.html` (`/`) | Network-first | Fresh from network, cache fallback for offline  |
+| Navigations        | Network-first | Fresh from network, pre-cached shell for offline |
 | Core + Required    | Pre-cached    | Cached during SW install with cache-busted URLs |
 | Optional           | Lazy cache    | Cached on first fetch for repeat visits         |
 | Ignore             | Pass-through  | Not cached, always from network                 |
@@ -462,15 +471,22 @@ The service worker sends `sw-progress` messages during resource operations:
 {
   type: 'sw-progress',
   timestamp: 1749123456789,
+  swVersion: 'a1b2c3d4',
   resourcesSize: 5242880,
+  resourcesCount: 6,
   resourceName: 'main.dart.js',
   resourceUrl: 'https://example.com/main.dart.js',
   resourceKey: 'main.dart.js',
   resourceSize: 1048576,
   loaded: 1048576,
-  status: 'completed' // 'loading' | 'completed' | 'updated' | 'cached' | 'error'
+  status: 'completed', // 'loading' | 'completed' | 'updated' | 'cached' | 'error'
+  counted: true
 }
 ```
+
+`resourcesCount` / `resourcesSize` describe the pre-cached set. Count only
+messages with `counted: true`, and only from your own `swVersion` — see
+[docs/service-worker.md](docs/service-worker.md#the-counted-set).
 
 ### Message Commands
 

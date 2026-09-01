@@ -160,8 +160,12 @@ void main() {
 
     // Ignored files should not appear in manifest
     expect(swContent, isNot(contains('"assets/NOTICES"')));
-    // index.html, sw.js, bootstrap.js are never in manifest
-    // (they're in the ignore category)
+    // sw.js and bootstrap.js stay out of the manifest (ignore category);
+    // the app shell is in it, pre-cached and progress-counted. Matching on
+    // the entry shape, since the bare names also occur in the SW code.
+    expect(swContent, isNot(contains('"sw.js":{"name"')));
+    expect(swContent, isNot(contains('"bootstrap.js":{"name"')));
+    expect(swContent, contains('"index.html":{"name":"index.html"'));
   });
 
   test('categorizes resources correctly', () async {

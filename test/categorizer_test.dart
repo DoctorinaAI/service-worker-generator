@@ -69,6 +69,13 @@ void main() {
           ResourceCategory.required,
         );
       });
+
+      test('index.html is required so the app shell is pre-cached', () {
+        expect(
+          categorizer.categorize('index.html', 2000),
+          ResourceCategory.required,
+        );
+      });
     });
 
     group('ignore', () {
@@ -100,13 +107,6 @@ void main() {
       test('bootstrap.js is ignored', () {
         expect(
           categorizer.categorize('bootstrap.js', 15000),
-          ResourceCategory.ignore,
-        );
-      });
-
-      test('index.html is ignored', () {
-        expect(
-          categorizer.categorize('index.html', 2000),
           ResourceCategory.ignore,
         );
       });

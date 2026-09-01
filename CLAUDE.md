@@ -71,15 +71,16 @@ dart run sw:generate --input=build/web
 
 ### Resource Categories
 - **Core**: main.dart.js/wasm/mjs, *.support.wasm
-- **Required**: AssetManifest*.json, FontManifest.json, manifest.json
+- **Required**: index.html (app shell), AssetManifest*.json, FontManifest.json, manifest.json
 - **Optional**: canvaskit variant files (CDN-first, lazy local fallback), fonts (.ttf, .otf, .woff, .woff2, .eot — any size), lightweight files (.json, .webp, .png, .jpeg, .svg, .gif, .ico < 512KB)
-- **Ignore**: *.map, *.symbols, NOTICES, sw.js, bootstrap.js, index.html
+- **Ignore**: *.map, *.symbols, NOTICES, sw.js, bootstrap.js
 
 ### Caching Strategy
 - Core + Required: pre-cached on SW install
 - Optional: cached lazily on first fetch
 - Ignore: not cached
-- bootstrap.js, index.html, sw.js: never cached by SW (always fresh)
+- index.html: pre-cached, but always served network-first (cache is the offline fallback)
+- bootstrap.js, sw.js: never intercepted by the SW (always fresh from the origin)
 
 ## Coding Conventions
 
@@ -106,6 +107,7 @@ dart run sw:generate --input=build/web
 ## Key Files Reference
 - `packages/sw/src/shared/types.ts` — Shared type definitions (ResourceCategory, ResourceManifest, etc.)
 - `packages/sw/src/sw/index.ts` — Service Worker entry point
+- `packages/sw/src/sw/progress.ts` — `sw-progress` reporter; owns the counted set (Core + Required)
 - `packages/sw/src/bootstrap/index.ts` — Bootstrap entry point
 - `packages/sw/src/bootstrap/loading-widget.ts` — Loading widget (SVG progress, stall detection, themes)
 - `packages/sw/src/bootstrap/pipeline.ts` — Pipeline orchestrator (6 stages)

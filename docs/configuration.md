@@ -41,7 +41,15 @@ dart run sw:generate [options]
 | `--optional` | Additional glob patterns for Optional category |
 | `--ignore` | Additional glob patterns for Ignore category |
 
+
 These are additive — they extend the default patterns, not replace them.
+
+Patterns are matched in a fixed order: **core → required → ignore →
+optional**, and the first match wins. A pattern that already matches a
+built-in higher-priority default therefore cannot demote a file:
+`--ignore="index.html"` is silently ineffective, because `index.html` is a
+built-in Required pattern. Use `--exclude` to keep a file out of the
+manifest entirely.
 
 ### Loading Widget
 
@@ -59,7 +67,7 @@ These are additive — they extend the default patterns, not replace them.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--keep-maps` | `false` | Keep `.js.map` and `.js.symbols` files |
-| `--no-cleanup` | `false` | Skip Flutter file cleanup |
+| `--no-cleanup` | `false` | Leave the input tree alone: keep Flutter's files and leave `{{sw_version}}` unsubstituted |
 | `--comments` | `false` | Include comments in output |
 | `--config` | `sw.yaml` | Path to YAML config file |
 
@@ -131,9 +139,16 @@ canvaskit/{variant}.wasm   # Only the variant matching the renderer
 ### Required (pre-cached on install)
 
 ```
+index.html
 assets/AssetManifest*.json
 assets/FontManifest.json
+manifest.json
 ```
+
+`index.html` is the app shell: pre-caching it is what lets a navigation
+resolve offline, and it puts the shell inside the progress-counted set.
+The fetch handler still serves it network-first, so a deploy is picked up
+as soon as the origin is reachable.
 
 ### Optional (cached on first fetch)
 
@@ -152,7 +167,6 @@ and rely on the browser's HTTP cache):
 assets/NOTICES
 sw.js
 bootstrap.js
-index.html
 flutter_bootstrap.js
 flutter_service_worker.js
 flutter.js
