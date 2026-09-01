@@ -41,14 +41,20 @@ Or add as a dev dependency:
 
 ```yaml
 dev_dependencies:
-  sw: ^0.1.2
+  sw: 0.1.6-dev
 ```
 
-Pin the minor version in CI to avoid surprise template changes between builds:
+Pin the exact version in CI. `sw.js` and `bootstrap.js` are the app's boot
+path, so a template change should arrive through a reviewed bump rather than
+on the next unrelated build:
 
 ```shell
-dart pub global activate sw ^0.1.2
+dart pub global activate sw 0.1.6-dev
 ```
+
+Note that a pre-release is not matched by a caret constraint — `0.1.6-dev`
+sorts *before* `0.1.6`, so it falls outside `^0.1.6`. Pin it exactly, or
+write `^0.1.6-dev` to accept the pre-release now and the release later.
 
 ## Quick Start
 
@@ -273,7 +279,7 @@ mv build/web/index.prod.html build/web/index.html
 # 3. Generate sw.js + bootstrap.js, inject {{sw_version}} into index.html,
 #    and auto-remove flutter_bootstrap.js / flutter_service_worker.js / flutter.js
 #    (flutter.js is inlined into bootstrap.js, so it's dropped from the output).
-dart pub global activate sw ^0.1.2
+dart pub global activate sw 0.1.6-dev
 dart pub global run sw:generate --version="$(git rev-parse --short=8 HEAD)"
 ```
 
