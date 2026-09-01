@@ -1,13 +1,10 @@
 import type { ResourceManifest } from '../shared/types';
-import { ResourceCategory } from '../shared/types';
 import { precacheResources, getTempCacheName } from './cache-manager';
-import { notifyClients } from './notify';
-
-declare const self: ServiceWorkerGlobalScope;
+import { COUNTED_CATEGORIES, type ProgressReporter } from './progress';
 
 /**
  * Handle the SW install event.
- * Pre-caches Core and Required resources into a temp cache.
+ * Pre-caches the counted set (Core and Required) into a temp cache.
  *
  * Intentionally does not call `skipWaiting()`: the newly installed worker
  * should remain in `waiting` until the client explicitly accepts the update
@@ -17,19 +14,10 @@ export function createInstallHandler(
   cachePrefix: string,
   version: string,
   manifest: ResourceManifest,
-  totalResourcesSize: number,
-  totalResourcesCount: number,
+  progress: ProgressReporter,
 ): (event: ExtendableEvent) => void {
   return (event: ExtendableEvent) => {
-    event.waitUntil(
-      handleInstall(
-        cachePrefix,
-        version,
-        manifest,
-        totalResourcesSize,
-        totalResourcesCount,
-      ),
-    );
+    event.waitUntil(handleInstall(cachePrefix, version, manifest, progress));
   };
 }
 
@@ -37,27 +25,25 @@ async function handleInstall(
   cachePrefix: string,
   version: string,
   manifest: ResourceManifest,
-  totalResourcesSize: number,
-  totalResourcesCount: number,
+  progress: ProgressReporter,
 ): Promise<void> {
   const tempCacheName = getTempCacheName(cachePrefix, version);
 
-  // Notify clients that install has started
-  await notifyClients(self, {
-    type: 'sw-progress',
-    timestamp: Date.now(),
-    resourcesSize: totalResourcesSize,
-    resourcesCount: totalResourcesCount,
-    resourceName: '',
-    resourceUrl: '',
-    resourceKey: '',
-    resourceSize: 0,
+  // Notify clients that install has started. Carries the totals only —
+  // an empty key is not a resource, so it never counts towards progress.
+  await progress.report({
+    key: '',
+    name: '',
+    url: '',
+    size: 0,
     loaded: 0,
     status: 'loading',
   });
 
-  // Pre-cache Core and Required resources, notifying clients per file so
-  // the bootstrap can show smooth count-based progress during install.
+  // Pre-cache the counted set, notifying clients per file so the bootstrap
+  // can show smooth count-based progress during install. `COUNTED_CATEGORIES`
+  // is shared with the reporter, so what gets pre-cached and what gets
+  // counted cannot drift apart.
   // `precacheResources` throws if any Core entry fails — that surfaces to
   // `waitUntil` so the SW install is rejected and the old version keeps
   // serving traffic.
@@ -65,17 +51,13 @@ async function handleInstall(
     await precacheResources(
       tempCacheName,
       manifest,
-      [ResourceCategory.Core, ResourceCategory.Required],
+      COUNTED_CATEGORIES,
       async (path, entry) => {
-        await notifyClients(self, {
-          type: 'sw-progress',
-          timestamp: Date.now(),
-          resourcesSize: totalResourcesSize,
-          resourcesCount: totalResourcesCount,
-          resourceName: entry.name,
-          resourceUrl: path,
-          resourceKey: path,
-          resourceSize: entry.size,
+        await progress.report({
+          key: path,
+          name: entry.name,
+          url: path,
+          size: entry.size,
           loaded: entry.size,
           status: 'completed',
         });

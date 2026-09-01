@@ -273,10 +273,23 @@ describe('reloadIfForeignController', () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
   let reloadSpy: ReturnType<typeof vi.fn>;
   let originalLocation: Location;
+  let baseElement: HTMLBaseElement;
+
+  /**
+   * The SW path is resolved against the document base URL, the same input
+   * `navigator.serviceWorker.register` uses — so tests drive it through a
+   * real `<base>` element rather than through `location`.
+   */
+  function setBase(href: string): void {
+    baseElement.href = href;
+  }
 
   beforeEach(() => {
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     sessionStorage.clear();
+    baseElement = document.createElement('base');
+    baseElement.href = 'https://example.com/app/';
+    document.head.appendChild(baseElement);
     // Replace location with a stub we can observe reload() on. JSDOM's
     // Location is non-configurable by default, but we can redefine it on
     // window with configurable: true for the duration of the test.
@@ -295,6 +308,7 @@ describe('reloadIfForeignController', () => {
   afterEach(() => {
     logSpy.mockRestore();
     sessionStorage.clear();
+    baseElement.remove();
     try {
       delete (navigator as unknown as { serviceWorker?: unknown }).serviceWorker;
     } catch {
@@ -327,6 +341,22 @@ describe('reloadIfForeignController', () => {
     });
     const result = await reloadIfForeignController('sw.js');
     expect(result).toBe(false);
+    expect(reloadSpy).not.toHaveBeenCalled();
+  });
+
+  it('accepts our own controller on a deep route', async () => {
+    // An SPA deep link. Resolving `sw.js` against the *document URL* would
+    // expect `/app/chat/42/sw.js` here and unregister the real worker.
+    setBase('https://example.com/app/');
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...originalLocation, href: 'https://example.com/app/chat/42', reload: reloadSpy },
+    });
+    installSwContainer({
+      controller: { scriptURL: 'https://example.com/app/sw.js?v=abc' },
+    });
+
+    expect(await reloadIfForeignController('sw.js')).toBe(false);
     expect(reloadSpy).not.toHaveBeenCalled();
   });
 
@@ -417,16 +447,30 @@ describe('reloadIfForeignController', () => {
         scriptURL: 'https://example.com/flutter_service_worker.js',
       },
     });
-    const setItemSpy = vi
-      .spyOn(Storage.prototype, 'setItem')
-      .mockImplementation(() => {
-        throw new Error('blocked');
-      });
+    // Swap the whole object rather than spying on Storage.prototype:
+    // jsdom does not route sessionStorage calls through the prototype
+    // method, so a prototype spy silently never fires.
+    const realStorage = window.sessionStorage;
+    Object.defineProperty(window, 'sessionStorage', {
+      configurable: true,
+      value: {
+        getItem: (): string | null => null,
+        setItem: (): never => {
+          throw new Error('blocked');
+        },
+      },
+    });
 
-    const result = await reloadIfForeignController('sw.js');
-    expect(result).toBe(false);
-    expect(reloadSpy).not.toHaveBeenCalled();
-    setItemSpy.mockRestore();
+    try {
+      const result = await reloadIfForeignController('sw.js');
+      expect(result).toBe(false);
+      expect(reloadSpy).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(window, 'sessionStorage', {
+        configurable: true,
+        value: realStorage,
+      });
+    }
   });
 });
 

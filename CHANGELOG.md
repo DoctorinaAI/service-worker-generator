@@ -1,3 +1,25 @@
+## 0.1.6 — 2026-09-01
+
+### Fixed
+
+- **Progress counter**: the loading overlay could print a count greater than its own total (`Loaded 5 of 4 resources`). The numerator and the denominator were computed from two different sets: `resourcesCount` covered the pre-cached set (`Core` + `Required`), while the client counted every resource the SW reported — including `Optional` files served lazily by the fetch handler, which is unbounded. Progress messages now carry `counted`, marking membership of the set `resourcesCount` describes, and the bootstrap only adds counted resources to the numerator. (`packages/sw/src/sw/progress.ts`, `packages/sw/src/bootstrap/pipeline.ts`)
+- **Progress counter**: a page can be talked to by two workers at once — an old controller still serving fetches while a new build pre-caches in the background — and their manifests need not agree on a total. Messages now carry `swVersion`, and the bootstrap ignores any worker other than the one it was built against, so the denominator cannot change mid-load. (`packages/sw/src/sw/progress.ts`, `packages/sw/src/bootstrap/pipeline.ts`)
+- **App shell**: `index.html` was categorised `ignore`, so it never reached the manifest. The fetch handler's `manifest['index.html']` lookups were consequently always empty: the shell was neither pre-cached nor reported as progress, and an offline navigation had nothing to fall back to on a cold profile. It is now `required` — pre-cached on install, counted, and stored under one canonical `index.html` cache key that both the precache and the navigation handler use. (`lib/src/categorizer.dart`, `packages/sw/src/sw/fetch-handler.ts`)
+- **App shell**: navigations to SPA deep links (`/chat/42`) were dropped by the fetch handler. The manifest lookup ran first and returned early for any route without an entry of its own, so the `request.mode === 'navigate'` branch below it was unreachable for exactly the routes that need it. The navigation check now runs first. (`packages/sw/src/sw/fetch-handler.ts`)
+- **Bootstrap**: `reloadIfForeignController` resolved the SW filename against `location.href` instead of the document base URL that `navigator.serviceWorker.register` actually uses. On any deep link it expected `/chat/sw.js`, judged the perfectly good `/sw.js` controller foreign, unregistered it and reloaded the page — once per tab session, on every deep link. (`packages/sw/src/bootstrap/sw-registration.ts`)
+
+### Changed
+
+- **Protocol**: `SWProgressMessage` gains `swVersion` and `counted`. `resourcesSize` now describes the counted set rather than every cacheable resource, so it agrees with `resourcesCount`; consumers reading it as "total bytes on disk" should switch to summing the manifest. See [docs/service-worker.md](docs/service-worker.md#the-counted-set) for the two rules a client must follow.
+- **Service Worker**: the startup banner reports `counted: N` (was `precache: N`) and its `size` is the total cacheable bytes, matching `resources: N` beside it.
+- **Service Worker**: every `sw-progress` message is emitted through one reporter (`createProgressReporter`) instead of each handler assembling its own; the pre-cache and the counted set are now driven by the same `COUNTED_CATEGORIES` list and cannot drift apart.
+
+### Tests
+
+- Playwright: cold, warm and five-consecutive-cold loads assert that the numerator never leaves the counted set, reading the SW messages directly rather than the overlay text (which stops updating when the app takes over). On 0.1.5 the cold load counts 9 resources against a total of 6.
+- Playwright: the app shell is pre-cached, answers an offline navigation, and answers a route the origin 404s.
+- Vitest: `progress.ts` set membership and message shape; pipeline counter behaviour for foreign versions, uncounted resources and a fixed denominator.
+
 ## 0.1.5 — 2026-04-22
 
 ### Changed

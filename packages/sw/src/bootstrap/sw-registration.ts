@@ -237,7 +237,13 @@ export async function reloadIfForeignController(
 
   let expectedPath: string;
   try {
-    expectedPath = new URL(swFilename, self.location.href).pathname;
+    // Resolve against the document base URL, exactly as
+    // `navigator.serviceWorker.register(swFilename)` does. Resolving
+    // against `location.href` instead would make the check depend on the
+    // route the user landed on: at `/chat/42` it expects `/chat/sw.js`,
+    // decides the perfectly good `/sw.js` controller is foreign, and
+    // unregisters it — on every SPA deep link.
+    expectedPath = new URL(swFilename, document.baseURI).pathname;
   } catch {
     return false;
   }

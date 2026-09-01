@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
 import { createInstallHandler } from '../install-handler';
+import { createProgressReporter } from '../progress';
 import type { ResourceManifest } from '../../shared/types';
 import { ResourceCategory } from '../../shared/types';
 import {
@@ -76,7 +77,7 @@ describe('createInstallHandler', () => {
       },
     };
 
-    const handler = createInstallHandler('app', 'v1', manifest, 150, 2);
+    const handler = createInstallHandler('app', 'v1', manifest, createProgressReporter('v1', manifest));
     const event = makeEvent();
     handler(event as unknown as ExtendableEvent);
     expect(event.waitUntil).toHaveBeenCalledOnce();
@@ -102,7 +103,7 @@ describe('createInstallHandler', () => {
       },
     };
 
-    const handler = createInstallHandler('app', 'v2', manifest, 100, 1);
+    const handler = createInstallHandler('app', 'v2', manifest, createProgressReporter('v2', manifest));
     const event = makeEvent();
     handler(event as unknown as ExtendableEvent);
 
@@ -137,7 +138,7 @@ describe('createInstallHandler', () => {
       },
     };
 
-    const handler = createInstallHandler('app', 'v3', manifest, 30, 2);
+    const handler = createInstallHandler('app', 'v3', manifest, createProgressReporter('v3', manifest));
     const event = makeEvent();
     handler(event as unknown as ExtendableEvent);
     await event._promise;
@@ -165,7 +166,7 @@ describe('createInstallHandler', () => {
       },
     };
 
-    const handler = createInstallHandler('app', 'v4', manifest, 10, 1);
+    const handler = createInstallHandler('app', 'v4', manifest, createProgressReporter('v4', manifest));
     const event = makeEvent();
     handler(event as unknown as ExtendableEvent);
     await event._promise;
@@ -181,7 +182,7 @@ describe('createInstallHandler', () => {
 
   it('forwards the exact cachePrefix and version into the temp cache name', async () => {
     installMockFetch(async () => textResponse('ok'));
-    const handler = createInstallHandler('myorg-app', 'build-42', {}, 0, 0);
+    const handler = createInstallHandler('myorg-app', 'build-42', {}, createProgressReporter('build-42', {}));
     const event = makeEvent();
     handler(event as unknown as ExtendableEvent);
     await event._promise;

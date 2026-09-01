@@ -11,6 +11,7 @@ import { createInstallHandler } from './install-handler';
 import { createActivateHandler } from './activate-handler';
 import { handleFetch } from './fetch-handler';
 import { createMessageHandler } from './message-handler';
+import { createProgressReporter } from './progress';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -23,22 +24,17 @@ const config: SWConfig = "__INJECT_SW_CONFIG__" as unknown as SWConfig;
 
 const { cachePrefix, version, manifest } = config;
 
-// Calculate total size of cacheable resources (excluding Ignore)
-const totalResourcesSize = Object.values(manifest).reduce(
+// Single source of truth for what progress is measured against: the
+// pre-cached set, its byte total, and per-message membership. Every
+// `sw-progress` message goes through it, so no caller can report a
+// resource against a total that was computed from a different set.
+const progress = createProgressReporter(version, manifest);
+
+// Total size of everything the SW may ever cache. Informational only —
+// the protocol's `resourcesSize` describes the counted set, see progress.ts.
+const cacheableSize = Object.values(manifest).reduce(
   (sum, entry) =>
     entry.category !== ResourceCategory.Ignore ? sum + entry.size : sum,
-  0,
-);
-
-// Precache-scope count: Core + Required only. Optional files are cached
-// lazily on first fetch and are not guaranteed to fire during bootstrap,
-// so excluding them keeps the denominator stable for count-based progress.
-const totalResourcesCount = Object.values(manifest).reduce(
-  (n, entry) =>
-    entry.category === ResourceCategory.Core ||
-    entry.category === ResourceCategory.Required
-      ? n + 1
-      : n,
   0,
 );
 
@@ -46,30 +42,17 @@ const totalResourcesCount = Object.values(manifest).reduce(
 const resourceCount = Object.keys(manifest).length;
 console.log(
   `[SW] v${version} | prefix: ${cachePrefix} | ` +
-    `resources: ${resourceCount} | precache: ${totalResourcesCount} | ` +
-    `size: ${totalResourcesSize} bytes`,
+    `resources: ${resourceCount} | counted: ${progress.resourcesCount} | ` +
+    `size: ${cacheableSize} bytes`,
 );
 
 // Register event handlers
 self.addEventListener(
   'install',
-  createInstallHandler(
-    cachePrefix,
-    version,
-    manifest,
-    totalResourcesSize,
-    totalResourcesCount,
-  ),
+  createInstallHandler(cachePrefix, version, manifest, progress),
 );
 self.addEventListener('activate', createActivateHandler(cachePrefix, version, manifest));
 self.addEventListener('fetch', (event: FetchEvent) => {
-  handleFetch(
-    event,
-    manifest,
-    cachePrefix,
-    version,
-    totalResourcesSize,
-    totalResourcesCount,
-  );
+  handleFetch(event, manifest, cachePrefix, version, progress);
 });
 self.addEventListener('message', createMessageHandler(version));

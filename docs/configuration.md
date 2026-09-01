@@ -131,9 +131,16 @@ canvaskit/{variant}.wasm   # Only the variant matching the renderer
 ### Required (pre-cached on install)
 
 ```
+index.html
 assets/AssetManifest*.json
 assets/FontManifest.json
+manifest.json
 ```
+
+`index.html` is the app shell: pre-caching it is what lets a navigation
+resolve offline, and it puts the shell inside the progress-counted set.
+The fetch handler still serves it network-first, so a deploy is picked up
+as soon as the origin is reachable.
 
 ### Optional (cached on first fetch)
 
@@ -152,7 +159,6 @@ and rely on the browser's HTTP cache):
 assets/NOTICES
 sw.js
 bootstrap.js
-index.html
 flutter_bootstrap.js
 flutter_service_worker.js
 flutter.js

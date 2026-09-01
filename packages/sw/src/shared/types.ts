@@ -119,7 +119,16 @@ export type BootstrapPhase =
 export interface SWProgressMessage {
   type: 'sw-progress';
   timestamp: number;
+  /**
+   * Version of the worker that sent this message. A client can be talked
+   * to by two workers at once — an old controller still serving the page
+   * while a new build pre-caches — so consumers must ignore messages from
+   * any version other than the one they were built against.
+   */
+  swVersion: string;
+  /** Total bytes of the counted set (see `counted`). */
   resourcesSize: number;
+  /** Size of the counted set — the denominator for count-based progress. */
   resourcesCount: number;
   resourceName: string;
   resourceUrl: string;
@@ -127,6 +136,12 @@ export interface SWProgressMessage {
   resourceSize: number;
   loaded: number;
   status: SWProgressStatus;
+  /**
+   * Whether this resource is one of the `resourcesCount` counted ones.
+   * Resources cached lazily on first fetch are still reported, but must
+   * not be added to a numerator rendered against `resourcesCount`.
+   */
+  counted: boolean;
   error?: string;
 }
 

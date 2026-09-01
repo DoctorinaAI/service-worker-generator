@@ -15,7 +15,7 @@ Runs in the ServiceWorkerGlobalScope. Responsibilities:
 
 - **Install**: Pre-cache Core and Required resources into a temp cache
 - **Activate**: Atomic swap from temp to content cache, diff against previous manifest, clean stale caches, `clients.claim()`
-- **Fetch**: Cache-first for cached resources, network-first for `/` (index.html), pass-through for uncached
+- **Fetch**: Cache-first for cached resources, network-first for every navigation (served from the pre-cached `index.html` when the origin is unreachable), pass-through for uncached
 - **Messages**: Handle `skipWaiting`, `getVersion` commands
 - **Notifications**: Send `sw-progress` messages to clients during resource operations
 
@@ -88,7 +88,7 @@ User's build/web/{sw.js, bootstrap.js} (final output)
 
 **Ignore:**
 - `*.map`, `*.symbols`, `assets/NOTICES`
-- `sw.js`, `bootstrap.js`, `index.html`
+- `sw.js`, `bootstrap.js`
 - `flutter_bootstrap.js`, `flutter_service_worker.js`, `flutter.js` (`flutter.js` is deleted after its loader is inlined into `bootstrap.js`)
 - Files larger than the optional size threshold
 
@@ -106,10 +106,13 @@ All cached resources use `?v={hash}` query parameters to prevent stale responses
 
 ### Never Cached
 - `bootstrap.js` — Must always be fresh to pick up new configs
-- `index.html` — Must always be fresh
 - `sw.js` — Browser handles SW updates via its own mechanism
 
-> These three files also require `Cache-Control: no-cache` at the HTTP layer. See [Server Configuration](../README.md#server-configuration) for the required headers.
+`index.html` is pre-cached but never served from cache while the origin is
+reachable: navigations go network-first, and the cached copy is the offline
+fallback.
+
+> These files, `index.html` included, also require `Cache-Control: no-cache` at the HTTP layer. See [Server Configuration](../README.md#server-configuration) for the required headers.
 
 ## CanvasKit Loading
 

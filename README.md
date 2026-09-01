@@ -462,15 +462,22 @@ The service worker sends `sw-progress` messages during resource operations:
 {
   type: 'sw-progress',
   timestamp: 1749123456789,
+  swVersion: 'a1b2c3d4',
   resourcesSize: 5242880,
+  resourcesCount: 6,
   resourceName: 'main.dart.js',
   resourceUrl: 'https://example.com/main.dart.js',
   resourceKey: 'main.dart.js',
   resourceSize: 1048576,
   loaded: 1048576,
-  status: 'completed' // 'loading' | 'completed' | 'updated' | 'cached' | 'error'
+  status: 'completed', // 'loading' | 'completed' | 'updated' | 'cached' | 'error'
+  counted: true
 }
 ```
+
+`resourcesCount` / `resourcesSize` describe the pre-cached set. Count only
+messages with `counted: true`, and only from your own `swVersion` — see
+[docs/service-worker.md](docs/service-worker.md#the-counted-set).
 
 ### Message Commands
 

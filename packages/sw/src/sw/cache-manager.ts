@@ -46,7 +46,7 @@ export function getManifestCacheName(prefix: string): string {
 export async function precacheResources(
   cacheName: string,
   manifest: ResourceManifest,
-  categories: ResourceCategory[],
+  categories: readonly ResourceCategory[],
   onEach?: (path: string, entry: ResourceEntry) => void | Promise<void>,
 ): Promise<void> {
   const cache = await caches.open(cacheName);
