@@ -52,8 +52,10 @@ void cleanup({
     _pruneCanvaskit(buildDir, canvaskitKeep);
   }
 
-  // Update index.html: replace version placeholders
-  _updateIndexHtml(buildDir, swVersion);
+  // Update index.html: replace version placeholders. Idempotent, and the
+  // generator already ran it before hashing the manifest — this call only
+  // covers callers that use [cleanup] on its own.
+  applyIndexHtmlVersion(buildDir, swVersion);
 }
 
 /// Recursively remove `.js.map`, `.js.symbols`, and `.wasm.map` files.
@@ -105,10 +107,18 @@ void _pruneCanvaskit(io.Directory buildDir, Set<String> keep) {
   }
 }
 
-/// Update index.html with version placeholders.
-void _updateIndexHtml(io.Directory buildDir, String version) {
+/// Substitute version placeholders in `index.html`.
+///
+/// Returns `true` when the file was rewritten. Idempotent: once the
+/// placeholders are gone, a second call is a no-op.
+///
+/// The generator calls this *before* hashing the manifest, because
+/// `index.html` is a manifest entry now — recording the hash and size of a
+/// file that is about to be rewritten would make the manifest describe
+/// something the origin never serves.
+bool applyIndexHtmlVersion(io.Directory buildDir, String version) {
   final indexFile = io.File(p.join(buildDir.path, 'index.html'));
-  if (!indexFile.existsSync()) return;
+  if (!indexFile.existsSync()) return false;
 
   var content = indexFile.readAsStringSync();
   var modified = false;
@@ -129,4 +139,5 @@ void _updateIndexHtml(io.Directory buildDir, String version) {
     indexFile.writeAsStringSync(content);
     io.stdout.writeln('  Updated index.html with version $version');
   }
+  return modified;
 }

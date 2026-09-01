@@ -9,6 +9,7 @@ import 'assets/sw_template.dart';
 import 'categorizer.dart';
 import 'cleanup.dart';
 import 'config.dart';
+import 'files.dart';
 import 'flutter_build.dart';
 import 'injector.dart';
 import 'manifest.dart';
@@ -76,6 +77,24 @@ Future<void> generate(GeneratorConfig config) async {
       ? config.version
       : _hashManifest(manifest);
   io.stdout.writeln('  Version: $effectiveVersion');
+
+  // Stamp the version into index.html *now*, then re-hash it. The shell is
+  // a manifest entry, so its recorded hash and size must describe the file
+  // that actually ships — and `cleanup` rewrites it. The version itself
+  // stays derived from the pre-substitution manifest, which keeps it
+  // deterministic despite the circularity (the version is written into the
+  // file whose hash feeds the version).
+  if (applyIndexHtmlVersion(buildDir, effectiveVersion)) {
+    final shell = manifest['index.html'];
+    if (shell != null) {
+      manifest['index.html'] = ResourceEntry(
+        name: shell.name,
+        size: indexHtml.statSync().size,
+        hash: await md5(indexHtml),
+        category: shell.category,
+      );
+    }
+  }
 
   // Print summary by category
   final categoryCounts = <ResourceCategory, int>{};

@@ -62,7 +62,14 @@ export interface ProgressReporter {
   readonly resourcesCount: number;
   /** Whether [key] belongs to the counted set. */
   isCounted(key: string): boolean;
-  /** Broadcast one progress message to every client. */
+  /**
+   * Broadcast one progress message to every client.
+   *
+   * Best-effort: progress is telemetry for a loading overlay, while its
+   * callers sit on the path that produces a `respondWith` response. A
+   * rejection here would surface as a failed navigation or a failed
+   * `main.dart.wasm`, so this never rejects.
+   */
   report(update: ProgressUpdate): Promise<void>;
 }
 
@@ -86,27 +93,35 @@ export function createProgressReporter(
   }
   const resourcesCount = counted.size;
 
+  const broadcast = async (update: ProgressUpdate): Promise<void> => {
+    const message: SWProgressMessage = {
+      type: 'sw-progress',
+      timestamp: Date.now(),
+      swVersion: version,
+      resourcesSize,
+      resourcesCount,
+      resourceName: update.name,
+      resourceUrl: update.url,
+      resourceKey: update.key,
+      resourceSize: update.size,
+      loaded: update.loaded,
+      status: update.status,
+      counted: counted.has(update.key),
+    };
+    if (update.error !== undefined) message.error = update.error;
+    await notifyClients(self, message);
+  };
+
   return {
     resourcesSize,
     resourcesCount,
     isCounted: (key: string): boolean => counted.has(key),
     report: async (update: ProgressUpdate): Promise<void> => {
-      const message: SWProgressMessage = {
-        type: 'sw-progress',
-        timestamp: Date.now(),
-        swVersion: version,
-        resourcesSize,
-        resourcesCount,
-        resourceName: update.name,
-        resourceUrl: update.url,
-        resourceKey: update.key,
-        resourceSize: update.size,
-        loaded: update.loaded,
-        status: update.status,
-        counted: counted.has(update.key),
-      };
-      if (update.error !== undefined) message.error = update.error;
-      await notifyClients(self, message);
+      try {
+        await broadcast(update);
+      } catch (error) {
+        console.warn('[SW] Progress report failed:', error);
+      }
     },
   };
 }

@@ -196,18 +196,37 @@ describe('networkFirst (via handleFetch navigate)', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns the network response when it is ok and caches it', async () => {
+  it('returns the network response when it is ok', async () => {
     installMockFetch(async () => textResponse('<html>fresh</html>'));
     const event = makeEvent(`${ORIGIN}/main.dart.js`, { mode: 'navigate' });
     handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
     const response = await event._responded!;
     expect(response.status).toBe(200);
     expect(await response.text()).toBe('<html>fresh</html>');
+  });
+
+  it('refreshes the shell from a request for the shell', async () => {
+    installMockFetch(async () => textResponse('<html>fresh-shell</html>'));
+    const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    await event._responded!;
 
     // Stored under the canonical shell key so a pre-cached `index.html`
     // and a cached navigation are the same entry.
     const cache = mockCaches.peek('app-v1');
-    expect(await cache!.match(new Request('index.html'))).toBeDefined();
+    const stored = await cache!.match(new Request('index.html'));
+    expect(await stored!.text()).toBe('<html>fresh-shell</html>');
+  });
+
+  it('does not refresh the shell from a navigation that is not the shell', async () => {
+    installMockFetch(async () => textResponse('<html>some other page</html>'));
+    await mockCaches.open('app-v1');
+    const event = makeEvent(`${ORIGIN}/main.dart.js`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    await event._responded!;
+
+    const cache = mockCaches.peek('app-v1');
+    expect(await cache!.match(new Request('index.html'))).toBeUndefined();
   });
 
   it('prefers navigationPreload response when provided', async () => {

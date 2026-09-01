@@ -15,7 +15,7 @@ Runs in the ServiceWorkerGlobalScope. Responsibilities:
 
 - **Install**: Pre-cache Core and Required resources into a temp cache
 - **Activate**: Atomic swap from temp to content cache, diff against previous manifest, clean stale caches, `clients.claim()`
-- **Fetch**: Cache-first for cached resources, network-first for every navigation (served from the pre-cached `index.html` when the origin is unreachable), pass-through for uncached
+- **Fetch**: Cache-first for cached resources, network-first for every navigation (served from the pre-cached `index.html` when the origin is unreachable), pass-through for uncached and for host-reserved paths (`__/*`)
 - **Messages**: Handle `skipWaiting`, `getVersion` commands
 - **Notifications**: Send `sw-progress` messages to clients during resource operations
 

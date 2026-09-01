@@ -1,6 +1,6 @@
 import type { ResourceManifest, ResourceEntry } from '../shared/types';
 import { ResourceCategory } from '../shared/types';
-import { NEVER_CACHE_FILES } from '../shared/constants';
+import { NEVER_CACHE_FILES, RESERVED_PATH_PREFIXES } from '../shared/constants';
 import { getResourceKey, fetchWithRetry } from '../shared/utils';
 import { lazyCacheResponse, getContentCacheName } from './cache-manager';
 import type { ProgressReporter } from './progress';
@@ -41,14 +41,26 @@ export function handleFetch(
     return;
   }
 
+  // Namespaces the host serves itself. Same origin, but not ours.
+  if (RESERVED_PATH_PREFIXES.some((prefix) => resourceKey.startsWith(prefix))) {
+    return;
+  }
+
   // App-shell path, checked before the manifest lookup: a Flutter route
   // like `/chat/42` is a navigation with no manifest entry of its own, and
   // the host rewrites it to the same `index.html`. Matching on the entry
   // first would drop those navigations on the floor — including offline,
   // where the pre-cached shell is the only thing that can answer them.
-  if (request.mode === 'navigate' || resourceKey === INDEX_KEY) {
+  //
+  // Only a request *for* the shell may refresh the cached shell. Every
+  // other navigation reads that cache but never writes it: a same-origin
+  // page outside the SPA answers a navigation with its own HTML, and
+  // storing that under the shell key leaves the app unable to boot from
+  // cache at all.
+  const isShellRequest = resourceKey === INDEX_KEY;
+  if (request.mode === 'navigate' || isShellRequest) {
     event.respondWith(
-      networkFirst(event, cachePrefix, version, manifest, progress),
+      networkFirst(event, cachePrefix, version, manifest, progress, isShellRequest),
     );
     return;
   }
@@ -61,12 +73,16 @@ export function handleFetch(
 }
 
 /**
- * Network-first strategy for index.html / navigation requests.
+ * Network-first strategy for navigations and `index.html`.
  *
  * Prefers a navigationPreload response if available, then falls through to
- * `fetchWithRetry`. Falls back to the scoped content cache on any network
+ * `fetchWithRetry`. Falls back to the pre-cached app shell on any network
  * error *or* non-ok HTTP response so a broken origin cannot replace a good
  * cached page.
+ *
+ * Nothing after a successful fetch may reject: this promise is handed to
+ * `respondWith`, so a rejection is a failed navigation — a blank error page
+ * where the origin had just answered 200.
  */
 async function networkFirst(
   event: FetchEvent,
@@ -74,6 +90,7 @@ async function networkFirst(
   version: string,
   manifest: ResourceManifest,
   progress: ProgressReporter,
+  isShellRequest: boolean,
 ): Promise<Response> {
   const { request } = event;
   const cacheName = getContentCacheName(cachePrefix, version);
@@ -92,11 +109,15 @@ async function networkFirst(
   };
 
   const fallbackToCache = async (): Promise<Response> => {
-    const cache = await caches.open(cacheName);
-    const cached = await cache.match(new Request(INDEX_KEY));
-    if (cached) {
-      await notifyIndex('cached');
-      return cached;
+    try {
+      const cache = await caches.open(cacheName);
+      const cached = await cache.match(new Request(INDEX_KEY));
+      if (cached) {
+        await notifyIndex('cached');
+        return cached;
+      }
+    } catch (error) {
+      console.warn('[SW] App-shell cache lookup failed:', error);
     }
     return new Response('Offline', {
       status: 503,
@@ -104,25 +125,36 @@ async function networkFirst(
     });
   };
 
+  let response: Response;
   try {
     // Prefer navigationPreload if enabled.
     const preload = (await event.preloadResponse) as Response | undefined;
-    let response = preload;
-    if (!response) {
-      response = await fetchWithRetry(request);
-    }
-
-    if (!response.ok) {
-      return await fallbackToCache();
-    }
-
-    const cache = await caches.open(cacheName);
-    await cache.put(new Request(INDEX_KEY), response.clone());
-    await notifyIndex('updated');
-    return response;
+    response = preload ?? (await fetchWithRetry(request));
   } catch {
     return fallbackToCache();
   }
+
+  if (!response.ok) {
+    return fallbackToCache();
+  }
+
+  // A redirected response cannot be replayed for a later navigation —
+  // browsers reject it when the request's redirect mode is not "follow" —
+  // so it must never become the cached shell.
+  if (isShellRequest && !response.redirected) {
+    try {
+      const cache = await caches.open(cacheName);
+      await cache.put(new Request(INDEX_KEY), response.clone());
+    } catch (error) {
+      // Quota pressure is routine for a wasm-sized app. A cache we could
+      // not write is a worse offline story, not a reason to withhold a
+      // page the origin just served.
+      console.warn('[SW] App-shell cache write failed:', error);
+    }
+    await notifyIndex('updated');
+  }
+
+  return response;
 }
 
 /**
@@ -141,19 +173,28 @@ async function cacheFirst(
   progress: ProgressReporter,
 ): Promise<Response> {
   const cacheName = getContentCacheName(cachePrefix, version);
-  const cache = await caches.open(cacheName);
 
-  const cached = await cache.match(new Request(resourceKey));
-  if (cached) {
-    await progress.report({
-      key: resourceKey,
-      name: entry.name,
-      url: request.url,
-      size: entry.size,
-      loaded: entry.size,
-      status: 'cached',
-    });
-    return cached;
+  // An unusable CacheStorage (evicted, blocked by a privacy mode) must
+  // degrade to a plain network fetch. Rejecting here would fail the
+  // resource outright, and these are the files the app is made of.
+  let cache: Cache | null = null;
+  try {
+    cache = await caches.open(cacheName);
+    const cached = await cache.match(new Request(resourceKey));
+    if (cached) {
+      await progress.report({
+        key: resourceKey,
+        name: entry.name,
+        url: request.url,
+        size: entry.size,
+        loaded: entry.size,
+        status: 'cached',
+      });
+      return cached;
+    }
+  } catch (error) {
+    console.warn(`[SW] Cache lookup failed for ${resourceKey}:`, error);
+    cache = null;
   }
 
   try {
@@ -169,7 +210,13 @@ async function cacheFirst(
     const response = await fetchWithRetry(request);
 
     if (response.ok) {
-      await lazyCacheResponse(cacheName, new Request(resourceKey), response);
+      if (cache) {
+        try {
+          await lazyCacheResponse(cacheName, new Request(resourceKey), response);
+        } catch (error) {
+          console.warn(`[SW] Cache write failed for ${resourceKey}:`, error);
+        }
+      }
 
       await progress.report({
         key: resourceKey,

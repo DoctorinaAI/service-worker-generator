@@ -49,6 +49,14 @@ interface ResourceEntry {
 
 ### Special Cases
 - Navigations (`/`, `index.html`, and any SPA route): network-first, falling back to the pre-cached `index.html`
+- Only `/` and `/index.html` may *write* that cached shell. Another
+  same-origin page — a static legal page, a download, an OAuth callback —
+  answers a navigation with its own HTML, and storing that under the shell
+  key would leave the app unable to boot from cache at all
+- `__/*`: pass-through. Hosts reserve namespaces they serve themselves and
+  exclude from the SPA rewrite; Firebase Auth's `/__/auth/handler` and
+  `/__/auth/iframe` live there when `authDomain` is the app's own domain.
+  See `RESERVED_PATH_PREFIXES`
 - `bootstrap.js`, `sw.js`: Never cached (always fetch fresh)
 - Non-GET requests: Pass-through
 
@@ -77,14 +85,18 @@ interface ResourceEntry {
 ### Fetch Event
 1. Only handle GET requests
 2. Normalize URL: strip query params, handle trailing slashes
-3. If the request is a navigation (or targets `index.html`): network-first,
+3. If the path is under a reserved prefix (`__/`): pass-through
+4. If the request is a navigation (or targets `index.html`): network-first,
    falling back to the pre-cached shell — checked before the manifest lookup,
-   since an SPA route has no manifest entry of its own
-4. Look up resource key in manifest
-5. If not in manifest or Ignore category: pass-through to network
-6. Otherwise: cache-first with network fallback
-7. On successful network fetch for Optional resources: cache the response
-8. Notify clients of fetch progress
+   since an SPA route has no manifest entry of its own. The shell cache is
+   refreshed only when the request is for the shell itself, and never from a
+   redirected response (which browsers refuse to replay for a navigation)
+5. Look up resource key in manifest
+6. If not in manifest or Ignore category: pass-through to network
+7. Otherwise: cache-first with network fallback
+8. On successful network fetch for Optional resources: cache the response
+9. Notify clients of fetch progress (best-effort — a progress failure never
+   fails the response)
 
 ### Message Event
 
@@ -149,10 +161,19 @@ type SWProgressStatus =
 ### The counted set
 
 `resourcesCount` and `resourcesSize` describe the **pre-cached set** —
-`Core` + `Required`. Those are the resources every startup is guaranteed to
-hear about, because the SW fetches them itself during install. Whether an
+`Core` + `Required`. Those are the resources a *cold* startup is guaranteed
+to hear about, because the SW fetches them itself during install. Whether an
 `Optional` resource is requested at all depends on the browser, the route
 and the CanvasKit CDN, so it cannot belong to a total fixed at build time.
+
+A warm load has no install event, so the numerator only reflects what the
+fetch handler happens to serve, and it will not reach the total: the shell
+is answered during the navigation itself — before any page script exists to
+hear the message — a JS-build entry point is never requested on a
+wasm-capable browser, and the rest may come from the browser's own HTTP
+cache without a fetch event. Expect the count to stop short on every load
+after the first. It is a floor, not a completion signal; the pipeline's own
+stages carry the bar the rest of the way.
 
 The SW reports every resource it serves, so a client showing
 `Loaded n of resourcesCount` must observe two rules:
