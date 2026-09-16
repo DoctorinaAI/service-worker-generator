@@ -13,6 +13,7 @@ import {
 } from '../cache-manager';
 import type { ResourceManifest } from '../../shared/types';
 import { ResourceCategory } from '../../shared/types';
+import { BODY_STALL_TIMEOUT_MS } from '../../shared/constants';
 import {
   installMockCaches,
   installMockFetch,
@@ -60,6 +61,7 @@ describe('precacheResources', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     errorSpy.mockRestore();
     warnSpy.mockRestore();
     vi.restoreAllMocks();
@@ -162,6 +164,47 @@ describe('precacheResources', () => {
     await expect(
       precacheResources('temp-v1', manifest, [ResourceCategory.Core]),
     ).rejects.toThrow(/core\.js/);
+  });
+
+  it('fails a Core entry whose body stalls, rather than hanging the install', async () => {
+    vi.useFakeTimers();
+    // Headers arrive fine and the body starts, then the stream goes silent
+    // forever. Before the stall guard this hung `cache.put` — and therefore
+    // `install`, and therefore every later `register()` on the origin.
+    installMockFetch(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('partial'));
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+
+    // The real Cache reads the body to completion; MockCache only clones it,
+    // which would never notice a stalled stream.
+    const cache = await caches.open('temp-v1');
+    vi.spyOn(cache, 'put').mockImplementation(async (_req, response) => {
+      await (response as Response).arrayBuffer();
+    });
+
+    const manifest = buildManifest({
+      'main.dart.js': {
+        name: 'main.dart.js',
+        size: 9_800_000,
+        hash: 'abc',
+        category: ResourceCategory.Core,
+      },
+    });
+
+    const promise = precacheResources('temp-v1', manifest, [
+      ResourceCategory.Core,
+    ]);
+    const assertion = expect(promise).rejects.toThrow(/stalled/);
+    await vi.advanceTimersByTimeAsync(BODY_STALL_TIMEOUT_MS + 1);
+    await assertion;
   });
 
   it('does not throw when Required/Optional resources fail (just warns)', async () => {

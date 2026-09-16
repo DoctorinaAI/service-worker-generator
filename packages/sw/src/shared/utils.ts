@@ -146,6 +146,96 @@ export async function fetchWithTimeout(
 }
 
 /**
+ * Resolve with `fallback` if `promise` has not settled within `timeoutMs`.
+ *
+ * Callers use this to stop *waiting* on work, not to cancel it: the losing
+ * promise keeps running, and a service worker registration abandoned this
+ * way still installs in the background once the browser gets to it.
+ *
+ * A rejection that arrives before the deadline propagates; one that arrives
+ * after it is discarded rather than left dangling, because `Promise.race`
+ * stays subscribed to both sides.
+ */
+export async function withTimeout<T, F>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  fallback: F,
+): Promise<T | F> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<F>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+/**
+ * Wrap a response so its body is cut off once it stops producing bytes for
+ * `idleMs`, instead of hanging forever on a stalled stream.
+ *
+ * Erroring the transform cancels the source stream, which tears down the
+ * underlying network transfer — no `AbortController` plumbing needed. The
+ * consumer (`cache.put`) sees a rejected promise and reports a normal
+ * precache failure, so a stalled body fails one install attempt rather than
+ * wedging the scope's job queue forever.
+ *
+ * The timer is armed per chunk, so a slow-but-alive transfer is never cut:
+ * only silence longer than `idleMs` is.
+ *
+ * Redirected responses are passed through untouched — their `redirected`
+ * flag cannot survive being rebuilt, and `replayableResponse` needs to see
+ * it to keep the shell replayable for navigations. They are small shell
+ * documents, not the multi-megabyte payloads this guard exists for.
+ */
+export function guardBodyStall(response: Response, idleMs: number): Response {
+  if (idleMs <= 0 || !response.body || response.redirected) return response;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const clear = (): void => {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
+  };
+  const arm = (
+    controller: TransformStreamDefaultController<Uint8Array>,
+  ): void => {
+    clear();
+    timer = setTimeout(() => {
+      try {
+        controller.error(new Error(`Response body stalled for ${idleMs}ms`));
+      } catch {
+        // The consumer cancelled and the stream is already closed. There is
+        // no `cancel` hook on a transformer to disarm the timer from, so
+        // the last armed timer outlives the stream by up to `idleMs` and
+        // lands here. Nothing to do: the transfer is over either way.
+      }
+    }, idleMs);
+  };
+
+  const guarded = response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      start: arm,
+      transform(chunk, controller) {
+        arm(controller);
+        controller.enqueue(chunk);
+      },
+      flush: clear,
+    }),
+  );
+
+  return new Response(guarded, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+/**
  * Run an array of async tasks with bounded concurrency.
  *
  * Precache can touch hundreds of files; without this limiter we'd burst

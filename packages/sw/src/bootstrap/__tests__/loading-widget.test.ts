@@ -4,7 +4,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { LoadingWidget } from '../loading-widget';
 import type { ResolvedConfig } from '../config';
-import { STALLED_TIMEOUT_MS } from '../../shared/constants';
+import { RESET_TIMEOUT_MS, STALLED_TIMEOUT_MS } from '../../shared/constants';
+import { FOREIGN_RELOAD_KEY } from '../sw-registration';
 
 function uiConfig(
   overrides: Partial<ResolvedConfig['ui']> = {},
@@ -232,5 +233,172 @@ describe('LoadingWidget stall detection', () => {
     vi.advanceTimersByTime(STALLED_TIMEOUT_MS + 1);
     expect(warn).not.toHaveBeenCalled();
     warn.mockRestore();
+  });
+});
+
+describe('LoadingWidget reset action', () => {
+  let originalLocation: Location;
+  let reloadSpy: ReturnType<typeof vi.fn>;
+  let baseElement: HTMLBaseElement;
+
+  /** A registration whose `unregister()` never settles, as a wedged job queue produces. */
+  function hangingRegistration(scriptURL: string): ServiceWorkerRegistration {
+    return {
+      active: { scriptURL },
+      waiting: null,
+      installing: null,
+      unregister: vi.fn(() => new Promise<boolean>(() => {})),
+    } as unknown as ServiceWorkerRegistration;
+  }
+
+  function settledRegistration(scriptURL: string): ServiceWorkerRegistration {
+    return {
+      active: { scriptURL },
+      waiting: null,
+      installing: null,
+      unregister: vi.fn(async () => true),
+    } as unknown as ServiceWorkerRegistration;
+  }
+
+  function installCaches(names: string[]): { deleted: string[] } {
+    const deleted: string[] = [];
+    const stub = {
+      keys: async () => names,
+      delete: async (name: string) => {
+        deleted.push(name);
+        return true;
+      },
+    } as unknown as CacheStorage;
+    (globalThis as unknown as { caches: CacheStorage }).caches = stub;
+    (window as unknown as { caches: CacheStorage }).caches = stub;
+    return { deleted };
+  }
+
+  function installRegistrations(regs: ServiceWorkerRegistration[]): void {
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: { getRegistrations: async () => regs },
+    });
+  }
+
+  function clickReset(): void {
+    const button = document.querySelector<HTMLButtonElement>('.sw-reload-overlay');
+    button?.click();
+  }
+
+  beforeEach(() => {
+    // Touched before `location` is replaced below: JSDOM resolves storage
+    // from the document origin on first access, and a stubbed location
+    // leaves that lookup with nothing to resolve.
+    window.sessionStorage.clear();
+    vi.useFakeTimers();
+    baseElement = document.createElement('base');
+    baseElement.href = 'https://example.com/';
+    document.head.appendChild(baseElement);
+    originalLocation = window.location;
+    reloadSpy = vi.fn();
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...originalLocation, href: 'https://example.com/', reload: reloadSpy },
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    baseElement.remove();
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: originalLocation,
+    });
+    try {
+      delete (navigator as unknown as { serviceWorker?: unknown }).serviceWorker;
+    } catch {
+      // ignore
+    }
+    window.sessionStorage.clear();
+    cleanup();
+  });
+
+  it('reloads even when unregister() never settles', async () => {
+    // The wedge this button rescues is the one that makes `unregister()`
+    // hang — so waiting on it without a deadline strands the user on the
+    // stalled screen they clicked it to leave.
+    installCaches(['app-cache-v1']);
+    installRegistrations([hangingRegistration('https://example.com/sw.js?v=1')]);
+    const w = new LoadingWidget(uiConfig(), 'sw.js');
+    w.mount();
+
+    clickReset();
+    await vi.advanceTimersByTimeAsync(RESET_TIMEOUT_MS + 1);
+
+    expect(reloadSpy).toHaveBeenCalledOnce();
+  });
+
+  it('clears caches and unregisters our own worker on the happy path', async () => {
+    const { deleted } = installCaches(['app-cache-v1', 'app-cache-manifest']);
+    const ours = settledRegistration('https://example.com/sw.js?v=1');
+    installRegistrations([ours]);
+    const w = new LoadingWidget(uiConfig(), 'sw.js');
+    w.mount();
+
+    clickReset();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(deleted).toEqual(['app-cache-v1', 'app-cache-manifest']);
+    expect(ours.unregister).toHaveBeenCalledOnce();
+    expect(reloadSpy).toHaveBeenCalledOnce();
+  });
+
+  it('leaves unrelated registrations like firebase-messaging-sw.js alone', async () => {
+    // Unregistering a push worker silently drops its subscription — an
+    // outcome that has nothing to do with a stuck cache.
+    installCaches([]);
+    const ours = settledRegistration('https://example.com/sw.js?v=1');
+    const push = settledRegistration('https://example.com/firebase-messaging-sw.js');
+    installRegistrations([ours, push]);
+    const w = new LoadingWidget(uiConfig(), 'sw.js');
+    w.mount();
+
+    clickReset();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(ours.unregister).toHaveBeenCalledOnce();
+    expect(push.unregister).not.toHaveBeenCalled();
+  });
+
+  it('preserves application storage', async () => {
+    // On Flutter web `shared_preferences` is localStorage: clearing it signs
+    // the user out and drops local app state, which is not what a reload
+    // button should do. Asserted against a stub because this JSDOM runs
+    // without a localStorage implementation at all.
+    const clear = vi.fn();
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: { clear, getItem: () => null, setItem: () => undefined },
+    });
+    installCaches([]);
+    installRegistrations([settledRegistration('https://example.com/sw.js?v=1')]);
+    window.sessionStorage.setItem('unrelated', 'kept');
+    const w = new LoadingWidget(uiConfig(), 'sw.js');
+    w.mount();
+
+    clickReset();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(clear).not.toHaveBeenCalled();
+    expect(window.sessionStorage.getItem('unrelated')).toBe('kept');
+  });
+
+  it('re-arms the one-shot foreign-controller recovery', async () => {
+    installCaches([]);
+    installRegistrations([settledRegistration('https://example.com/sw.js?v=1')]);
+    window.sessionStorage.setItem(FOREIGN_RELOAD_KEY, '1');
+    const w = new LoadingWidget(uiConfig(), 'sw.js');
+    w.mount();
+
+    clickReset();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(window.sessionStorage.getItem(FOREIGN_RELOAD_KEY)).toBeNull();
   });
 });

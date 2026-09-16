@@ -1,3 +1,24 @@
+## 0.2.0 — 2026-09-16
+
+### Fixed
+
+- **Bootstrap**: the pipeline could wait on `navigator.serviceWorker.register()` forever, leaving the app stuck at `2% Registering service worker` — through reloads, through restarts, with no error and no way out. Service worker jobs are serialised per scope, so an install that never settles blocks every later `register()`, `unregister()` and `getRegistrations()` on the origin until the browser kills the install minutes later. The whole service-worker step is now bounded by `SW_BOOTSTRAP_TIMEOUT_MS` (10s) and the app boots uncached when it runs out; the abandoned registration is left running, so the worker still installs in the background once the browser frees the queue. The deadline covers the pre-registration cleanup too, which goes through the same queue. (`packages/sw/src/bootstrap/sw-registration.ts`, `packages/sw/src/shared/utils.ts`)
+- **Service Worker**: a pre-cached response body that stalled mid-stream hung `install` indefinitely — the mechanism that wedges the queue above. `fetchWithRetry` bounds the headers only: its abort timer is cleared as soon as they arrive, after which `cache.put` reads a multi-megabyte body (`main.dart.js` is routinely ~10 MB) with no deadline at all. Bodies are now wrapped in an idle watchdog (`BODY_STALL_TIMEOUT_MS`, 30s) that cancels a stream which has stopped producing bytes. Measured against idle time, not total duration, so a slow-but-alive connection still finishes however long it takes; a genuinely dead stream fails one entry, and the install is retried on the next page load instead of blocking the origin. (`packages/sw/src/sw/cache-manager.ts`, `packages/sw/src/shared/utils.ts`)
+- **Bootstrap**: the loading widget's reset button hung in exactly the situation it exists for. It awaited `unregister()` before reloading, and `unregister()` is one of the calls a wedged job queue never settles — so the button spun forever on the stalled screen the user clicked it to escape. Cleanup is now bounded by `RESET_TIMEOUT_MS` (3s) and the reload is unconditional. (`packages/sw/src/bootstrap/loading-widget.ts`)
+
+### Changed
+
+- **Bootstrap**: the reset button no longer clears `localStorage`/`sessionStorage`. On Flutter web `shared_preferences` is `localStorage`, so clearing it signs the user out and discards local app state — not something a reload button should do, and unrelated to a stuck cache. It still drops every cache, and it now clears only the one-shot foreign-controller guard key rather than all of session storage. (`packages/sw/src/bootstrap/loading-widget.ts`)
+- **Bootstrap**: the reset button unregisters only the service worker this bootstrap registered, matched on path. Unregistering everything also took out workers at unrelated scopes — `firebase-messaging-sw.js` and its push subscription, for instance — which `reloadIfForeignController` has always been careful to spare. `LoadingWidget` takes the SW filename for this; constructed without one, it falls back to the previous behaviour. (`packages/sw/src/bootstrap/loading-widget.ts`, `packages/sw/src/bootstrap/pipeline.ts`)
+
+### Tests
+
+- Vitest: `registerServiceWorker` returns `null` and lets the pipeline continue when `register()` never settles, and when the pre-registration cleanup never settles. Both hang without the fix.
+- Vitest: a `Core` entry whose body stalls fails the install instead of hanging it — asserted through a cache that actually consumes the body, since the shared mock only clones it.
+- Vitest: the reset action reloads despite an `unregister()` that never settles, clears caches, spares unrelated registrations, leaves application storage alone, and re-arms the foreign-controller guard.
+- Vitest: `withTimeout` resolution, fallback and rejection propagation; `guardBodyStall` pass-through rules, an intact slow stream, and a stalled one.
+- Playwright: with the scope's job queue deliberately wedged by a worker whose install never settles, the app still reaches its first frame.
+
 ## 0.1.6-dev — 2026-09-02
 
 ### Fixed

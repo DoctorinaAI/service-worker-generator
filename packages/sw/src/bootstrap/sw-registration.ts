@@ -1,9 +1,30 @@
-import { SW_REGISTRATION_TIMEOUT_MS } from '../shared/constants';
+import {
+  SW_BOOTSTRAP_TIMEOUT_MS,
+  SW_REGISTRATION_TIMEOUT_MS,
+} from '../shared/constants';
+import { withTimeout } from '../shared/utils';
 import { logPhase } from './console-logger';
 
+/** Sentinel distinguishing "the budget ran out" from a null registration. */
+const TIMED_OUT = Symbol('sw-registration-timeout');
+
 /**
- * Register the service worker with timeout and fallback.
- * Returns true if SW was registered successfully.
+ * Register the service worker, giving up on it if it does not settle.
+ *
+ * Everything inside runs on the scope's service worker job queue, and that
+ * queue is only as live as the jobs already on it: an install that never
+ * settles — a precache body that stalled, say — leaves `register()`,
+ * `unregister()` and `getRegistrations()` pending forever, for every later
+ * page load on the origin, until the browser times the install out minutes
+ * later. Without a cap the pipeline waits on that queue and the app never
+ * boots at all, which is a far worse outcome than booting uncached.
+ *
+ * The abandoned promise is deliberately left running: when the browser does
+ * free the queue, the registration completes and the worker installs in the
+ * background, ready for the next load.
+ *
+ * Returns the registration, or `null` when the service worker is
+ * unsupported, failed, or did not settle in time.
  */
 export async function registerServiceWorker(
   swFilename: string,
@@ -14,6 +35,32 @@ export async function registerServiceWorker(
     return null;
   }
 
+  const outcome = await withTimeout(
+    registerAndActivate(swFilename, swVersion),
+    SW_BOOTSTRAP_TIMEOUT_MS,
+    TIMED_OUT,
+  );
+
+  if (outcome === TIMED_OUT) {
+    logPhase(
+      'SW',
+      `Registration did not settle in ${SW_BOOTSTRAP_TIMEOUT_MS}ms ` +
+        '(service worker job queue is likely blocked); continuing without SW',
+    );
+    return null;
+  }
+
+  return outcome;
+}
+
+/**
+ * The registration flow proper, unbounded — see `registerServiceWorker` for
+ * the deadline that contains it.
+ */
+async function registerAndActivate(
+  swFilename: string,
+  swVersion: string,
+): Promise<ServiceWorkerRegistration | null> {
   // First, unregister any old Flutter service worker
   await unregisterFlutterSW();
 
@@ -207,7 +254,7 @@ async function unregisterFlutterSW(): Promise<void> {
  * sessionStorage key marking that this tab already performed a one-shot
  * recovery reload for a foreign SW controller.
  */
-const FOREIGN_RELOAD_KEY = 'sw-foreign-controller-reload';
+export const FOREIGN_RELOAD_KEY = 'sw-foreign-controller-reload';
 
 /**
  * If the current page is controlled by a service worker whose script URL
