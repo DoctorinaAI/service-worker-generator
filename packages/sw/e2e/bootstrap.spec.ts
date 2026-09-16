@@ -1,4 +1,7 @@
 import { expect, test } from '@playwright/test';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 declare global {
   interface Window {
@@ -7,6 +10,12 @@ declare global {
 }
 
 const BASE_URL = 'http://localhost:8089';
+
+/** The directory `playwright.config.ts` serves on BASE_URL. */
+const WEB_ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../example/build/web',
+);
 
 test.describe('Bootstrap E2E', () => {
   test('page loads without errors', async ({ page }) => {
@@ -114,5 +123,50 @@ test.describe('Bootstrap E2E', () => {
     });
 
     expect(swRegistered).toBe(true);
+  });
+});
+
+test.describe('Bootstrap E2E — wedged service worker job queue', () => {
+  // A worker whose install never settles. Its registration job therefore
+  // never finishes, and every later job on the same scope — including the
+  // bootstrap's own `register()` — stays queued behind it until the browser
+  // times the install out minutes later. This is what a precache body that
+  // stalls mid-stream does to a real deployment.
+  const STALL_SW = `self.addEventListener('install', (event) => {
+  event.waitUntil(new Promise(() => {}));
+});
+`;
+  const stallSwPath = path.join(WEB_ROOT, 'stall-sw.js');
+
+  test.beforeAll(() => {
+    fs.writeFileSync(stallSwPath, STALL_SW);
+  });
+
+  test.afterAll(() => {
+    fs.rmSync(stallSwPath, { force: true });
+  });
+
+  test('boots the app anyway, without the service worker', async ({ page }) => {
+    // The bootstrap waits out its full SW budget before moving on.
+    test.setTimeout(90_000);
+
+    const logs: string[] = [];
+    page.on('console', (msg) => logs.push(msg.text()));
+
+    // Claim the job queue before bootstrap.js gets to it.
+    await page.addInitScript(() => {
+      void navigator.serviceWorker?.register('stall-sw.js').catch(() => {});
+    });
+
+    await page.goto(BASE_URL);
+
+    // The app reaches its first frame despite the queue never freeing up.
+    await expect(page.locator('flutter-view')).toBeAttached({
+      timeout: 60_000,
+    });
+
+    expect(logs.some((line) => line.includes('continuing without SW'))).toBe(
+      true,
+    );
   });
 });

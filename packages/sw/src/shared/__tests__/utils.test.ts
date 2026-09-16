@@ -9,6 +9,8 @@ import {
   cacheBustUrl,
   fetchWithTimeout,
   fetchWithRetry,
+  guardBodyStall,
+  withTimeout,
 } from '../utils';
 import { installMockFetch, textResponse } from '../../__tests__/helpers';
 
@@ -270,5 +272,97 @@ describe('fetchWithRetry', () => {
     );
     expect(res.status).toBe(500);
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('withTimeout', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('resolves with the promise value when it settles in time', async () => {
+    await expect(withTimeout(Promise.resolve('v'), 1_000, 'fallback')).resolves.toBe('v');
+  });
+
+  it('resolves with the fallback when the promise never settles', async () => {
+    vi.useFakeTimers();
+    const promise = withTimeout(new Promise<string>(() => {}), 1_000, 'fallback');
+    await vi.advanceTimersByTimeAsync(1_001);
+    await expect(promise).resolves.toBe('fallback');
+  });
+
+  it('propagates a rejection that arrives before the deadline', async () => {
+    await expect(
+      withTimeout(Promise.reject(new Error('boom')), 1_000, 'fallback'),
+    ).rejects.toThrow('boom');
+  });
+});
+
+describe('guardBodyStall', () => {
+  /** A body that emits `chunks` spaced `gapMs` apart, then closes. */
+  function pacedBody(chunks: string[], gapMs: number): Response {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        for (const chunk of chunks) {
+          await new Promise((resolve) => setTimeout(resolve, gapMs));
+          controller.enqueue(encoder.encode(chunk));
+        }
+        controller.close();
+      },
+    });
+    return new Response(stream, { status: 200 });
+  }
+
+  it('passes the body through untouched when disabled', () => {
+    const response = new Response('body');
+    expect(guardBodyStall(response, 0)).toBe(response);
+  });
+
+  it('passes a redirected response through, so replayableResponse still sees the flag', () => {
+    const response = new Response('body');
+    Object.defineProperty(response, 'redirected', { value: true });
+    expect(guardBodyStall(response, 50)).toBe(response);
+  });
+
+  it('delivers a complete body unchanged', async () => {
+    const guarded = guardBodyStall(pacedBody(['a', 'b', 'c'], 1), 500);
+    await expect(guarded.text()).resolves.toBe('abc');
+  });
+
+  it('leaves a slow but alive stream alone', async () => {
+    // Five gaps of 10ms each: far longer in total than the 40ms idle
+    // threshold, but never silent for that long. A connection that is
+    // merely slow must be allowed to finish.
+    const guarded = guardBodyStall(pacedBody(['a', 'b', 'c', 'd', 'e'], 10), 40);
+    await expect(guarded.text()).resolves.toBe('abcde');
+  });
+
+  it('errors a body that goes silent past the threshold', async () => {
+    const stalled = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('partial'));
+          // ...and then nothing, ever. This is the shape that hangs
+          // cache.put, and with it the whole install.
+        },
+      }),
+      { status: 200 },
+    );
+
+    await expect(guardBodyStall(stalled, 30).text()).rejects.toThrow(
+      /stalled for 30ms/,
+    );
+  });
+
+  it('preserves status and headers', () => {
+    const response = new Response('body', {
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'application/javascript' },
+    });
+    const guarded = guardBodyStall(response, 50);
+    expect(guarded.status).toBe(200);
+    expect(guarded.headers.get('content-type')).toBe('application/javascript');
   });
 });

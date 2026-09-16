@@ -7,7 +7,10 @@ import {
   listenForSWMessages,
   reloadIfForeignController,
 } from '../sw-registration';
-import { SW_REGISTRATION_TIMEOUT_MS } from '../../shared/constants';
+import {
+  SW_BOOTSTRAP_TIMEOUT_MS,
+  SW_REGISTRATION_TIMEOUT_MS,
+} from '../../shared/constants';
 
 interface FakeWorker {
   state: 'installing' | 'installed' | 'activating' | 'activated';
@@ -182,6 +185,38 @@ describe('registerServiceWorker', () => {
 
     const result = await registerServiceWorker('sw.js', 'v1');
     expect(result).toBeNull();
+  });
+
+  it('gives up and returns null when register() never settles', async () => {
+    vi.useFakeTimers();
+    // A wedged scope job queue: an install elsewhere never finished, so the
+    // browser leaves this promise pending instead of rejecting it. Without a
+    // deadline the whole bootstrap waits here and the app never starts.
+    const register = vi.fn(() => new Promise<never>(() => {}));
+    installSwContainer({ register });
+
+    const promise = registerServiceWorker('sw.js', 'v1');
+    await vi.advanceTimersByTimeAsync(SW_BOOTSTRAP_TIMEOUT_MS + 1);
+
+    await expect(promise).resolves.toBeNull();
+  });
+
+  it('gives up when the pre-registration cleanup never settles', async () => {
+    vi.useFakeTimers();
+    // The same wedge reaches `getRegistrations()`/`unregister()`, which run
+    // before `register()` is even called — so the deadline has to cover the
+    // whole step, not just the registration call.
+    const oldWorker = makeWorker('activated', '/flutter_service_worker.js');
+    const oldReg = makeRegistration(oldWorker, 'active');
+    oldReg.unregister = vi.fn(() => new Promise<boolean>(() => {}));
+    const register = vi.fn(async () => makeRegistration(makeWorker('activated'), 'active'));
+    installSwContainer({ register, registrations: [oldReg] });
+
+    const promise = registerServiceWorker('sw.js', 'v1');
+    await vi.advanceTimersByTimeAsync(SW_BOOTSTRAP_TIMEOUT_MS + 1);
+
+    await expect(promise).resolves.toBeNull();
+    expect(register).not.toHaveBeenCalled();
   });
 
   it('unregisters an existing Flutter-generated SW before registering a new one', async () => {

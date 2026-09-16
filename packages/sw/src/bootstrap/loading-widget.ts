@@ -1,5 +1,7 @@
 import type { ResolvedConfig } from './config';
-import { STALLED_TIMEOUT_MS } from '../shared/constants';
+import { RESET_TIMEOUT_MS, STALLED_TIMEOUT_MS } from '../shared/constants';
+import { withTimeout } from '../shared/utils';
+import { FOREIGN_RELOAD_KEY } from './sw-registration';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PROGRESS_RING_RADIUS = 65;
@@ -20,7 +22,16 @@ export class LoadingWidget {
   private currentPercent = 0;
   private disposed = false;
 
-  constructor(private config: ResolvedConfig['ui']) {}
+  /**
+   * @param config - Widget appearance and progress range.
+   * @param swFilename - The service worker this bootstrap registers, used to
+   *   keep the reset action away from unrelated registrations. Omitted by
+   *   callers that only render the widget.
+   */
+  constructor(
+    private config: ResolvedConfig['ui'],
+    private swFilename?: string,
+  ) {}
 
   /**
    * Create and mount the loading widget into the DOM.
@@ -237,33 +248,88 @@ export class LoadingWidget {
     );
   }
 
+  /**
+   * Drop the caching layer and reload.
+   *
+   * Bounded, because the state this button exists to escape is exactly the
+   * state that makes the cleanup hang: a service worker install that never
+   * settles blocks its scope's job queue, and `unregister()` then waits on
+   * that queue forever. Waiting on cleanup without a deadline would strand
+   * the user on the stalled screen they clicked the button to leave, so
+   * whatever lands within the budget is kept and the reload is
+   * unconditional. `caches.delete()` does not go through that queue and
+   * keeps working regardless.
+   */
   private async resetCache(): Promise<void> {
     if (this.reloadButton) {
       this.reloadButton.classList.add('is-loading');
       this.reloadButton.setAttribute('disabled', 'true');
     }
 
+    await withTimeout(this.clearCachingLayer(), RESET_TIMEOUT_MS, undefined);
+
+    window.location.reload();
+  }
+
+  /**
+   * Remove the caches and the service worker registration this bootstrap
+   * owns.
+   *
+   * Deliberately narrower than "clear everything". Application storage is
+   * left alone: on Flutter web `shared_preferences` is `localStorage`, so
+   * clearing it signs the user out and discards local app state — an
+   * outcome nobody expects from a reload button, and one that has nothing
+   * to do with a stuck cache. Foreign registrations are left alone for the
+   * same reason `reloadIfForeignController` spares them: unregistering
+   * something like `firebase-messaging-sw.js` silently drops its push
+   * subscription.
+   */
+  private async clearCachingLayer(): Promise<void> {
     try {
-      // Clear all caches
       if ('caches' in window) {
         const names = await caches.keys();
         await Promise.all(names.map((n) => caches.delete(n)));
       }
 
-      // Unregister all service workers
       if ('serviceWorker' in navigator) {
         const regs = await navigator.serviceWorker.getRegistrations();
-        await Promise.all(regs.map((r) => r.unregister()));
+        await Promise.all(
+          regs.filter((reg) => this.isOwnRegistration(reg)).map((reg) => reg.unregister()),
+        );
       }
 
-      // Clear storage
-      localStorage.clear();
-      sessionStorage.clear();
+      // Re-arm the one-shot foreign-controller recovery, so the reload this
+      // reset is about to trigger can use it if a stale controller is what
+      // wedged us in the first place.
+      sessionStorage.removeItem(FOREIGN_RELOAD_KEY);
     } catch (e) {
       console.error('[Bootstrap] Reset error:', e);
     }
+  }
 
-    window.location.reload();
+  /**
+   * Whether a registration is the one this bootstrap registered.
+   *
+   * Matched on path, since the registered URL carries a `?v=` cache-buster.
+   * With no configured filename to compare against we cannot tell ours from
+   * anyone else's, and clearing the caching layer is the job we were asked
+   * to do — so every registration is fair game in that case.
+   */
+  private isOwnRegistration(registration: ServiceWorkerRegistration): boolean {
+    if (!this.swFilename) return true;
+
+    const worker =
+      registration.active ?? registration.waiting ?? registration.installing;
+    if (!worker) return false;
+
+    try {
+      return (
+        new URL(worker.scriptURL).pathname ===
+        new URL(this.swFilename, document.baseURI).pathname
+      );
+    } catch {
+      return false;
+    }
   }
 
   private getCSS(): string {

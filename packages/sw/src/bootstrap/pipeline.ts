@@ -27,7 +27,7 @@ import { loadFlutterApp } from './flutter-loader';
  */
 export function runPipeline(config: ResolvedConfig): BootstrapAPI {
   const { ui } = config;
-  const widget = new LoadingWidget(ui);
+  const widget = new LoadingWidget(ui, config.build.swFilename);
   const api = new BootstrapAPI(widget);
   widget.mount();
 

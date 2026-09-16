@@ -17,6 +17,8 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
 - Unregister any existing Flutter service worker (`flutter_service_worker.js`)
 - Register `sw.js` with version query param (`sw.js?v={version}`)
 - Wait for activation with timeout (4s default)
+- The whole stage is capped at 10s: service worker jobs are serialised per scope,
+  so a stuck install elsewhere leaves `register()` pending indefinitely
 - On timeout or failure: continue without SW (app still works, just no caching)
 - Listen for `sw-progress` messages from the SW
 

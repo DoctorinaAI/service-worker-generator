@@ -151,10 +151,18 @@ Attempt 3: wait 2s
 - Default: 10 seconds per request
 - Uses `AbortController` for clean cancellation
 - Timeout triggers retry logic
+- Covers the response headers only — see the body watchdog below
 
-### Install Timeout
-- If pre-caching hangs: 30s timeout, fail install
-- SW will retry on next page load
+### Body Stall Watchdog
+- A pre-cached body that produces no bytes for 30s is cancelled
+- Measured as idle time, not total duration: a slow connection that keeps
+  delivering bytes is never cut off, however long a ~10 MB `main.dart.js` takes
+- Without it, `cache.put` reads a stalled stream forever. That hangs `install`,
+  and an install that never settles blocks the scope's job queue — every later
+  `register()` and `unregister()` on the origin hangs with it, until the browser
+  times the install out minutes later
+- A cancelled body fails that one entry; a `Core` entry fails the install, which
+  is retried on the next page load
 
 ### Activate Recovery
 - On any error during activate: clear all caches

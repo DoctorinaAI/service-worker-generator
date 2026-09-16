@@ -1,6 +1,7 @@
 import type { ResourceEntry, ResourceManifest } from '../shared/types';
 import { ResourceCategory } from '../shared/types';
 import {
+  BODY_STALL_TIMEOUT_MS,
   MANIFEST_CACHE_SUFFIX,
   PRECACHE_CONCURRENCY,
   TEMP_CACHE_SUFFIX,
@@ -9,6 +10,7 @@ import {
   cacheBustUrl,
   fetchWithRetry,
   getResourceKey,
+  guardBodyStall,
   mapWithConcurrency,
   replayableResponse,
 } from '../shared/utils';
@@ -71,7 +73,20 @@ export async function precacheResources(
       // a host that redirects `index.html?v=…` would otherwise leave us
       // with a copy the browser refuses to serve. Cheap for everything
       // else: a response that was not redirected is passed straight back.
-      await cache.put(new Request(path), await replayableResponse(response));
+      //
+      // The stall guard wraps the body before `cache.put` consumes it.
+      // `fetchWithRetry` only bounds the headers, and the bodies here are
+      // the largest files the app ships — a stream that dies mid-transfer
+      // would otherwise hang `cache.put`, and with it this install, for as
+      // long as the browser lets an install event run. That is not a slow
+      // install: it blocks the scope's job queue, so every `register()` on
+      // the origin hangs until the browser kills it minutes later. Failing
+      // the entry instead costs one install attempt, retried on the next
+      // page load.
+      await cache.put(
+        new Request(path),
+        await replayableResponse(guardBodyStall(response, BODY_STALL_TIMEOUT_MS)),
+      );
       stored = true;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
