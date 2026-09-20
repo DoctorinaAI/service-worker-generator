@@ -1,3 +1,5 @@
+# Files excluded from the published package.
+
 .vscode/
 .idea/
 .github/
@@ -21,3 +23,23 @@ pubspec.lock
 # Documentation (not needed in pub package)
 docs/
 CLAUDE.md
+
+# --- Safety net ---------------------------------------------------------
+# A .pubignore REPLACES the .gitignore of this directory for `pub publish`,
+# so every rule that protects the package has to be repeated here.
+# Dotfiles (.env, .github, .vscode, .dart_tool) are never published by pub,
+# but everything else is — including files git ignores.
+
+# Credentials
+*.key
+*.pem
+*.p12
+*.jks
+*.keystore
+credentials.json
+service-account*.json
+
+# Build, test and tooling output
+coverage/
+doc/api/
+*.vm.json
