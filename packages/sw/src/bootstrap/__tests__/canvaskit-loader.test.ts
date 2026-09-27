@@ -189,6 +189,18 @@ describe('loadCanvasKit', () => {
     expect(request.url).toContain('engine-rev-123');
   });
 
+  it('uses local without probing the CDN when useLocalCanvasKit is set', async () => {
+    const spy = installMockFetch(async () => textResponse('ok'));
+    const result = await loadCanvasKit(
+      'engine-rev-123',
+      { renderer: 'skwasm' },
+      caps(),
+      true,
+    );
+    expect(result).toBe(CANVASKIT_LOCAL_PATH);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
   it('falls back to local when CDN returns non-ok', async () => {
     installMockFetch(async () => textResponse('down', 404));
     const result = await loadCanvasKit(

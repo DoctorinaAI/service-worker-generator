@@ -1,3 +1,17 @@
+## Unreleased
+
+### Fixed
+
+- **Bootstrap**: `flutter build web --no-web-resources-cdn` was ignored. Flutter records that choice as `"useLocalCanvasKit": true` in `_flutter.buildConfig`, but the generator dropped it, and the bootstrap probed `gstatic.com` on every load and then loaded the engine from the CDN whenever it answered. The probe is a `cache: "no-store"` request, so it cost a network round trip on every load, returning visitors included, before the engine download could start, and up to two 8 s timeouts where `gstatic.com` is blocked or slow. The bundled `canvaskit/` files the app chose to serve were never used, so the service worker never cached them either. The generator now passes `useLocalCanvasKit` through to the bootstrap config (only when true), and `loadCanvasKit` goes straight to the local directory for such builds; the variant in use is cached lazily on first load like any other `Optional` file. Builds without the flag behave as before. The generator's summary also reports which source the bootstrap will use. (`lib/src/flutter_build.dart`, `lib/src/injector.dart`, `lib/src/generator.dart`, `packages/sw/src/bootstrap/canvaskit-loader.ts`, `packages/sw/src/bootstrap/pipeline.ts`, `packages/sw/src/shared/types.ts`)
+- **Generator**: cleanup pruned `canvaskit/chromium/canvaskit.js` while keeping its `.wasm`. `getCanvasKitVariant` loads that pair on Chromium-class browsers with the `canvaskit` renderer; the missing half went unnoticed while the engine came from the CDN, but a `--no-web-resources-cdn` build loads it locally, where hosts with an SPA rewrite answer the missing script with `index.html` and the app never starts. The keep-set now lists both files. (`lib/src/generator.dart`)
+
+### Tests
+
+- Vitest: `loadCanvasKit` returns the local path without any fetch when `useLocalCanvasKit` is set; the pipeline passes `useLocalCanvasKit` to it, and `false` when the config omits it. All three fail without the fix.
+- Dart: `extractFlutterBuildInfo` reads `useLocalCanvasKit` and defaults it to `false`; `injectBootstrapConfig` emits it only when true; the integration build checks that `bootstrap.js` carries whatever the example's `flutter_bootstrap.js` recorded, so it holds for builds with and without `--no-web-resources-cdn`.
+- Dart: `generate()` over a synthetic canvaskit build keeps both files of the standard and Chromium variants and prunes a file no variant uses; it fails without the keep-set fix.
+- Playwright: the suite passes (17) against the example built both with and without `--no-web-resources-cdn`. With the local build and the keep-set unfixed, "page loads without errors" and the wedged-queue test fail on the missing `chromium/canvaskit.js`.
+
 ## 0.2.0 — 2026-09-16
 
 ### Fixed

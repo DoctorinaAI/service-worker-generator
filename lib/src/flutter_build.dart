@@ -6,19 +6,29 @@ import 'package:path/path.dart' as p;
 /// Parsed Flutter build configuration.
 class FlutterBuildInfo {
   /// Create a Flutter build info.
-  const FlutterBuildInfo({required this.engineRevision, required this.builds});
+  const FlutterBuildInfo({
+    required this.engineRevision,
+    required this.builds,
+    this.useLocalCanvasKit = false,
+  });
 
   /// Engine revision hash (e.g., "425cfb54d01a9472b3e81d9e76fd63a4a44cfbcb").
   final String engineRevision;
 
   /// Build entries from _flutter.buildConfig.builds.
   final List<Map<String, dynamic>> builds;
+
+  /// Whether the app was built with `--no-web-resources-cdn`: Flutter
+  /// records `"useLocalCanvasKit":true` in its buildConfig, and the engine
+  /// is then served from the local `canvaskit/` directory, not the CDN.
+  final bool useLocalCanvasKit;
 }
 
 /// Extract Flutter build info from the build directory.
 ///
 /// Parses flutter_bootstrap.js to find _flutter.buildConfig
-/// which contains engineRevision and builds array.
+/// which contains engineRevision, the builds array and, for builds made
+/// with `--no-web-resources-cdn`, useLocalCanvasKit.
 FlutterBuildInfo extractFlutterBuildInfo(io.Directory buildDir) {
   final bootstrapFile = io.File(p.join(buildDir.path, 'flutter_bootstrap.js'));
 
@@ -55,7 +65,11 @@ FlutterBuildInfo extractFlutterBuildInfo(io.Directory buildDir) {
         .where((b) => b.isNotEmpty)
         .toList();
 
-    return FlutterBuildInfo(engineRevision: engineRevision, builds: builds);
+    return FlutterBuildInfo(
+      engineRevision: engineRevision,
+      builds: builds,
+      useLocalCanvasKit: config['useLocalCanvasKit'] == true,
+    );
   } catch (e) {
     throw StateError('Failed to parse buildConfig JSON: $e');
   }

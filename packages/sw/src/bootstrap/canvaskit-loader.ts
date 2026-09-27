@@ -79,12 +79,27 @@ export function getCanvasKitVariant(
 
 /**
  * Load CanvasKit: try CDN first, fall back to local.
+ *
+ * With [useLocalCanvasKit] (the app was built with
+ * `--no-web-resources-cdn`) the local directory is used straight away. The
+ * CDN probe is a `no-store` request, so it would otherwise cost a network
+ * round trip on every load, and up to two 8 s timeouts where gstatic.com
+ * is blocked, only to load the engine from somewhere the app chose not to.
  */
 export async function loadCanvasKit(
   engineRevision: string,
   build: FlutterBuildEntry,
   caps: BrowserCaps,
+  useLocalCanvasKit = false,
 ): Promise<string> {
+  if (useLocalCanvasKit) {
+    logPhase(
+      'CanvasKit',
+      `Using local: ${CANVASKIT_LOCAL_PATH}/ (built with --no-web-resources-cdn)`,
+    );
+    return CANVASKIT_LOCAL_PATH;
+  }
+
   const variant = getCanvasKitVariant(build, caps);
 
   // Try CDN first
