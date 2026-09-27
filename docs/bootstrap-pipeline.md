@@ -25,7 +25,8 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
 ### Stage 3: CanvasKit Download (2% → 20%)
 - Determine renderer from `buildConfig.builds` array
 - Select appropriate CanvasKit variant based on browser capabilities
-- Try loading from Google CDN (`gstatic.com/flutter-canvaskit/{engineRevision}/`)
+- Built with `--no-web-resources-cdn` (`useLocalCanvasKit`): use the local `canvaskit/` directory, with no CDN probe
+- Otherwise try loading from Google CDN (`gstatic.com/flutter-canvaskit/{engineRevision}/`)
 - On CDN failure: fall back to local `canvaskit/` directory
 - Stream-compile WASM for better performance
 
@@ -181,6 +182,7 @@ Periodic progress updates as styled console messages.
 - Applied to: CanvasKit CDN loading, asset fetching
 
 ### CanvasKit Fallback
+- Skipped for `--no-web-resources-cdn` builds, which load locally without trying the CDN
 - Try CDN with timeout (10s)
 - On any failure: automatically try local `canvaskit/` directory
 - Log which source was used

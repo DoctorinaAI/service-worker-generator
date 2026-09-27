@@ -119,9 +119,11 @@ class FileCategorizer {
       return ResourceCategory.optional;
     }
 
-    // CanvasKit variant files are cached lazily — the bootstrap prefers
-    // CDN and only falls back to local files, so pre-caching wastes
-    // bandwidth on variants the browser will never request.
+    // CanvasKit variant files are cached lazily. The browser uses one
+    // variant, chosen at runtime, and loads even that from the CDN unless
+    // the build used --no-web-resources-cdn, so pre-caching them all
+    // wastes bandwidth on files it will never request. In a local build
+    // the variant it does use is cached on first load.
     if (_canvaskitFiles.contains(path)) return ResourceCategory.optional;
 
     // Auto-categorize by extension.

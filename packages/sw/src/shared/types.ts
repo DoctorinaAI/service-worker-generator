@@ -75,6 +75,13 @@ export interface BuildConfig {
   swFilename: string;
   /** Build variants from Flutter buildConfig */
   builds: FlutterBuildEntry[];
+  /**
+   * Flutter buildConfig's `useLocalCanvasKit`, set by
+   * `flutter build web --no-web-resources-cdn`: serve the engine from the
+   * local `canvaskit/` directory and never probe the CDN. Omitted (CDN
+   * first) otherwise.
+   */
+  useLocalCanvasKit?: boolean;
   /** UI defaults supplied by the Dart CLI; overridden by data-config */
   uiDefaults?: BootstrapConfig;
 }

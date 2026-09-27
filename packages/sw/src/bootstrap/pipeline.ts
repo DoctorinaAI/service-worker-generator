@@ -182,6 +182,7 @@ async function runPipelineWork(
       build.engineRevision,
       activeBuild,
       caps,
+      build.useLocalCanvasKit ?? false,
     );
 
     // Stage 4-5: Assets + Dart Entry

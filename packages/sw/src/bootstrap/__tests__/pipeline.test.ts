@@ -6,6 +6,7 @@ import { runPipeline } from '../pipeline';
 import type { ResolvedConfig } from '../config';
 import { BootstrapAPI } from '../api';
 import { listenForSWMessages } from '../sw-registration';
+import { loadCanvasKit } from '../canvaskit-loader';
 import type { SWProgressMessage } from '../../shared/types';
 
 // Mock all side-effecty modules so runPipeline runs synchronously-as-possible
@@ -175,6 +176,35 @@ describe('runPipeline', () => {
     const msg = errSpy.mock.calls[0][0];
     expect(String(msg)).toMatch(/No compatible Flutter build/);
     errorSpy.mockRestore();
+  });
+
+  it('tells the CanvasKit loader to stay local for --no-web-resources-cdn builds', async () => {
+    const load = vi.mocked(loadCanvasKit);
+    load.mockClear();
+    const cfg = resolved();
+    cfg.build.useLocalCanvasKit = true;
+    runPipeline(cfg);
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+    expect(load).toHaveBeenCalledWith(
+      'rev',
+      cfg.build.builds[0],
+      expect.anything(),
+      true,
+    );
+  });
+
+  it('lets the CanvasKit loader try the CDN when useLocalCanvasKit is absent', async () => {
+    const load = vi.mocked(loadCanvasKit);
+    load.mockClear();
+    const cfg = resolved();
+    runPipeline(cfg);
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+    expect(load).toHaveBeenCalledWith(
+      'rev',
+      cfg.build.builds[0],
+      expect.anything(),
+      false,
+    );
   });
 
   it('auto-disposes the API when flutter-first-frame is dispatched', async () => {

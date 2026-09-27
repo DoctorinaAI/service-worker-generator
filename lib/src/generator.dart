@@ -55,6 +55,11 @@ Future<void> generate(GeneratorConfig config) async {
   // 3. Determine canvaskit files needed
   final canvaskitFiles = _findCanvaskitFiles(buildDir, renderers);
   io.stdout.writeln('  CanvasKit files: ${canvaskitFiles.length}');
+  io.stdout.writeln(
+    buildInfo.useLocalCanvasKit
+        ? '  CanvasKit source: local (--no-web-resources-cdn)'
+        : '  CanvasKit source: CDN, falling back to local',
+  );
 
   // 4. Categorize and scan files
   io.stdout.writeln('\nScanning files...');
@@ -150,6 +155,7 @@ Future<void> generate(GeneratorConfig config) async {
     swFilename: config.swOutput,
     builds: buildInfo.builds,
     config: config,
+    useLocalCanvasKit: buildInfo.useLocalCanvasKit,
   );
 
   // Prepend Flutter's flutter.js so bootstrap.js is self-contained — no
