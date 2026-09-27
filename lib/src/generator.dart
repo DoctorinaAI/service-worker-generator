@@ -209,9 +209,14 @@ Set<String> _findCanvaskitFiles(io.Directory buildDir, Set<String> renderers) {
   for (final renderer in renderers) {
     switch (renderer) {
       case 'canvaskit':
+        // Every file getCanvasKitVariant can load, as a pair: Chromium-class
+        // browsers use chromium/canvaskit.js and .wasm. Pruning the .js went
+        // unnoticed while the engine came from the CDN, but a
+        // --no-web-resources-cdn build loads it from here.
         files.addAll([
           'canvaskit/canvaskit.js',
           'canvaskit/canvaskit.wasm',
+          'canvaskit/chromium/canvaskit.js',
           'canvaskit/chromium/canvaskit.wasm',
         ]);
       case 'skwasm':

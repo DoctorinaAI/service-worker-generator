@@ -121,6 +121,42 @@ void main() {
     await generate(config(noCleanup: true));
     expect(swVersion(), isNot(second));
   });
+
+  test(
+    'keeps both files of every CanvasKit variant the bootstrap loads',
+    () async {
+      writeBuild();
+      // Flutter's canvaskit renderer output, including the Chromium variant
+      // and a file no variant uses.
+      const kept = [
+        'canvaskit/canvaskit.js',
+        'canvaskit/canvaskit.wasm',
+        'canvaskit/chromium/canvaskit.js',
+        'canvaskit/chromium/canvaskit.wasm',
+      ];
+      for (final path in [...kept, 'canvaskit/unused.wasm']) {
+        io.File(p.join(dir.path, path))
+          ..createSync(recursive: true)
+          ..writeAsStringSync('// $path');
+      }
+
+      await generate(config());
+
+      // A --no-web-resources-cdn build loads the variant from canvaskit/, so
+      // pruning half of it breaks the app on the browsers that pick it.
+      for (final path in kept) {
+        expect(
+          io.File(p.join(dir.path, path)).existsSync(),
+          isTrue,
+          reason: path,
+        );
+      }
+      expect(
+        io.File(p.join(dir.path, 'canvaskit/unused.wasm')).existsSync(),
+        isFalse,
+      );
+    },
+  );
 }
 
 const String _flutterBootstrap = '''
