@@ -9,6 +9,7 @@ import {
 } from '../sw-registration';
 import {
   SW_BOOTSTRAP_TIMEOUT_MS,
+  SW_HANDOFF_TIMEOUT_MS,
   SW_REGISTRATION_TIMEOUT_MS,
 } from '../../shared/constants';
 
@@ -259,7 +260,7 @@ describe('registerServiceWorker', () => {
     expect(result).toBe(registration);
   });
 
-  it('falls back to waitForActivation if the waiting-worker handoff times out', async () => {
+  it('falls back to waitForActivation if the handoff times out on an uncontrolled page', async () => {
     vi.useFakeTimers();
     const waiting = makeWorker('installed', '/sw.js?v=new');
     const active = makeWorker('activated', '/sw.js?v=old');
@@ -270,11 +271,54 @@ describe('registerServiceWorker', () => {
     installSwContainer({ register });
 
     const promise = registerServiceWorker('sw.js', 'new');
-    // Advance past both the activate-at-bootstrap timeout AND the
-    // waitForActivation timeout (same duration, chained sequentially).
-    await vi.advanceTimersByTimeAsync(SW_REGISTRATION_TIMEOUT_MS * 2 + 1);
+    // No controller, so after the short handoff bound the pipeline still
+    // waits for activation, as on a first visit.
+    await vi.advanceTimersByTimeAsync(SW_HANDOFF_TIMEOUT_MS + 1);
+    let settled = false;
+    void promise.then(() => (settled = true));
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(SW_REGISTRATION_TIMEOUT_MS);
     const result = await promise;
     expect(result).toBe(registration);
+  });
+
+  it('boots with the current controller when the handoff does not land quickly', async () => {
+    vi.useFakeTimers();
+    // A lost handover: the old worker was restarted for a request this page
+    // made, and the browser holds the new one back while the page is open.
+    // Waiting longer cannot change that, so the bound is the whole cost.
+    const waiting = makeWorker('installed', '/sw.js?v=new');
+    const active = makeWorker('activated', '/sw.js?v=old');
+    const registration = makeRegistration(waiting, 'waiting');
+    registration.active = active;
+    (waiting as unknown as { postMessage: () => void }).postMessage = vi.fn();
+    const register = vi.fn(async () => registration);
+    installSwContainer({ register, controller: active });
+
+    const promise = registerServiceWorker('sw.js', 'new');
+    await vi.advanceTimersByTimeAsync(SW_HANDOFF_TIMEOUT_MS + 1);
+
+    await expect(promise).resolves.toBe(registration);
+  });
+
+  it('does not wait for a newly installing worker when the page already has a controller', async () => {
+    vi.useFakeTimers();
+    // The first load after a deploy: register() starts installing the new
+    // build while the previous one still controls this page, so the new
+    // worker cannot activate before the page closes.
+    const installing = makeWorker('installing', '/sw.js?v=new');
+    const registration = makeRegistration(installing, 'installing');
+    registration.active = makeWorker('activated', '/sw.js?v=old');
+    const register = vi.fn(async () => registration);
+    installSwContainer({ register, controller: registration.active });
+
+    const promise = registerServiceWorker('sw.js', 'new');
+    // No timer needs to run: only microtasks between register() and return.
+    await vi.advanceTimersByTimeAsync(0);
+
+    await expect(promise).resolves.toBe(registration);
   });
 
   it('dispatches sw-update-available when a new worker installs alongside an active controller', async () => {
@@ -294,7 +338,8 @@ describe('registerServiceWorker', () => {
     worker.state = 'installed';
     worker._listeners.forEach((cb) => cb());
 
-    // Now let the worker activate so waitForActivation resolves immediately.
+    // The page has a controller, so registration no longer waits for this
+    // worker; activating it here changes nothing the test depends on.
     worker.state = 'activated';
     worker._listeners.forEach((cb) => cb());
 

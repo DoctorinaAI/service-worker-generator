@@ -37,6 +37,15 @@ export const BODY_STALL_TIMEOUT_MS = 30_000;
 export const SW_REGISTRATION_TIMEOUT_MS = 4_000;
 
 /**
+ * How long bootstrap waits for a pre-existing waiting worker to take control
+ * after `skipWaiting`. A handover that works lands in a few milliseconds.
+ * One that loses the race described at `activateWaitingAtBootstrap` does not
+ * land while the page is open at all, so waiting longer only delays the same
+ * outcome: booting with the current controller.
+ */
+export const SW_HANDOFF_TIMEOUT_MS = 500;
+
+/**
  * Hard cap on the whole service-worker step of the bootstrap pipeline.
  *
  * The service worker is a caching accelerator, never a prerequisite for the

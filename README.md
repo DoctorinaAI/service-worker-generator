@@ -462,7 +462,12 @@ two files above — see [Server Configuration](#server-configuration).
 - **Body stall watchdog**: a pre-cached body idle for 30s is cancelled, so a dead
   stream cannot hang `install` — and with it every `register()` on the origin
 - **Fetch retry**: 3 attempts with exponential backoff (1s → 2s → 4s + jitter)
-- **SW activation timeout**: 4s, continues without SW on timeout
+- **SW activation timeout**: 4s on a first visit, continues without SW on timeout.
+  A page that already has a controller boots with it straight away; a newer
+  worker takes over when the page closes
+- **Waiting-worker handover**: 500ms for a worker left waiting by an earlier
+  load to take control at bootstrap, then the page boots with its current
+  controller
 - **SW step budget**: 10s for the whole registration step; the app boots uncached
   rather than waiting on a blocked service worker job queue
 - **Error recovery**: Always calls `self.clients.claim()` even on errors

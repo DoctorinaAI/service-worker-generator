@@ -1,3 +1,17 @@
+## Unreleased
+
+### Fixed
+
+- **Bootstrap**: the first load after a deploy always waited 4s. `register()` starts installing the new worker while the previous one still controls the page, and `waitForActivation` then waited for the new worker to become active, which cannot happen while the page is controlled (it needs `skipWaiting`), so the wait always ran to `SW_REGISTRATION_TIMEOUT_MS` before the page booted with the old controller anyway. A page that already has a controller now boots with it straight away when a newer worker is installing or waiting; the newer worker takes over when the page closes, and `sw-update-available` still announces it. First visits (no controller) wait for activation as before. (`packages/sw/src/bootstrap/sw-registration.ts`)
+- **Bootstrap**: the next load, with the new worker waiting, could stall for 8s. `activateWaitingAtBootstrap` posts `skipWaiting`, and activation stops the old worker; a request the page makes at that moment (the browser's favicon fetch, a logo, the web manifest) is still dispatched to the old worker, which restarts it, and Chromium then keeps the new worker waiting for as long as the page is open. Re-sending `skipWaiting` does not help. The bootstrap waited 4s for a `controllerchange` that could not come and then 4s more in `waitForActivation`, before booting with the old controller. The handover is now bounded by `SW_HANDOFF_TIMEOUT_MS` (500ms; a handover that works lands in milliseconds), and a controlled page then boots with its current controller at once. (`packages/sw/src/bootstrap/sw-registration.ts`, `packages/sw/src/shared/constants.ts`)
+
+In both cases the page ends up exactly where it did before, with its current controller and the new worker taking over on the next load; only the waiting is gone.
+
+### Tests
+
+- Vitest: a controlled page with an installing worker returns without waiting; a lost handover on a controlled page resolves after `SW_HANDOFF_TIMEOUT_MS`; an uncontrolled page still waits for activation after the handover bound. All three fail without the fix.
+- Measured against the example app with a local server and repeated deploys (Chromium 152): the first load after a deploy went from 4.3-5.0s every time to 0.31-0.34s, and a lost handover race from 8.3s to 0.84s.
+
 ## 0.2.0 — 2026-09-16
 
 ### Fixed
