@@ -1,5 +1,6 @@
 import {
   SW_BOOTSTRAP_TIMEOUT_MS,
+  SW_HANDOFF_TIMEOUT_MS,
   SW_REGISTRATION_TIMEOUT_MS,
 } from '../shared/constants';
 import { withTimeout } from '../shared/utils';
@@ -92,6 +93,21 @@ async function registerAndActivate(
       return registration;
     }
 
+    // A page that already has a controller boots with it. A newer worker
+    // installing or waiting beside it cannot activate while this page is
+    // open (the first load after a deploy installs one, and a lost handover
+    // leaves one waiting), so waiting for it would only delay that same
+    // outcome by the full timeout. It takes over when the page closes, and
+    // `sw-update-available` has already told the app it exists.
+    const pending = registration.installing ?? registration.waiting;
+    if (pending && navigator.serviceWorker.controller) {
+      logPhase(
+        'SW',
+        'Newer worker pending; continuing with the current one until reload',
+      );
+      return registration;
+    }
+
     const activated = await waitForActivation(registration);
     if (activated) {
       logPhase('SW', 'Activated');
@@ -169,8 +185,16 @@ export function listenForSWMessages(
  * yet and swapping controllers is non-disruptive. Post-bootstrap updates
  * continue to use the user-approval flow (`sw-update-available` →
  * `applyUpdate`) so running apps are never yanked out from under the
- * user. Bounded by a timeout — if the controller handoff doesn't land,
- * we fall back to the existing `waitForActivation` path rather than hang.
+ * user.
+ *
+ * The handover can lose a race it cannot see. Activation stops the old
+ * worker, and a request this page makes at that moment (the browser's
+ * favicon fetch, a logo, the web manifest) is dispatched to the old worker
+ * all the same, which restarts it. Chromium then keeps the new worker
+ * waiting for as long as this page stays open; sending `skipWaiting` again
+ * does not help. A handover that works lands in milliseconds, so it is
+ * bounded by `SW_HANDOFF_TIMEOUT_MS` and the page boots with its current
+ * controller if it has not landed by then.
  *
  * Returns true if the new worker took control.
  */
@@ -190,7 +214,7 @@ async function activateWaitingAtBootstrap(
     );
   });
   const timedOut = new Promise<'timeout'>((resolve) =>
-    setTimeout(() => resolve('timeout'), SW_REGISTRATION_TIMEOUT_MS),
+    setTimeout(() => resolve('timeout'), SW_HANDOFF_TIMEOUT_MS),
   );
 
   waiting.postMessage({ type: 'skipWaiting' });
