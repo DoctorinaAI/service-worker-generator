@@ -403,7 +403,7 @@ external JSObject get bootstrapProgress;
 | `Bootstrap.progress`                   | Current state: `{ phase, percent, message }`                                                                                                                |
 | `Bootstrap.subscribe(callback)`        | Subscribe to progress changes, returns unsubscribe function                                                                                                 |
 | `Bootstrap.onUpdateAvailable(handler)` | Runs when a newer Service Worker has installed and is waiting; notifications stay active for the whole page session, even after the loading widget is gone. |
-| `Bootstrap.applyUpdate(reload = true)` | Activates the waiting Service Worker and reloads the page into the updated build.                                                                           |
+| `Bootstrap.applyUpdate(reload = true)` | Activates the waiting Service Worker and reloads the page into the updated build. Resolves `false`, without reloading, if no worker is waiting or the handover has not landed within 10s. |
 
 Alternatively, the loading widget auto-disposes on the `flutter-first-frame` event.
 

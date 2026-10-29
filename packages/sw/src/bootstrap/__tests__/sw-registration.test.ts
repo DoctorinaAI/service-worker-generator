@@ -3,11 +3,13 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
+  activateWaitingSW,
   registerServiceWorker,
   listenForSWMessages,
   reloadIfForeignController,
 } from '../sw-registration';
 import {
+  RESET_TIMEOUT_MS,
   SW_BOOTSTRAP_TIMEOUT_MS,
   SW_REGISTRATION_TIMEOUT_MS,
 } from '../../shared/constants';
@@ -414,6 +416,29 @@ describe('reloadIfForeignController', () => {
     expect(sessionStorage.getItem('sw-foreign-controller-reload')).toBe('1');
   });
 
+  it('reloads anyway when unregister() never settles', async () => {
+    // A wedged job queue holds unregister() as well as register(). This
+    // runs before the pipeline's own deadline, so it needs one of its own.
+    vi.useFakeTimers();
+    const foreignReg = makeRegistration(
+      makeWorker('activated', 'https://example.com/flutter_service_worker.js'),
+      'active',
+    );
+    foreignReg.unregister = vi.fn(() => new Promise<boolean>(() => undefined));
+    installSwContainer({
+      controller: {
+        scriptURL: 'https://example.com/flutter_service_worker.js',
+      },
+      registrations: [foreignReg],
+    });
+
+    const promise = reloadIfForeignController('sw.js');
+    await vi.advanceTimersByTimeAsync(RESET_TIMEOUT_MS + 1);
+    await expect(promise).resolves.toBe(true);
+    expect(reloadSpy).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+
   it('does not reload a second time if the guard flag is set', async () => {
     sessionStorage.setItem('sw-foreign-controller-reload', '1');
     installSwContainer({
@@ -506,6 +531,54 @@ describe('reloadIfForeignController', () => {
         value: realStorage,
       });
     }
+  });
+});
+
+describe('activateWaitingSW', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    try {
+      delete (navigator as unknown as { serviceWorker?: unknown }).serviceWorker;
+    } catch {
+      // ignore
+    }
+  });
+
+  function waitingRegistration(): FakeRegistration {
+    const waiting = makeWorker('installed', '/sw.js?v=new');
+    (waiting as unknown as { postMessage: () => void }).postMessage = vi.fn();
+    return makeRegistration(waiting, 'waiting');
+  }
+
+  it('resolves true once the controller changes', async () => {
+    const container = installSwContainer({});
+    const promise = activateWaitingSW(
+      waitingRegistration() as unknown as ServiceWorkerRegistration,
+    );
+    const onChange = container.addEventListener.mock.calls.find(
+      (c) => c[0] === 'controllerchange',
+    )![1] as () => void;
+    onChange();
+    await expect(promise).resolves.toBe(true);
+  });
+
+  it('resolves false instead of hanging when the controller never changes', async () => {
+    // The waiting worker turned redundant: no controllerchange will come,
+    // and an update prompt awaiting applyUpdate() must not hang on it.
+    vi.useFakeTimers();
+    installSwContainer({});
+    const promise = activateWaitingSW(
+      waitingRegistration() as unknown as ServiceWorkerRegistration,
+    );
+    await vi.advanceTimersByTimeAsync(SW_BOOTSTRAP_TIMEOUT_MS + 1);
+    await expect(promise).resolves.toBe(false);
+  });
+
+  it('resolves false when there is no waiting worker', async () => {
+    installSwContainer({});
+    await expect(
+      activateWaitingSW(makeRegistration(null) as unknown as ServiceWorkerRegistration),
+    ).resolves.toBe(false);
   });
 });
 

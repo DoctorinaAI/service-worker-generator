@@ -10,6 +10,7 @@ import {
   fetchWithTimeout,
   fetchWithRetry,
   guardBodyStall,
+  isHtmlFallback,
   withTimeout,
 } from '../utils';
 import { installMockFetch, textResponse } from '../../__tests__/helpers';
@@ -55,6 +56,21 @@ describe('getResourceKey', () => {
   it('removes trailing slash', () => {
     expect(getResourceKey(`${origin}/path/`))
       .toBe('path');
+  });
+
+  it('decodes percent-escapes so keys match the file names on disk', () => {
+    expect(getResourceKey(`${origin}/assets/my%20photo.png`))
+      .toBe('assets/my photo.png');
+    expect(getResourceKey(`${origin}/assets/%D1%84%D0%BE%D1%82%D0%BE.png`))
+      .toBe('assets/фото.png');
+  });
+
+  it('keeps an escaped slash escaped, so decoding adds no path segment', () => {
+    expect(getResourceKey(`${origin}/a%2Fb.png`)).toBe('a%2Fb.png');
+  });
+
+  it('keeps a malformed escape as sent', () => {
+    expect(getResourceKey(`${origin}/bad%E0%A4%A.png`)).toBe('bad%E0%A4%A.png');
   });
 
   it('maps root to index.html', () => {
@@ -364,5 +380,26 @@ describe('guardBodyStall', () => {
     const guarded = guardBodyStall(response, 50);
     expect(guarded.status).toBe(200);
     expect(guarded.headers.get('content-type')).toBe('application/javascript');
+  });
+});
+
+describe('isHtmlFallback', () => {
+  const html = (type: string): Response =>
+    new Response('<!DOCTYPE html>', { headers: { 'Content-Type': type } });
+
+  it('flags an HTML page served for a script, wasm or image', () => {
+    expect(isHtmlFallback('main.dart.js', html('text/html; charset=utf-8'))).toBe(true);
+    expect(isHtmlFallback('main.dart.wasm', html('TEXT/HTML'))).toBe(true);
+    expect(isHtmlFallback('assets/logo.png', html('text/html'))).toBe(true);
+  });
+
+  it('accepts HTML for an HTML file', () => {
+    expect(isHtmlFallback('index.html', html('text/html'))).toBe(false);
+    expect(isHtmlFallback('legal/terms.htm', html('text/html'))).toBe(false);
+  });
+
+  it('accepts the right type, and a response with no type at all', () => {
+    expect(isHtmlFallback('main.dart.js', html('text/javascript'))).toBe(false);
+    expect(isHtmlFallback('main.dart.js', new Response(new Uint8Array([1])))).toBe(false);
   });
 });

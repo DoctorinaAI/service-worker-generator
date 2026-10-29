@@ -154,6 +154,32 @@ describe('handleFetch — routing', () => {
     expect(await response.text()).toBe('cached-core');
   });
 
+  it('serves a file whose name has a space from the cache', async () => {
+    // The manifest is keyed by the name on disk; the request URL carries
+    // it percent-encoded.
+    const spaced: ResourceManifest = {
+      ...manifest(),
+      'assets/my photo.png': {
+        name: 'assets/my photo.png',
+        size: 30,
+        hash: 'h-photo',
+        category: ResourceCategory.Required,
+      },
+    };
+    const cache = await mockCaches.open('app-v1');
+    await cache.put(new Request('assets/my photo.png'), textResponse('cached-photo'));
+    const event = makeEvent(`${ORIGIN}/assets/my%20photo.png`);
+    handleFetch(
+      event as unknown as FetchEvent,
+      spaced,
+      'app',
+      'v1',
+      createProgressReporter('v1', spaced),
+    );
+    expect(event.respondWith).toHaveBeenCalledOnce();
+    expect(await (await event._responded!).text()).toBe('cached-photo');
+  });
+
   it('routes index.html through networkFirst', async () => {
     installMockFetch(async () => textResponse('<html>fresh-index</html>'));
     await mockCaches.open('app-v1');

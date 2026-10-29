@@ -54,7 +54,11 @@ export function getScopePath(): string {
 export function getResourceKey(url: string, baseUrl?: string): string {
   try {
     const parsed = new URL(url, baseUrl ?? self.location.origin);
-    let path = parsed.pathname;
+    // `pathname` is percent-encoded, but the manifest is keyed by the file
+    // names on disk: `assets/my photo.png` arrives as `my%20photo.png` and
+    // would never match. `decodeURI` leaves escaped delimiters such as
+    // `%2F` alone, so a decoded key cannot gain a path segment.
+    let path = safeDecodeUri(parsed.pathname);
     // Remove trailing slash (but keep root "/")
     if (path.length > 1 && path.endsWith('/')) {
       path = path.slice(0, -1);
@@ -80,6 +84,28 @@ export function getResourceKey(url: string, baseUrl?: string): string {
   } catch {
     return url;
   }
+}
+
+function safeDecodeUri(path: string): string {
+  try {
+    return decodeURI(path);
+  } catch {
+    // A malformed escape (`%E0%A4%A`) is kept as sent.
+    return path;
+  }
+}
+
+/**
+ * Whether [response] is an HTML page answering a request for a file that
+ * is not one — the app shell a host with an SPA rewrite (Firebase,
+ * Netlify, `try_files … /index.html`) returns with status 200 for a path
+ * it does not have. Stored under a script's or an image's key, it is
+ * served cache-first until the next deploy, and the app cannot start.
+ */
+export function isHtmlFallback(key: string, response: Response): boolean {
+  if (/\.html?$/i.test(key)) return false;
+  const type = response.headers.get('Content-Type') ?? '';
+  return type.toLowerCase().includes('text/html');
 }
 
 /**

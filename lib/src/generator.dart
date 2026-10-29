@@ -169,9 +169,15 @@ Future<void> generate(GeneratorConfig config) async {
       'Re-run "flutter build web" to regenerate it.',
     );
   }
-  final bootstrapContent =
-      '${flutterJsFile.readAsStringSync()}\n'
-      '$injectedBootstrap';
+  // flutter.js keeps its `//# sourceMappingURL=flutter.js.map`, which would
+  // point DevTools at a map that is not deployed next to bootstrap.js. The
+  // `;` keeps the IIFE that follows from being parsed as a call on the
+  // loader's last expression, should a Flutter release drop its own.
+  final flutterJs = flutterJsFile.readAsStringSync().replaceAll(
+    RegExp(r'^//# sourceMappingURL=.*$', multiLine: true),
+    '',
+  );
+  final bootstrapContent = '${flutterJs.trimRight()};\n$injectedBootstrap';
 
   // 6. Write output files
   io.File(p.join(buildDir.path, config.swOutput)).writeAsStringSync(swContent);

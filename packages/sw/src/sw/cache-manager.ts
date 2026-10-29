@@ -11,6 +11,7 @@ import {
   fetchWithRetry,
   getResourceKey,
   guardBodyStall,
+  isHtmlFallback,
   mapWithConcurrency,
   replayableResponse,
 } from '../shared/utils';
@@ -68,6 +69,9 @@ export async function precacheResources(
       const response = await fetchWithRetry(request);
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
+      }
+      if (isHtmlFallback(path, response)) {
+        throw new Error('served as HTML (the host has no such file)');
       }
       // The shell is precached here and replayed for navigations later, so
       // a host that redirects `index.html?v=…` would otherwise leave us
@@ -128,6 +132,10 @@ export async function lazyCacheResponse(
   request: Request,
   response: Response,
 ): Promise<void> {
+  if (isHtmlFallback(getResourceKey(request.url), response)) {
+    console.warn(`[SW] Not caching ${request.url}: served as HTML`);
+    return;
+  }
   const cache = await caches.open(cacheName);
   await cache.put(request, response.clone());
 }

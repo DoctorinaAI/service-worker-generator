@@ -185,6 +185,17 @@ async function runPipelineWork(
       build.useLocalCanvasKit ?? false,
     );
 
+    // Auto-dispose on first frame. Registered before the app loads: the
+    // first frame can be dispatched before `loadFlutterApp` resolves, and
+    // a listener added after it would leave the widget up.
+    window.addEventListener(
+      'flutter-first-frame',
+      () => {
+        if (!api.disposed) api.dispose();
+      },
+      { once: true },
+    );
+
     // Stage 4-5: Assets + Dart Entry
     updateProgress('assets', STAGE_PROGRESS.canvaskit + 5, 'Loading application');
 
@@ -195,15 +206,6 @@ async function runPipelineWork(
       (percent, message) => {
         updateProgress('dart-entry', percent, message);
       },
-    );
-
-    // Auto-dispose on first frame.
-    window.addEventListener(
-      'flutter-first-frame',
-      () => {
-        if (!api.disposed) api.dispose();
-      },
-      { once: true },
     );
   } catch (error) {
     const message =

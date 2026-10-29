@@ -7,6 +7,7 @@ import type { ResolvedConfig } from '../config';
 import { BootstrapAPI } from '../api';
 import { listenForSWMessages } from '../sw-registration';
 import { loadCanvasKit } from '../canvaskit-loader';
+import { loadFlutterApp } from '../flutter-loader';
 import type { SWProgressMessage } from '../../shared/types';
 
 // Mock all side-effecty modules so runPipeline runs synchronously-as-possible
@@ -211,6 +212,17 @@ describe('runPipeline', () => {
     const api = runPipeline(resolved());
     for (let i = 0; i < 30; i++) await Promise.resolve();
     window.dispatchEvent(new Event('flutter-first-frame'));
+    expect(api.disposed).toBe(true);
+  });
+
+  it('disposes on a first frame dispatched before the app loader resolves', async () => {
+    // Flutter can render its first frame while `loadFlutterApp` is still
+    // awaiting the entrypoint; a listener added afterwards misses it.
+    vi.mocked(loadFlutterApp).mockImplementationOnce(async () => {
+      window.dispatchEvent(new Event('flutter-first-frame'));
+    });
+    const api = runPipeline(resolved());
+    for (let i = 0; i < 30; i++) await Promise.resolve();
     expect(api.disposed).toBe(true);
   });
 

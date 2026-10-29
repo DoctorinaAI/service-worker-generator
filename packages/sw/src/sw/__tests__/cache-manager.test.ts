@@ -262,6 +262,51 @@ describe('precacheResources', () => {
     ).rejects.toThrow(/HTTP 404/);
   });
 
+  it('fails a Core entry the host answered with its HTML shell', async () => {
+    // An SPA rewrite answers a file the deploy lacks with index.html and
+    // status 200. Cached, it would be served as the script until the next
+    // deploy.
+    installMockFetch(
+      async () =>
+        new Response('<!DOCTYPE html>', {
+          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+        }),
+    );
+    const manifest = buildManifest({
+      'main.dart.mjs': {
+        name: 'main.dart.mjs',
+        size: 10,
+        hash: 'x',
+        category: ResourceCategory.Core,
+      },
+    });
+
+    await expect(
+      precacheResources('temp-v1', manifest, [ResourceCategory.Core]),
+    ).rejects.toThrow(/served as HTML/);
+    expect(await mockCaches.peek('temp-v1')?.match('main.dart.mjs')).toBeUndefined();
+  });
+
+  it('still precaches the shell itself, which is HTML', async () => {
+    installMockFetch(
+      async () =>
+        new Response('<!DOCTYPE html>', {
+          headers: { 'Content-Type': 'text/html' },
+        }),
+    );
+    const manifest = buildManifest({
+      'index.html': {
+        name: 'index.html',
+        size: 15,
+        hash: 'x',
+        category: ResourceCategory.Required,
+      },
+    });
+
+    await precacheResources('temp-v1', manifest, [ResourceCategory.Required]);
+    expect(await mockCaches.peek('temp-v1')?.match('index.html')).toBeDefined();
+  });
+
   it('filters out entries outside requested categories', async () => {
     const fetchSpy = installMockFetch(async () => textResponse('ok'));
     const manifest = buildManifest({
@@ -304,6 +349,19 @@ describe('lazyCacheResponse', () => {
     const response = textResponse('payload');
     await lazyCacheResponse('content-v1', new Request('file.js'), response);
     expect(await response.text()).toBe('payload');
+  });
+});
+
+describe('lazyCacheResponse with an HTML fallback', () => {
+  it('does not cache an HTML page served for a non-HTML file', async () => {
+    const mockCaches = installMockCaches();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const response = new Response('<!DOCTYPE html>', {
+      headers: { 'Content-Type': 'text/html' },
+    });
+    await lazyCacheResponse('content-v1', new Request('assets/logo.png'), response);
+    expect(await mockCaches.peek('content-v1')?.match('assets/logo.png')).toBeUndefined();
+    vi.restoreAllMocks();
   });
 });
 

@@ -55,6 +55,20 @@ void main() {
     return jsonDecode(match!.group(1)!) as Map<String, dynamic>;
   }
 
+  test('embeds flutter.js without its dangling source-map comment', () async {
+    writeBuild();
+    // Flutter's loader ends in an IIFE and a map that cleanup deletes.
+    io.File(p.join(dir.path, 'flutter.js')).writeAsStringSync(
+      '(function(){window.loader=1})()\n//# sourceMappingURL=flutter.js.map\n',
+    );
+    await generate(config());
+    final bootstrap = io.File(
+      p.join(dir.path, 'bootstrap.js'),
+    ).readAsStringSync();
+    expect(bootstrap, startsWith('(function(){window.loader=1})();\n'));
+    expect(bootstrap, isNot(contains('sourceMappingURL=flutter.js.map')));
+  });
+
   test(
     'records the shell hash and size of the bytes actually shipped',
     () async {

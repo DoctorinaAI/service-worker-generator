@@ -1,4 +1,5 @@
 import {
+  RESET_TIMEOUT_MS,
   SW_BOOTSTRAP_TIMEOUT_MS,
   SW_REGISTRATION_TIMEOUT_MS,
 } from '../shared/constants';
@@ -211,7 +212,8 @@ async function activateWaitingAtBootstrap(
  * Sends `skipWaiting` to the registration's waiting worker, waits for the
  * browser to swap controllers, then resolves. Callers can then trigger a
  * page reload to pick up the new resources. Resolves to `false` when no
- * waiting worker is available or SW is unsupported.
+ * waiting worker is available, SW is unsupported, or the controller has
+ * not changed within `SW_BOOTSTRAP_TIMEOUT_MS`.
  */
 export async function activateWaitingSW(
   registration: ServiceWorkerRegistration,
@@ -219,15 +221,18 @@ export async function activateWaitingSW(
   const waiting = registration.waiting;
   if (!waiting) return false;
 
-  const controllerChanged = new Promise<void>((resolve) => {
-    navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), {
+  const controllerChanged = new Promise<boolean>((resolve) => {
+    navigator.serviceWorker.addEventListener('controllerchange', () => resolve(true), {
       once: true,
     });
   });
 
   waiting.postMessage({ type: 'skipWaiting' });
-  await controllerChanged;
-  return true;
+  // A worker that turns redundant instead of activating never fires
+  // `controllerchange`, and an update prompt awaiting this must not hang
+  // on it. After the bound the caller gets `false` and the page stays as
+  // it is.
+  return withTimeout(controllerChanged, SW_BOOTSTRAP_TIMEOUT_MS, false);
 }
 
 /**
@@ -329,14 +334,24 @@ export async function reloadIfForeignController(
   // would drop their push subscriptions and break functionality unrelated
   // to the caching layer we're trying to fix. The reload below is what
   // actually detaches the old controller from this page.
+  //
+  // Bounded like the loading widget's reset: this runs before the pipeline's
+  // own deadline, and `unregister()` waits on the same per-scope job queue
+  // that a stuck install wedges. The reload is unconditional.
   try {
-    const registrations = await navigator.serviceWorker.getRegistrations();
-    const doomed = registrations.find(
-      (reg) => reg.active?.scriptURL === controller.scriptURL,
+    await withTimeout(
+      (async () => {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        const doomed = registrations.find(
+          (reg) => reg.active?.scriptURL === controller.scriptURL,
+        );
+        if (doomed) {
+          await doomed.unregister();
+        }
+      })(),
+      RESET_TIMEOUT_MS,
+      undefined,
     );
-    if (doomed) {
-      await doomed.unregister();
-    }
   } catch {
     // Non-fatal — reload anyway.
   }

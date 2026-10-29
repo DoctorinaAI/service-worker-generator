@@ -51,6 +51,36 @@ void main() {
       expect(io.File(p.join(tempDir.path, 'flutter.js')).existsSync(), isFalse);
     });
 
+    test('keeps flutter_bootstrap.js while index.html still loads it', () {
+      // Without it the page would be blank: the index.html swap was skipped.
+      io.File(p.join(tempDir.path, 'index.html')).writeAsStringSync(
+        '<html><body><script src="flutter_bootstrap.js" async></script>'
+        ' </body></html>',
+      );
+      cleanup(buildDir: tempDir, swVersion: 'v1');
+      expect(
+        io.File(p.join(tempDir.path, 'flutter_bootstrap.js')).existsSync(),
+        isTrue,
+      );
+      expect(
+        io.File(p.join(tempDir.path, 'flutter_service_worker.js')).existsSync(),
+        isFalse,
+      );
+    });
+
+    test('removes flutter_bootstrap.js once index.html loads bootstrap.js', () {
+      io.File(p.join(tempDir.path, 'index.html')).writeAsStringSync(
+        '<html><body><!-- replaces flutter_bootstrap.js --> '
+        '<script src="bootstrap.js" data-sw-bootstrap defer></script> '
+        '</body></html>',
+      );
+      cleanup(buildDir: tempDir, swVersion: 'v1');
+      expect(
+        io.File(p.join(tempDir.path, 'flutter_bootstrap.js')).existsSync(),
+        isFalse,
+      );
+    });
+
     test('preserves version.json', () {
       cleanup(buildDir: tempDir, swVersion: 'v1');
 

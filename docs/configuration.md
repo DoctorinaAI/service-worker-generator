@@ -23,7 +23,7 @@ dart run sw:generate [options]
 | `--output` | `-o` | `sw.js` | Output service worker filename |
 | `--bootstrap-output` | — | `bootstrap.js` | Output bootstrap filename |
 | `--prefix` | `-p` | `app-cache` | Cache name prefix |
-| `--version` | `-v` | timestamp | Cache version string |
+| `--version` | `-v` | manifest content hash | Cache version string |
 
 ### File Filtering
 
@@ -48,7 +48,7 @@ Patterns are matched in a fixed order: **core → required → ignore →
 optional**, and the first match wins. A pattern that already matches a
 built-in higher-priority default therefore cannot demote a file:
 `--ignore="index.html"` is silently ineffective, because `index.html` is a
-built-in Required pattern. Use `--exclude` to keep a file out of the
+built-in Required pattern. Use `--no-glob` to keep a file out of the
 manifest entirely.
 
 ### Loading Widget
@@ -122,6 +122,9 @@ dart run sw:generate --config=config/sw-production.yaml
 | `SW_LOGO` | `--logo` |
 | `SW_TITLE` | `--title` |
 | `SW_COLOR` | `--color` |
+| `SW_KEEP_MAPS` | `--keep-maps` (`true`/`false`) |
+| `SW_NO_CLEANUP` | `--no-cleanup` (`true`/`false`) |
+| `SW_COMMENTS` | `--comments` (`true`/`false`) |
 
 ## Default Categorization Rules
 

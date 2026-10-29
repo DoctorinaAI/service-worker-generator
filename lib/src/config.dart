@@ -108,7 +108,8 @@ class GeneratorConfig {
         '\nEnvironment variables: SW_INPUT, SW_OUTPUT, SW_BOOTSTRAP_OUTPUT,\n'
         '  SW_PREFIX, SW_VERSION, SW_GLOB, SW_EXCLUDE_GLOB, SW_CORE,\n'
         '  SW_REQUIRED, SW_OPTIONAL, SW_IGNORE, SW_THEME, SW_LOGO,\n'
-        '  SW_TITLE, SW_COLOR, SW_MIN_PROGRESS, SW_MAX_PROGRESS',
+        '  SW_TITLE, SW_COLOR, SW_MIN_PROGRESS, SW_MAX_PROGRESS,\n'
+        '  SW_KEEP_MAPS, SW_NO_CLEANUP, SW_COMMENTS',
       );
       io.exit(0);
     }
@@ -151,6 +152,26 @@ class GeneratorConfig {
       return parsed;
     }
 
+    // Flags get the same precedence as options. `results[name]` alone would
+    // return the flag's default whenever it was not passed, so a
+    // `no-cleanup: true` in sw.yaml was silently ignored.
+    bool resolveFlag(String name, String envName) {
+      if (results.wasParsed(name)) return results[name] as bool;
+      final yamlValue = yamlConfig[name];
+      final raw = yamlValue is bool
+          ? yamlValue.toString()
+          : yamlValue?.toString() ?? io.Platform.environment[envName];
+      if (raw == null) return false;
+      switch (raw.trim().toLowerCase()) {
+        case 'true' || '1' || 'yes':
+          return true;
+        case 'false' || '0' || 'no' || '':
+          return false;
+      }
+      io.stderr.writeln('Error: $name="$raw" is not a valid boolean.');
+      io.exit(64);
+    }
+
     return GeneratorConfig(
       inputDir: resolve('input', 'SW_INPUT', 'build/web'),
       swOutput: resolve('output', 'SW_OUTPUT', 'sw.js'),
@@ -170,9 +191,9 @@ class GeneratorConfig {
       requiredGlobs: resolveGlobs('required', 'SW_REQUIRED', ''),
       optionalGlobs: resolveGlobs('optional', 'SW_OPTIONAL', ''),
       ignoreGlobs: resolveGlobs('ignore', 'SW_IGNORE', ''),
-      keepMaps: results['keep-maps'] as bool? ?? false,
-      noCleanup: results['no-cleanup'] as bool? ?? false,
-      comments: results['comments'] as bool? ?? false,
+      keepMaps: resolveFlag('keep-maps', 'SW_KEEP_MAPS'),
+      noCleanup: resolveFlag('no-cleanup', 'SW_NO_CLEANUP'),
+      comments: resolveFlag('comments', 'SW_COMMENTS'),
       theme: resolve('theme', 'SW_THEME', 'auto'),
       logo: resolve('logo', 'SW_LOGO', ''),
       title: resolve('title', 'SW_TITLE', ''),

@@ -33,8 +33,23 @@ void cleanup({
   Set<String> canvaskitKeep = const {},
   bool keepMaps = false,
 }) {
+  // A page still loading Flutter's bootstrap goes blank once it is deleted:
+  // the step that swaps in an index.html loading bootstrap.js was skipped.
+  // Keep the file so the deploy still boots, without the service worker,
+  // and say so loudly.
+  final keepFlutterBootstrap = _indexLoadsFlutterBootstrap(buildDir);
+  if (keepFlutterBootstrap) {
+    io.stderr.writeln(
+      'Warning: index.html still loads flutter_bootstrap.js, so it was kept '
+      'and this page will not use bootstrap.js or the service worker. '
+      'Load bootstrap.js instead: '
+      '<script src="bootstrap.js" data-sw-bootstrap defer></script>',
+    );
+  }
+
   // Remove Flutter files
   for (final filename in _flutterFilesToRemove) {
+    if (keepFlutterBootstrap && filename == 'flutter_bootstrap.js') continue;
     final file = io.File(p.join(buildDir.path, filename));
     if (file.existsSync()) {
       file.deleteSync();
@@ -56,6 +71,17 @@ void cleanup({
   // pipeline, where the generator already substituted and re-hashed the
   // entry; this call only covers callers that use [cleanup] on its own.
   applyIndexHtmlVersion(buildDir, swVersion);
+}
+
+/// Whether `index.html` in [buildDir] has a script tag loading Flutter's
+/// own `flutter_bootstrap.js`.
+bool _indexLoadsFlutterBootstrap(io.Directory buildDir) {
+  final index = io.File(p.join(buildDir.path, 'index.html'));
+  if (!index.existsSync()) return false;
+  return RegExp(
+    r'''<script\b[^>]*\bsrc\s*=\s*["']?[^"'\s>]*flutter_bootstrap\.js''',
+    caseSensitive: false,
+  ).hasMatch(index.readAsStringSync());
 }
 
 /// Recursively remove `.js.map`, `.js.symbols`, and `.wasm.map` files.

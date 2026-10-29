@@ -93,6 +93,48 @@ color: "#112233"
       }
     });
 
+    test('YAML sets boolean flags the CLI omits', () async {
+      final tempDir = await io.Directory.systemTemp.createTemp('sw-config-');
+      try {
+        final yaml = io.File(p.join(tempDir.path, 'sw.yaml'))
+          ..writeAsStringSync('''
+keep-maps: true
+no-cleanup: true
+comments: "yes"
+''');
+        final config = GeneratorConfig.parse(['--config=${yaml.path}']);
+        expect(config.keepMaps, isTrue);
+        expect(config.noCleanup, isTrue);
+        expect(config.comments, isTrue);
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    test('a CLI flag wins over YAML, in both directions', () async {
+      final tempDir = await io.Directory.systemTemp.createTemp('sw-config-');
+      try {
+        final yaml = io.File(p.join(tempDir.path, 'sw.yaml'))
+          ..writeAsStringSync('keep-maps: true\nno-cleanup: false\n');
+        final config = GeneratorConfig.parse([
+          '--config=${yaml.path}',
+          '--no-keep-maps',
+          '--no-cleanup',
+        ]);
+        expect(config.keepMaps, isFalse);
+        expect(config.noCleanup, isTrue);
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    test('boolean flags default to false', () {
+      final config = GeneratorConfig.parse(const []);
+      expect(config.keepMaps, isFalse);
+      expect(config.noCleanup, isFalse);
+      expect(config.comments, isFalse);
+    });
+
     test('CLI-supplied version is preserved verbatim', () {
       final config = GeneratorConfig.parse(const ['--version=2026.04.20']);
       expect(config.version, '2026.04.20');
