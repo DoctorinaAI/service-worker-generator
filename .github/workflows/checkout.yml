@@ -147,6 +147,10 @@ jobs:
         # what the Dart steps need, which leaves out .pubignore itself, and
         # the tests have created coverage/ and reports/ by now.
         run: |
+          # The job runs in a container as another user than the checkout's
+          # owner, and git refuses such a repository; pub reads .gitignore
+          # through git as well.
+          git config --global --add safe.directory "$PWD"
           git sparse-checkout disable
           if ! dart pub publish --dry-run > /tmp/publish-set.txt 2>&1; then
             cat /tmp/publish-set.txt
