@@ -9,6 +9,7 @@ import 'assets/sw_template.dart';
 import 'categorizer.dart';
 import 'cleanup.dart';
 import 'config.dart';
+import 'diagnostics.dart';
 import 'files.dart';
 import 'flutter_build.dart';
 import 'injector.dart';
@@ -36,6 +37,7 @@ Future<void> generate(GeneratorConfig config) async {
 
   // 2. Extract Flutter build info
   io.stdout.writeln('\nParsing Flutter build config...');
+  _rejectProcessedBuild(buildDir, config, 'flutter_bootstrap.js');
   final buildInfo = extractFlutterBuildInfo(buildDir);
   if (buildInfo.engineRevision.isEmpty) {
     throw StateError(
@@ -71,11 +73,13 @@ Future<void> generate(GeneratorConfig config) async {
     canvaskitFiles: canvaskitFiles,
   );
 
+  final ignored = <String, int>{};
   final manifest = await generateManifest(
     directory: buildDir,
     categorizer: categorizer,
     includeGlobs: config.includeGlobs,
     excludeGlobs: config.excludeGlobs,
+    onIgnored: (path, size) => ignored[path] = size,
   );
 
   // Derive a deterministic version from the manifest content when the
@@ -116,13 +120,36 @@ Future<void> generate(GeneratorConfig config) async {
         (categorySizes[entry.category] ?? 0) + entry.size;
   }
 
+  // Ignored files never reach the manifest, so they are counted from the
+  // scan itself.
+  categoryCounts[ResourceCategory.ignore] = ignored.length;
+  categorySizes[ResourceCategory.ignore] = ignored.values.fold(
+    0,
+    (sum, size) => sum + size,
+  );
+
   for (final cat in ResourceCategory.values) {
-    if (cat == ResourceCategory.ignore) continue;
     final count = categoryCounts[cat] ?? 0;
     final size = categorySizes[cat] ?? 0;
     if (count > 0) {
       io.stdout.writeln('  ${cat.name}: $count files (${_formatBytes(size)})');
     }
+  }
+
+  // Deferred-import parts are fetched when the app first loads a deferred
+  // library, often during startup, yet the defaults leave them out of the
+  // manifest: the worker neither pre-caches them nor counts them in the
+  // progress. Say so instead of leaving it to be found in production.
+  final ignoredParts =
+      ignored.keys.where((path) => path.endsWith('.part.js')).toList()..sort();
+  if (ignoredParts.isNotEmpty) {
+    io.stderr.writeln(
+      'Warning: ${ignoredParts.length} deferred-import part file(s) '
+      '(*.part.js) are in the ignore category, so the service worker does '
+      'not cache them. If the app loads them at startup, add them with '
+      '--optional="**.part.js" (lazy) or --required="**.part.js" '
+      '(pre-cached):\n${formatPathList(ignoredParts)}',
+    );
   }
 
   // 5. Inject configs into templates
@@ -164,6 +191,7 @@ Future<void> generate(GeneratorConfig config) async {
   // SPA rewrites (Firebase, etc.) otherwise serve index.html for a missing
   // flutter.js, breaking the loader with "Unexpected token '<'".
   final flutterJsFile = io.File(p.join(buildDir.path, 'flutter.js'));
+  _rejectProcessedBuild(buildDir, config, 'flutter.js');
   if (!flutterJsFile.existsSync()) {
     throw StateError(
       'flutter.js not found in ${buildDir.path}. '
@@ -181,13 +209,12 @@ Future<void> generate(GeneratorConfig config) async {
   );
   final bootstrapContent = '${flutterJs.trimRight()}\n;\n$injectedBootstrap';
 
-  // 6. Write output files
-  io.File(p.join(buildDir.path, config.swOutput)).writeAsStringSync(swContent);
+  // 6. Write output files. An output name such as `js/sw.js` names a
+  // directory that Flutter did not create.
+  _writeOutput(buildDir, config.swOutput, swContent);
   io.stdout.writeln('  ${config.swOutput} (${_formatBytes(swContent.length)})');
 
-  io.File(
-    p.join(buildDir.path, config.bootstrapOutput),
-  ).writeAsStringSync(bootstrapContent);
+  _writeOutput(buildDir, config.bootstrapOutput, bootstrapContent);
   io.stdout.writeln(
     '  ${config.bootstrapOutput} '
     '(${_formatBytes(bootstrapContent.length)})',
@@ -207,8 +234,57 @@ Future<void> generate(GeneratorConfig config) async {
   io.stdout.writeln('\nDone!');
 }
 
+/// Write [content] to [name] under [buildDir], creating the parent
+/// directories the name implies.
+void _writeOutput(io.Directory buildDir, String name, String content) {
+  final file = io.File(p.join(buildDir.path, name));
+  if (!file.parent.existsSync()) {
+    file.parent.createSync(recursive: true);
+    io.stdout.writeln('  Created directory ${file.parent.path}');
+  }
+  file.writeAsStringSync(content);
+}
+
+/// Throw when [flutterFile] is missing because an earlier run of the
+/// generator removed it, rather than because the Flutter build is broken.
+///
+/// Cleanup deletes Flutter's loader files, so a second run over the same
+/// directory (a CI retry, or after editing `sw.yaml`) cannot work: it would
+/// derive a version from a shell it already stamped. It must still fail,
+/// but with a message that names the actual cause.
+void _rejectProcessedBuild(
+  io.Directory buildDir,
+  GeneratorConfig config,
+  String flutterFile,
+) {
+  bool exists(String name) => io.File(p.join(buildDir.path, name)).existsSync();
+  if (exists(flutterFile)) return;
+  if (!exists(config.swOutput) || !exists(config.bootstrapOutput)) return;
+  throw StateError(
+    'This build was already processed: $flutterFile is missing from '
+    '${buildDir.path}, and ${config.swOutput} and ${config.bootstrapOutput} '
+    'exist. The generator removes Flutter\'s loader files, so it cannot '
+    'run twice over the same output. Run "flutter build web" again, then '
+    're-run the generator.',
+  );
+}
+
+/// Renderer names whose CanvasKit files [_findCanvaskitFiles] knows.
+const Set<String> _knownRenderers = {'canvaskit', 'skwasm'};
+
 /// Find canvaskit variant files needed based on configured renderers.
 Set<String> _findCanvaskitFiles(io.Directory buildDir, Set<String> renderers) {
+  // A renderer this generator does not know keeps no engine files: with
+  // another renderer configured, pruning deletes the files it would load.
+  for (final renderer in renderers.difference(_knownRenderers)) {
+    io.stderr.writeln(
+      'Warning: unknown renderer "$renderer" in the Flutter buildConfig '
+      '(known: ${_knownRenderers.join(", ")}). No canvaskit/ files are kept '
+      'for it, so pruning may remove engine files it needs; check the '
+      'output or pass --no-cleanup.',
+    );
+  }
+
   final canvaskitDir = io.Directory(p.join(buildDir.path, 'canvaskit'));
   if (!canvaskitDir.existsSync()) return const {};
 

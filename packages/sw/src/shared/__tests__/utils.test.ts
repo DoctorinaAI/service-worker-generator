@@ -10,8 +10,11 @@ import {
   cacheBustUrl,
   fetchWithTimeout,
   fetchWithRetry,
+  guardBody,
   guardBodyStall,
   isHtmlFallback,
+  isRetriableStatus,
+  retryAfterDelay,
   withTimeout,
 } from '../utils';
 import { installMockFetch, textResponse } from '../../__tests__/helpers';
@@ -375,10 +378,35 @@ describe('guardBodyStall', () => {
     expect(guardBodyStall(response, 0)).toBe(response);
   });
 
-  it('passes a redirected response through, so replayableResponse still sees the flag', () => {
-    const response = new Response('body');
+  it('guards a redirected body too, and drops the redirected flag', async () => {
+    // A host that redirects every path (S3, `www` normalisation) used to
+    // get its bodies passed through unguarded and then buffered whole.
+    const response = new Response('body', {
+      status: 200,
+      statusText: 'OK',
+      headers: { 'content-type': 'text/html' },
+    });
     Object.defineProperty(response, 'redirected', { value: true });
-    expect(guardBodyStall(response, 50)).toBe(response);
+    const guarded = guardBodyStall(response, 50);
+    expect(guarded).not.toBe(response);
+    expect(guarded.redirected).toBe(false);
+    expect(guarded.status).toBe(200);
+    expect(guarded.statusText).toBe('OK');
+    expect(guarded.headers.get('content-type')).toBe('text/html');
+    await expect(guarded.text()).resolves.toBe('body');
+  });
+
+  it('errors a redirected body that stalls', async () => {
+    const stalled = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('partial'));
+        },
+      }),
+      { status: 200 },
+    );
+    Object.defineProperty(stalled, 'redirected', { value: true });
+    await expect(guardBodyStall(stalled, 30).text()).rejects.toThrow(/stalled/);
   });
 
   it('delivers a complete body unchanged', async () => {
@@ -441,5 +469,236 @@ describe('isHtmlFallback', () => {
   it('accepts the right type, and a response with no type at all', () => {
     expect(isHtmlFallback('main.dart.js', html('text/javascript'))).toBe(false);
     expect(isHtmlFallback('main.dart.js', new Response(new Uint8Array([1])))).toBe(false);
+  });
+});
+
+describe('guardBody size check', () => {
+  const bytes = (n: number): Uint8Array<ArrayBuffer> => new Uint8Array(n).fill(7);
+
+  /** A body delivered in the given chunk sizes. */
+  function chunked(sizes: number[]): Response {
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const n of sizes) controller.enqueue(bytes(n));
+          controller.close();
+        },
+      }),
+      { status: 200 },
+    );
+  }
+
+  it('passes a body whose length matches', async () => {
+    const guarded = guardBody(chunked([3, 4, 5]), { expectedBytes: 12, label: 'a.js' });
+    expect((await guarded.arrayBuffer()).byteLength).toBe(12);
+  });
+
+  it('errors a truncated body, naming the key and both sizes', async () => {
+    const guarded = guardBody(chunked([3, 4]), { expectedBytes: 12, label: 'main.dart.wasm' });
+    await expect(guarded.arrayBuffer()).rejects.toThrow(
+      /main\.dart\.wasm.*expected 12 bytes.*received 7/,
+    );
+  });
+
+  it('errors an oversized body as soon as it passes the expected size', async () => {
+    const guarded = guardBody(chunked([10, 10]), { expectedBytes: 12, label: 'a.js' });
+    await expect(guarded.arrayBuffer()).rejects.toThrow(/expected 12 bytes.*received 20/);
+  });
+
+  it('accepts an empty body for a zero-size entry', async () => {
+    const guarded = guardBody(chunked([]), { expectedBytes: 0, label: 'empty.json' });
+    expect((await guarded.arrayBuffer()).byteLength).toBe(0);
+  });
+
+  it('accepts a null body for a zero-size entry', () => {
+    const response = new Response(null, { status: 200 });
+    expect(() => guardBody(response, { expectedBytes: 0, label: 'x' })).not.toThrow();
+  });
+
+  it('rejects a null body for a non-empty entry', () => {
+    const response = new Response(null, { status: 200 });
+    expect(() => guardBody(response, { expectedBytes: 5, label: 'x.js' })).toThrow(
+      /x\.js.*expected 5 bytes.*received 0/,
+    );
+  });
+
+  it('skips the check when the size is unknown', async () => {
+    for (const expectedBytes of [undefined, Number.NaN, -1, 1.5]) {
+      const guarded = guardBody(chunked([3]), { expectedBytes, label: 'x' });
+      expect((await guarded.arrayBuffer()).byteLength).toBe(3);
+    }
+  });
+
+  it('returns the response itself when there is nothing to guard', () => {
+    const response = new Response('body');
+    expect(guardBody(response, {})).toBe(response);
+  });
+
+  /** [chunked] with response headers. */
+  function withHeaders(sizes: number[], headers: Record<string, string>): Response {
+    const base = chunked(sizes);
+    return new Response(base.body, { status: 200, headers });
+  }
+
+  it('accepts a complete body of the length the host declares, with a warning', async () => {
+    // A host that re-encodes the file (image optimisation, an injected
+    // snippet) sends a different file, but sends all of it.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const guarded = guardBody(withHeaders([4, 4], { 'Content-Length': '8' }), {
+        expectedBytes: 12,
+        label: 'logo.png',
+      });
+      expect((await guarded.arrayBuffer()).byteLength).toBe(8);
+      expect(warn).toHaveBeenCalledOnce();
+      expect(String(warn.mock.calls[0]![0])).toMatch(
+        /logo\.png.*Content-Length 8.*build has 12/,
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('still errors a body cut short of the declared length', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const guarded = guardBody(withHeaders([4], { 'Content-Length': '8' }), {
+        expectedBytes: 12,
+        label: 'logo.png',
+      });
+      await expect(guarded.arrayBuffer()).rejects.toThrow(/received 4/);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('ignores Content-Length on a compressed transfer', async () => {
+    // The declared length is the compressed size; the body is decoded.
+    const guarded = guardBody(
+      withHeaders([4, 4], { 'Content-Length': '8', 'Content-Encoding': 'gzip' }),
+      { expectedBytes: 12, label: 'a.js' },
+    );
+    await expect(guarded.arrayBuffer()).rejects.toThrow(/expected 12 bytes.*received 8/);
+  });
+
+  it('ignores a zero or malformed Content-Length', async () => {
+    for (const value of ['0', 'abc', '-5', '8, 8']) {
+      const guarded = guardBody(withHeaders([4, 4], { 'Content-Length': value }), {
+        expectedBytes: 12,
+        label: 'a.js',
+      });
+      await expect(guarded.arrayBuffer()).rejects.toThrow(/expected 12 bytes/);
+    }
+  });
+});
+
+describe('fetchWithRetry with retryOnStatus', () => {
+  let delays: number[];
+
+  beforeEach(() => {
+    vi.spyOn(Math, 'random').mockReturnValue(0);
+    delays = [];
+    const origSetTimeout = globalThis.setTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      fn: () => void,
+      ms?: number,
+    ) => {
+      delays.push(ms ?? 0);
+      return origSetTimeout(fn, 0);
+    }) as unknown as typeof setTimeout);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const req = (): Request => new Request('http://example.com/main.dart.wasm');
+
+  it('retries a 503 and returns the later success', async () => {
+    let n = 0;
+    const spy = installMockFetch(async () => (++n < 3 ? textResponse('busy', 503) : textResponse('ok')));
+    const res = await fetchWithRetry(req(), 3, 1_000, { retryOnStatus: true });
+    expect(res.status).toBe(200);
+    expect(spy).toHaveBeenCalledTimes(3);
+  });
+
+  it('retries a 429', async () => {
+    let n = 0;
+    const spy = installMockFetch(async () => (++n < 2 ? textResponse('slow down', 429) : textResponse('ok')));
+    const res = await fetchWithRetry(req(), 3, 1_000, { retryOnStatus: true });
+    expect(res.status).toBe(200);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns the last 5xx once the attempts are exhausted', async () => {
+    const spy = installMockFetch(async () => textResponse('down', 502));
+    const res = await fetchWithRetry(req(), 3, 1_000, { retryOnStatus: true });
+    expect(res.status).toBe(502);
+    expect(spy).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry a 404', async () => {
+    const spy = installMockFetch(async () => textResponse('gone', 404));
+    const res = await fetchWithRetry(req(), 3, 1_000, { retryOnStatus: true });
+    expect(res.status).toBe(404);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('honours a numeric Retry-After, capped', async () => {
+    let n = 0;
+    installMockFetch(async () => {
+      n += 1;
+      if (n === 1) return new Response('', { status: 503, headers: { 'Retry-After': '2' } });
+      if (n === 2) return new Response('', { status: 503, headers: { 'Retry-After': '3600' } });
+      return textResponse('ok');
+    });
+    await fetchWithRetry(req(), 3, 7_777, { retryOnStatus: true });
+    // The timeout timer of each attempt is also recorded (7_777 here).
+    const waits = delays.filter((d) => d !== 7_777);
+    expect(waits).toEqual([2_000, 5_000]);
+  });
+
+  it('falls back to the backoff for a date or garbage Retry-After', async () => {
+    let n = 0;
+    installMockFetch(async () => {
+      n += 1;
+      if (n === 1) {
+        return new Response('', {
+          status: 503,
+          headers: { 'Retry-After': 'Wed, 21 Oct 2015 07:28:00 GMT' },
+        });
+      }
+      return textResponse('ok');
+    });
+    await fetchWithRetry(req(), 3, 7_777, { retryOnStatus: true });
+    expect(delays.filter((d) => d !== 7_777)).toEqual([1_000]);
+  });
+
+  it('keeps the old behaviour without the option', async () => {
+    const spy = installMockFetch(async () => textResponse('down', 503));
+    const res = await fetchWithRetry(req(), 3, 1_000);
+    expect(res.status).toBe(503);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('isRetriableStatus / retryAfterDelay', () => {
+  it('classifies statuses', () => {
+    for (const s of [500, 502, 503, 504, 599, 429]) expect(isRetriableStatus(s)).toBe(true);
+    for (const s of [200, 301, 400, 401, 403, 404, 410, 499, 600]) {
+      expect(isRetriableStatus(s)).toBe(false);
+    }
+  });
+
+  it('parses Retry-After seconds only', () => {
+    const r = (v: string): Response => new Response('', { status: 503, headers: { 'Retry-After': v } });
+    expect(retryAfterDelay(r('0'), 5_000)).toBe(0);
+    expect(retryAfterDelay(r(' 4 '), 5_000)).toBe(4_000);
+    expect(retryAfterDelay(r('10'), 5_000)).toBe(5_000);
+    expect(retryAfterDelay(r('-1'), 5_000)).toBeNull();
+    expect(retryAfterDelay(r('1.5'), 5_000)).toBeNull();
+    expect(retryAfterDelay(r('soon'), 5_000)).toBeNull();
+    expect(retryAfterDelay(new Response('', { status: 503 }), 5_000)).toBeNull();
   });
 });

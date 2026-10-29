@@ -117,9 +117,21 @@ void _pruneCanvaskit(io.Directory buildDir, Set<String> keep) {
 
   var removed = 0;
   final buildUrl = pathToUrl(buildDir.path);
-  for (final entity in canvaskitDir.listSync(recursive: true)) {
-    if (entity is! io.File) continue;
+  // Links are not followed: a symlinked directory under canvaskit/ would
+  // otherwise have its target's files deleted, outside the build.
+  for (final entity in canvaskitDir.listSync(
+    recursive: true,
+    followLinks: false,
+  )) {
     final relative = p.url.relative(pathToUrl(entity.path), from: buildUrl);
+    if (entity is io.Link) {
+      io.stderr.writeln(
+        'Warning: left symlink $relative in place; pruning does not follow '
+        'or remove links.',
+      );
+      continue;
+    }
+    if (entity is! io.File) continue;
     if (keep.contains(relative)) continue;
     entity.deleteSync();
     removed++;

@@ -172,6 +172,36 @@ void main() {
       expect(result, contains('"builds":[]'));
     });
 
+    test('carries the cache prefix so a reset can stay in this app', () {
+      const config = GeneratorConfig(
+        inputDir: 'build/web',
+        version: '1',
+        cachePrefix: 'shop-cache',
+      );
+      final result = injectBootstrapConfig(
+        template: 'c="__INJECT_BOOTSTRAP_CONFIG__"',
+        engineRevision: 'rev',
+        swVersion: '1',
+        swFilename: 'sw.js',
+        builds: const [],
+        config: config,
+      );
+      final json = jsonDecode(result.substring(2)) as Map<String, dynamic>;
+      expect(json['cachePrefix'], 'shop-cache');
+    });
+
+    test('carries the default cache prefix too', () {
+      final result = injectBootstrapConfig(
+        template: 'c="__INJECT_BOOTSTRAP_CONFIG__"',
+        engineRevision: 'rev',
+        swVersion: '1',
+        swFilename: 'sw.js',
+        builds: const [],
+        config: const GeneratorConfig(inputDir: 'build/web', version: '1'),
+      );
+      expect(result, contains('"cachePrefix":"app-cache"'));
+    });
+
     test('omits uiDefaults when nothing was customised', () {
       const template = 'c="__INJECT_BOOTSTRAP_CONFIG__"';
       const config = GeneratorConfig(inputDir: 'build/web', version: '1');

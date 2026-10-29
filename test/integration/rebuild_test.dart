@@ -158,8 +158,8 @@ void main() {
       isFalse,
     );
 
-    // Second build should fail because flutter_bootstrap.js
-    // is needed to extract build config
+    // Second build should fail: flutter_bootstrap.js is needed to extract
+    // the build config, and the error names the already-processed output.
     final config2 = GeneratorConfig(
       inputDir: tempDir.path,
       version: 'v2',
@@ -172,7 +172,10 @@ void main() {
         isA<StateError>().having(
           (e) => e.message,
           'message',
-          contains('flutter_bootstrap.js not found'),
+          allOf(
+            contains('already processed'),
+            contains('flutter_bootstrap.js is missing'),
+          ),
         ),
       ),
     );

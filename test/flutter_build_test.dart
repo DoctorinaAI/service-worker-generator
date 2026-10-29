@@ -79,6 +79,22 @@ _flutter.buildConfig = {"engineRevision":"rev123","builds":[{"compileTarget":"da
       );
     });
 
+    test('names the parsed file and the fix when buildConfig is missing', () {
+      final file = io.File(p.join(tempDir.path, 'flutter_bootstrap.js'))
+        ..writeAsStringSync('// empty file');
+
+      expect(
+        () => extractFlutterBuildInfo(tempDir),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains(file.path), contains('flutter build web')),
+          ),
+        ),
+      );
+    });
+
     test('throws on a buildConfig that is not valid JSON', () {
       io.File(
         p.join(tempDir.path, 'flutter_bootstrap.js'),

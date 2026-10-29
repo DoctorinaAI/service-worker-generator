@@ -1,6 +1,7 @@
 import {
   FETCH_TIMEOUT_MS,
   MAX_RETRY_ATTEMPTS,
+  RETRY_AFTER_MAX_MS,
   RETRY_BASE_DELAY_MS,
 } from './constants';
 
@@ -202,26 +203,142 @@ export async function withTimeout<T, F>(
 }
 
 /**
- * Wrap a response so its body is cut off once it stops producing bytes for
- * `idleMs`, instead of hanging forever on a stalled stream.
- *
- * Erroring the transform cancels the source stream, which tears down the
- * underlying network transfer — no `AbortController` plumbing needed. The
- * consumer (`cache.put`) sees a rejected promise and reports a normal
- * precache failure, so a stalled body fails one install attempt rather than
- * wedging the scope's job queue forever.
- *
- * The timer is armed per chunk, so a slow-but-alive transfer is never cut:
- * only silence longer than `idleMs` is.
- *
- * Redirected responses are passed through untouched — their `redirected`
- * flag cannot survive being rebuilt, and `replayableResponse` needs to see
- * it to keep the shell replayable for navigations. They are small shell
- * documents, not the multi-megabyte payloads this guard exists for.
+ * Thrown (or used to error a body stream) when a response body does not
+ * have the byte length the manifest recorded for it. The message names the
+ * key and both sizes, so the precache / lazy-cache log line is enough to
+ * tell a truncating proxy from a stale manifest.
  */
-export function guardBodyStall(response: Response, idleMs: number): Response {
-  if (idleMs <= 0 || !response.body || response.redirected) return response;
+export class BodySizeMismatchError extends Error {
+  constructor(
+    readonly label: string,
+    readonly expected: number,
+    readonly received: number,
+  ) {
+    super(
+      `Size mismatch for ${label}: expected ${expected} bytes, ` +
+        `received ${received}${received > expected ? '+' : ''}`,
+    );
+    this.name = 'BodySizeMismatchError';
+  }
+}
 
+/** Options for [guardBody]. */
+export interface BodyGuardOptions {
+  /** Cut the body off after this much silence; `<= 0` disables. */
+  idleMs?: number;
+  /**
+   * Exact byte length the body must have. Anything that is not a
+   * non-negative integer (missing, NaN, negative, fractional) disables the
+   * check, so a manifest entry without a usable size is stored as before.
+   */
+  expectedBytes?: number;
+  /** Name used in error messages, normally the manifest key. */
+  label?: string;
+  /**
+   * Called with the mismatch before the stream errors. The consumer cannot
+   * rely on seeing the error itself: `cache.put` may reject with a generic
+   * `TypeError` for a body that errored, losing the sizes and the type.
+   */
+  onMismatch?: (error: BodySizeMismatchError) => void;
+}
+
+function isByteCount(n: unknown): n is number {
+  return typeof n === 'number' && Number.isInteger(n) && n >= 0;
+}
+
+/**
+ * The body length an uncompressed response declares in `Content-Length`,
+ * or `undefined` when it declares none, a malformed one, zero, or the
+ * transfer is compressed (the header then counts the encoded bytes, while
+ * the body is read decoded).
+ *
+ * A host that re-encodes a file (image optimisation, an injected snippet)
+ * serves a different size than the build but declares it; a transfer that
+ * is cut short cannot reach the declared length. Zero is not trusted: an
+ * empty answer for a non-empty file is never what the build meant.
+ */
+export function declaredBodyLength(response: Response): number | undefined {
+  const encoding = response.headers.get('Content-Encoding')?.trim().toLowerCase();
+  if (encoding && encoding !== 'identity') return undefined;
+  const raw = response.headers.get('Content-Length')?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return undefined;
+  const length = Number(raw);
+  return Number.isSafeInteger(length) && length > 0 ? length : undefined;
+}
+
+/**
+ * Wrap a response so its body is cut off once it stops producing bytes for
+ * `idleMs`, and/or fails unless it has exactly `expectedBytes` bytes.
+ *
+ * Both checks run in one streaming transform: the body is never buffered,
+ * only counted, so a 30 MB `main.dart.wasm` costs no extra memory. A failed
+ * check errors the stream, which the consumer (`cache.put`) sees as a
+ * rejected promise — the Cache API stores nothing for a body that errored —
+ * and which cancels the source, tearing down the network transfer.
+ *
+ * The stall timer is armed per chunk, so a slow-but-alive transfer is never
+ * cut: only silence longer than `idleMs` is. A body longer than expected is
+ * failed as soon as it crosses the limit; a shorter one when it ends.
+ *
+ * Whenever the body is wrapped, the result is a rebuilt `Response` with the
+ * original status, statusText and headers. A rebuilt response carries no
+ * `redirected` flag, which is what lets a redirected shell be replayed for
+ * a navigation — so redirected responses are guarded like any other, not
+ * passed through and later buffered whole.
+ *
+ * When an uncompressed response declares a `Content-Length` other than
+ * `expectedBytes`, the body is checked against the declared length instead,
+ * with a warning: the host re-encoded the file but sends all of it, and a
+ * transfer cut short still fails (see [declaredBodyLength]).
+ *
+ * A null body is treated as zero bytes: with a non-zero `expectedBytes` this
+ * throws [BodySizeMismatchError] synchronously.
+ */
+export function guardBody(
+  response: Response,
+  options: BodyGuardOptions,
+): Response {
+  const idleMs = options.idleMs ?? 0;
+  const label = options.label || response.url || 'response';
+  let expected = isByteCount(options.expectedBytes)
+    ? options.expectedBytes
+    : undefined;
+  if (expected !== undefined && response.body) {
+    const declared = declaredBodyLength(response);
+    if (declared !== undefined && declared !== expected) {
+      console.warn(
+        `[SW] ${label}: the host declares Content-Length ${declared} where ` +
+          `the build has ${expected} bytes (re-encoded or rewritten by the ` +
+          `host?); checking the transfer against the declared length.`,
+      );
+      expected = declared;
+    }
+  }
+  if (idleMs <= 0 && expected === undefined) return response;
+  const mismatch = (received: number): BodySizeMismatchError => {
+    const error = new BodySizeMismatchError(label, expected!, received);
+    try {
+      options.onMismatch?.(error);
+    } catch {
+      // A diagnostics hook must not change what the guard does.
+    }
+    return error;
+  };
+
+  const init: ResponseInit = {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  };
+
+  if (!response.body) {
+    if (expected !== undefined && expected !== 0) {
+      throw mismatch(0);
+    }
+    return response.redirected ? new Response(null, init) : response;
+  }
+
+  let received = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const clear = (): void => {
     if (timer !== undefined) {
@@ -232,6 +349,7 @@ export function guardBodyStall(response: Response, idleMs: number): Response {
   const arm = (
     controller: TransformStreamDefaultController<Uint8Array>,
   ): void => {
+    if (idleMs <= 0) return;
     clear();
     timer = setTimeout(() => {
       try {
@@ -249,18 +367,32 @@ export function guardBodyStall(response: Response, idleMs: number): Response {
     new TransformStream<Uint8Array, Uint8Array>({
       start: arm,
       transform(chunk, controller) {
+        received += chunk.byteLength;
+        if (expected !== undefined && received > expected) {
+          clear();
+          throw mismatch(received);
+        }
         arm(controller);
         controller.enqueue(chunk);
       },
-      flush: clear,
+      flush() {
+        clear();
+        if (expected !== undefined && received !== expected) {
+          throw mismatch(received);
+        }
+      },
     }),
   );
 
-  return new Response(guarded, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
+  return new Response(guarded, init);
+}
+
+/**
+ * Wrap a response so its body is cut off once it stops producing bytes for
+ * `idleMs`, instead of hanging forever on a stalled stream. See [guardBody].
+ */
+export function guardBodyStall(response: Response, idleMs: number): Response {
+  return guardBody(response, { idleMs });
 }
 
 /**
@@ -295,25 +427,77 @@ export async function mapWithConcurrency<T, R>(
 }
 
 /**
+ * Whether an HTTP status is worth retrying: a server error (5xx) or rate
+ * limiting (429). Every other status, 4xx included, is a final answer.
+ */
+export function isRetriableStatus(status: number): boolean {
+  return (status >= 500 && status <= 599) || status === 429;
+}
+
+/**
+ * Delay a `Retry-After` header asks for, in ms, capped at `capMs`. Only the
+ * delta-seconds form is honoured; an HTTP-date, a missing or a malformed
+ * value yields `null` (use the regular backoff).
+ */
+export function retryAfterDelay(
+  response: Response,
+  capMs = RETRY_AFTER_MAX_MS,
+): number | null {
+  const raw = response.headers.get('Retry-After')?.trim();
+  if (!raw || !/^\d+$/.test(raw)) return null;
+  return Math.min(Number(raw) * 1000, capMs);
+}
+
+/** Options for [fetchWithRetry]. */
+export interface RetryOptions {
+  /**
+   * Also retry responses whose status [isRetriableStatus] accepts, waiting
+   * for a numeric `Retry-After` (capped) or the regular backoff. The last
+   * attempt's response is returned as is, so the caller still sees the
+   * status. Off by default: navigations keep their existing behaviour.
+   */
+  retryOnStatus?: boolean;
+}
+
+/**
  * Fetch with exponential backoff retry.
+ *
+ * Thrown errors (network failures, timeouts) are always retried. Responses
+ * are returned as they are unless `retryOnStatus` is set.
  */
 export async function fetchWithRetry(
   request: Request,
   maxAttempts = MAX_RETRY_ATTEMPTS,
   timeoutMs = FETCH_TIMEOUT_MS,
+  options: RetryOptions = {},
 ): Promise<Response> {
   let lastError: unknown;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const last = attempt >= maxAttempts - 1;
+    let delay: number;
     try {
-      return await fetchWithTimeout(request, timeoutMs);
+      const response = await fetchWithTimeout(request, timeoutMs);
+      if (last || !options.retryOnStatus || !isRetriableStatus(response.status)) {
+        return response;
+      }
+      delay = retryAfterDelay(response) ?? backoffDelay(attempt);
+      console.warn(
+        `[SW] HTTP ${response.status} for ${request.url}, retrying in ` +
+          `${Math.round(delay)}ms (attempt ${attempt + 2}/${maxAttempts})`,
+      );
+      // Release the connection; the body of an error page is not needed.
+      try {
+        response.body?.cancel().catch(() => undefined);
+      } catch {
+        // A locked or already-consumed body: nothing to release.
+      }
     } catch (error) {
       lastError = error;
-      if (attempt < maxAttempts - 1) {
-        const delay = backoffDelay(attempt);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
+      if (last) break;
+      delay = backoffDelay(attempt);
     }
+    await new Promise((resolve) => setTimeout(resolve, delay));
   }
 
   throw lastError;

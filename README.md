@@ -103,20 +103,27 @@ The same applies to `index.html` (the entry point that loads `bootstrap.js`) and
 | `index.html`    | `no-cache`                            | Allows 304 via `ETag`/`Last-Modified` — fast but always revalidated |
 | `bootstrap.js`  | `no-cache`                            | Content changes every build (embedded config snapshot)              |
 | `sw.js`         | `no-cache`                            | Browser also enforces ≤ 24h SW freshness, but explicit is better    |
-| Everything else | `public, max-age=31536000, immutable` | Safe: the SW manifest handles invalidation via MD5 hashes           |
+| Everything else | `no-cache`                            | Flutter's file names carry no content hash (see below)              |
 
 Use `no-cache`, not `no-store` — `no-cache` lets the browser keep the file on disk but forces a conditional request on every load, so unchanged builds cost only a 304 response.
+
+Do not mark the rest of the build `immutable` or give it a long `max-age`. `main.dart.js`, `main.dart.wasm`, `assets/AssetManifest.json` and `canvaskit/*` keep the same names across deploys. The service worker is not affected — it precaches with `?v={hash}` and `cache: 'reload'` — but whenever it does not answer a request (the first visit, a private window, a worker that failed to install, a browser without service workers), the browser's HTTP cache would hand back last year's copy next to this deploy's `bootstrap.js`. Revalidating costs a 304 per file; serving a mix of two builds costs a broken app.
+
+### MIME types and cross-origin isolation
+
+- `.wasm` must be served as `application/wasm`; with any other type `WebAssembly.instantiateStreaming` fails and the engine falls back to a slower path or does not start. `.mjs` and `.js` need a JavaScript type (`text/javascript`).
+- The multithreaded `skwasm` renderer needs a cross-origin isolated page: `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` (or `credentialless`) on `index.html`. Without them the engine runs single-threaded. With them, every cross-origin resource the page loads — the CanvasKit CDN included — must allow it (CORS or `Cross-Origin-Resource-Policy`); build with `--no-web-resources-cdn` if in doubt.
 
 ### Example server configurations
 
 **nginx**
 
 ```nginx
-location = /index.html   { add_header Cache-Control "no-cache"; }
-location = /bootstrap.js { add_header Cache-Control "no-cache"; }
-location = /sw.js        { add_header Cache-Control "no-cache"; }
+# nginx 1.21+ maps .wasm to application/wasm in its stock mime.types. On an
+# older one, add `application/wasm wasm;` to mime.types itself: a `types {}`
+# block inside `server` replaces the whole map instead of extending it.
 location / {
-  add_header Cache-Control "public, max-age=31536000, immutable";
+  add_header Cache-Control "no-cache";
   try_files $uri $uri/ /index.html;
 }
 ```
@@ -124,19 +131,14 @@ location / {
 **Apache (`.htaccess`)**
 
 ```apache
-<FilesMatch "^(index\.html|bootstrap\.js|sw\.js)$">
-  Header set Cache-Control "no-cache"
-</FilesMatch>
+AddType application/wasm .wasm
+Header set Cache-Control "no-cache"
 ```
 
 **Netlify (`_headers`)**
 
 ```
-/index.html
-  Cache-Control: no-cache
-/bootstrap.js
-  Cache-Control: no-cache
-/sw.js
+/*
   Cache-Control: no-cache
 ```
 
@@ -147,7 +149,7 @@ location / {
   "hosting": {
     "headers": [
       {
-        "source": "/(index.html|bootstrap.js|sw.js)",
+        "source": "**",
         "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
       }
     ]
@@ -161,7 +163,7 @@ location / {
 {
   "headers": [
     {
-      "source": "/(index.html|bootstrap.js|sw.js)",
+      "source": "/(.*)",
       "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
     }
   ]

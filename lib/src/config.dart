@@ -114,8 +114,16 @@ class GeneratorConfig {
       io.exit(0);
     }
 
-    // Try loading YAML config
-    final yamlConfig = _loadYamlConfig(results['config'] as String?);
+    // Try loading YAML config. Only the implicit sw.yaml may be absent
+    // silently; a path the caller named is expected to exist.
+    final yamlConfig = _loadYamlConfig(
+      results['config'] as String?,
+      explicit: results.wasParsed('config'),
+      knownKeys: {
+        for (final name in parser.options.keys)
+          if (name != 'help' && name != 'config') name,
+      },
+    );
 
     String resolve(String name, String envName, String defaultValue) {
       // `results[name]` returns the ArgParser default when the flag wasn't
@@ -172,6 +180,10 @@ class GeneratorConfig {
       io.exit(64);
     }
 
+    final minProgress = parseIntOrFail('min-progress', 'SW_MIN_PROGRESS', 0);
+    final maxProgress = parseIntOrFail('max-progress', 'SW_MAX_PROGRESS', 90);
+    _checkProgressRange(minProgress, maxProgress);
+
     return GeneratorConfig(
       inputDir: resolve('input', 'SW_INPUT', 'build/web'),
       swOutput: resolve('output', 'SW_OUTPUT', 'sw.js'),
@@ -194,12 +206,12 @@ class GeneratorConfig {
       keepMaps: resolveFlag('keep-maps', 'SW_KEEP_MAPS'),
       noCleanup: resolveFlag('no-cleanup', 'SW_NO_CLEANUP'),
       comments: resolveFlag('comments', 'SW_COMMENTS'),
-      theme: resolve('theme', 'SW_THEME', 'auto'),
+      theme: _normalizeTheme(resolve('theme', 'SW_THEME', 'auto')),
       logo: resolve('logo', 'SW_LOGO', ''),
       title: resolve('title', 'SW_TITLE', ''),
-      color: resolve('color', 'SW_COLOR', '#25D366'),
-      minProgress: parseIntOrFail('min-progress', 'SW_MIN_PROGRESS', 0),
-      maxProgress: parseIntOrFail('max-progress', 'SW_MAX_PROGRESS', 90),
+      color: _checkColor(resolve('color', 'SW_COLOR', '#25D366')),
+      minProgress: minProgress,
+      maxProgress: maxProgress,
     );
   }
 
@@ -264,16 +276,163 @@ class GeneratorConfig {
     ..addOption('min-progress', help: 'Minimum progress value')
     ..addOption('max-progress', help: 'Maximum progress value');
 
-  static Map<String, dynamic> _loadYamlConfig(String? path) {
+  static Map<String, dynamic> _loadYamlConfig(
+    String? path, {
+    required bool explicit,
+    required Set<String> knownKeys,
+  }) {
     final file = io.File(path ?? 'sw.yaml');
-    if (!file.existsSync()) return const {};
+    if (!file.existsSync()) {
+      if (explicit) {
+        io.stderr.writeln(
+          'Warning: config file not found: ${file.path}. '
+          'Continuing without it (CLI args, env and defaults only).',
+        );
+      }
+      return const {};
+    }
+    final Map<String, dynamic> config;
     try {
       final content = file.readAsStringSync();
       final doc = yaml.loadYaml(content);
-      if (doc is Map) return Map<String, dynamic>.from(doc);
+      // An empty file is a valid "no settings".
+      if (doc == null) return const {};
+      if (doc is! Map) {
+        io.stderr.writeln(
+          'Warning: config file ${file.path} is not a mapping of option '
+          'names to values (found ${doc.runtimeType}); it is ignored.',
+        );
+        return const {};
+      }
+      config = Map<String, dynamic>.from(doc);
     } on Object catch (e) {
       io.stderr.writeln('Warning: Failed to parse YAML config: $e');
+      return const {};
     }
-    return const {};
+    io.stdout.writeln('Using config file: ${file.path}');
+    for (final entry in config.entries) {
+      final key = entry.key;
+      if (!knownKeys.contains(key)) {
+        final suggestion = _suggestOption(key, knownKeys);
+        io.stderr.writeln(
+          'Warning: unknown key "$key" in ${file.path} is ignored'
+          '${suggestion == null ? '' : '; did you mean "$suggestion"?'}',
+        );
+      } else if (entry.value == null) {
+        // `color: #fff` is the usual cause: the # starts a comment.
+        final hint = key == 'color'
+            ? 'An unquoted # starts a YAML comment; quote the value: '
+                  'color: "#25D366".'
+            : 'Give it a value or remove the key.';
+        io.stderr.writeln(
+          'Warning: key "$key" has no value in ${file.path} and is ignored. '
+          '$hint',
+        );
+      }
+    }
+    return config;
   }
+}
+
+/// Loading widget themes the bootstrap understands.
+const Set<String> _themes = {'light', 'dark', 'auto'};
+
+/// Match [raw] against [_themes] ignoring case and surrounding whitespace.
+/// An unknown theme is passed through, as before, with a warning: the
+/// widget falls back to its light theme for it.
+String _normalizeTheme(String raw) {
+  final theme = raw.trim().toLowerCase();
+  if (_themes.contains(theme)) return theme;
+  if (theme.isEmpty) return raw;
+  io.stderr.writeln(
+    'Warning: theme "$raw" is not one of ${_themes.join(", ")}; '
+    'the loading widget will fall back to its default look.',
+  );
+  return raw;
+}
+
+/// Hex colours the loading widget's styles are written for.
+final RegExp _hexColor = RegExp(
+  r'^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$',
+);
+
+/// Warn when [raw] is not a hex colour; it is passed through unchanged
+/// apart from surrounding whitespace.
+String _checkColor(String raw) {
+  final color = raw.trim();
+  if (color.isNotEmpty && !_hexColor.hasMatch(color)) {
+    io.stderr.writeln(
+      'Warning: color "$raw" is not a #rgb, #rrggbb or #rrggbbaa hex '
+      'colour; the loading widget\'s glow and pulse styles may not render.',
+    );
+  }
+  return color;
+}
+
+/// Warn when the progress bounds are outside 0..100 or inverted. They are
+/// passed through unchanged; the loading widget corrects them at runtime.
+void _checkProgressRange(int min, int max) {
+  for (final (name, value) in [('min-progress', min), ('max-progress', max)]) {
+    if (value < 0 || value > 100) {
+      io.stderr.writeln(
+        'Warning: $name ($value) is outside 0..100; '
+        'the loading widget will correct it at runtime.',
+      );
+    }
+  }
+  if (min > max) {
+    io.stderr.writeln(
+      'Warning: min-progress ($min) is greater than max-progress ($max); '
+      'the loading widget will correct the range at runtime.',
+    );
+  }
+}
+
+/// The option [key] most likely meant, or `null` when none is close.
+String? _suggestOption(String key, Set<String> options) {
+  // camelCase and snake_case spellings of a kebab-case option.
+  final normalized = key
+      .trim()
+      .replaceAllMapped(RegExp('([a-z0-9])([A-Z])'), (m) => '${m[1]}-${m[2]}')
+      .replaceAll('_', '-')
+      .toLowerCase();
+  if (options.contains(normalized)) return normalized;
+
+  String? best;
+  var bestDistance = 3;
+  for (final option in options) {
+    final distance = _editDistance(normalized, option);
+    if (distance < bestDistance) {
+      best = option;
+      bestDistance = distance;
+    }
+  }
+  if (best != null) return best;
+
+  // A qualified spelling such as `cache-prefix` or `sw-output`.
+  for (final option
+      in options.toList()..sort((a, b) => b.length.compareTo(a.length))) {
+    if (normalized.endsWith('-$option') || normalized.startsWith('$option-')) {
+      return option;
+    }
+  }
+  return null;
+}
+
+/// Levenshtein distance between [a] and [b].
+int _editDistance(String a, String b) {
+  var previous = List<int>.generate(b.length + 1, (i) => i);
+  for (var i = 1; i <= a.length; i++) {
+    final current = List<int>.filled(b.length + 1, 0)..[0] = i;
+    for (var j = 1; j <= b.length; j++) {
+      final cost = a[i - 1] == b[j - 1] ? 0 : 1;
+      current[j] = [
+        previous[j] + 1,
+        current[j - 1] + 1,
+        previous[j - 1] + cost,
+      ].reduce((x, y) => x < y ? x : y);
+    }
+    previous = current;
+  }
+  return previous[b.length];
 }

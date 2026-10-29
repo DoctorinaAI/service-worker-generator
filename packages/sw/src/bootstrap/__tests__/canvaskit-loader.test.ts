@@ -7,6 +7,8 @@ import {
   selectBuild,
   getCanvasKitVariant,
   loadCanvasKit,
+  CANVASKIT_LOCAL_KEY,
+  reloadWithLocalCanvasKit,
 } from '../canvaskit-loader';
 import type { FlutterBuildEntry } from '../../shared/types';
 import {
@@ -221,6 +223,7 @@ describe('loadCanvasKit', () => {
   let logSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
+    window.sessionStorage.clear();
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
   });
 
@@ -303,5 +306,157 @@ describe('loadCanvasKit', () => {
     );
     const url = (spy.mock.calls[0][0] as Request).url;
     expect(url).toContain('skwasm.js');
+  });
+});
+
+/**
+ * Make every sessionStorage access throw, as strict privacy modes do.
+ * Restored by `restoreSessionStorage()`.
+ */
+let savedStorageDescriptor: PropertyDescriptor | undefined;
+function blockSessionStorage(): void {
+  savedStorageDescriptor ??=
+    Object.getOwnPropertyDescriptor(window, 'sessionStorage');
+  Object.defineProperty(window, 'sessionStorage', {
+    configurable: true,
+    get() {
+      throw new DOMException('blocked', 'SecurityError');
+    },
+  });
+}
+function restoreSessionStorage(): void {
+  if (!savedStorageDescriptor) return;
+  Object.defineProperty(window, 'sessionStorage', savedStorageDescriptor);
+  savedStorageDescriptor = undefined;
+}
+
+function collapseBackoff(): void {
+  const origSetTimeout = globalThis.setTimeout;
+  vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+    fn: () => void,
+  ) => origSetTimeout(fn, 0)) as unknown as typeof setTimeout);
+}
+
+describe('loadCanvasKit — session memory of a failed CDN', () => {
+  let logSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    restoreSessionStorage();
+    logSpy.mockRestore();
+    vi.restoreAllMocks();
+    window.sessionStorage.clear();
+  });
+
+  it('goes local without probing when the session flag is set', async () => {
+    window.sessionStorage.setItem(CANVASKIT_LOCAL_KEY, '1');
+    const spy = installMockFetch(async () => textResponse('ok'));
+    const result = await loadCanvasKit(
+      'engine-rev',
+      { renderer: 'canvaskit' },
+      caps(),
+    );
+    expect(result).toBe(CANVASKIT_LOCAL_PATH);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('remembers a probe that threw for the rest of the session', async () => {
+    collapseBackoff();
+    installMockFetch(async () => {
+      throw new Error('blocked');
+    });
+    await loadCanvasKit('engine-rev', { renderer: 'canvaskit' }, caps());
+    expect(window.sessionStorage.getItem(CANVASKIT_LOCAL_KEY)).not.toBeNull();
+  });
+
+  it('remembers a probe that answered non-ok for the rest of the session', async () => {
+    installMockFetch(async () => textResponse('nope', 403));
+    await loadCanvasKit('engine-rev', { renderer: 'canvaskit' }, caps());
+    expect(window.sessionStorage.getItem(CANVASKIT_LOCAL_KEY)).not.toBeNull();
+  });
+
+  it('does not set the flag when the probe succeeds', async () => {
+    installMockFetch(async () => textResponse('ok'));
+    await loadCanvasKit('engine-rev', { renderer: 'canvaskit' }, caps());
+    expect(window.sessionStorage.getItem(CANVASKIT_LOCAL_KEY)).toBeNull();
+  });
+
+  it('still probes and falls back when sessionStorage is blocked', async () => {
+    blockSessionStorage();
+    const spy = installMockFetch(async () => textResponse('down', 500));
+    const result = await loadCanvasKit(
+      'engine-rev',
+      { renderer: 'canvaskit' },
+      caps(),
+    );
+    expect(spy).toHaveBeenCalled();
+    expect(result).toBe(CANVASKIT_LOCAL_PATH);
+  });
+
+  it('still uses the CDN when sessionStorage is blocked and the probe passes', async () => {
+    blockSessionStorage();
+    installMockFetch(async () => textResponse('ok'));
+    const result = await loadCanvasKit(
+      'engine-rev',
+      { renderer: 'canvaskit' },
+      caps(),
+    );
+    expect(result).toBe(`${CANVASKIT_CDN_BASE}/engine-rev`);
+  });
+});
+
+describe('reloadWithLocalCanvasKit', () => {
+  let originalLocation: Location;
+  let reloadSpy: ReturnType<typeof vi.fn>;
+  let logSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    window.sessionStorage.clear();
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    originalLocation = window.location;
+    reloadSpy = vi.fn();
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...originalLocation, reload: reloadSpy },
+    });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: originalLocation,
+    });
+    restoreSessionStorage();
+    logSpy.mockRestore();
+    vi.restoreAllMocks();
+    window.sessionStorage.clear();
+  });
+
+  it('sets the flag and reloads once', () => {
+    expect(reloadWithLocalCanvasKit('engine failed')).toBe(true);
+    expect(window.sessionStorage.getItem(CANVASKIT_LOCAL_KEY)).not.toBeNull();
+    expect(reloadSpy).toHaveBeenCalledOnce();
+  });
+
+  it('does not reload again when the flag is already set', () => {
+    window.sessionStorage.setItem(CANVASKIT_LOCAL_KEY, '1');
+    expect(reloadWithLocalCanvasKit('engine failed')).toBe(false);
+    expect(reloadSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not reload when sessionStorage is unavailable', () => {
+    blockSessionStorage();
+    expect(reloadWithLocalCanvasKit('engine failed')).toBe(false);
+    expect(reloadSpy).not.toHaveBeenCalled();
+  });
+
+  it('logs the decision and the reason', () => {
+    reloadWithLocalCanvasKit('wasm 403');
+    const lines = logSpy.mock.calls.map((c: unknown[]) => String(c[0]));
+    expect(lines.some((l: string) => l.includes('wasm 403'))).toBe(true);
   });
 });

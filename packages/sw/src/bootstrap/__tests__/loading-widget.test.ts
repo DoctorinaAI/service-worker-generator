@@ -112,7 +112,7 @@ describe('LoadingWidget mount/dispose', () => {
     expect(() => w.dispose()).not.toThrow();
   });
 
-  it('dispose flips flutter-view pointerEvents to auto', () => {
+  it('dispose restores flutter-view pointerEvents to the stylesheet value', () => {
     const view = document.createElement('flutter-view');
     view.style.pointerEvents = 'none';
     document.body.appendChild(view);
@@ -120,7 +120,8 @@ describe('LoadingWidget mount/dispose', () => {
     const w = new LoadingWidget(uiConfig());
     w.mount();
     w.dispose();
-    expect((view as HTMLElement).style.pointerEvents).toBe('auto');
+    // '' rather than 'auto': the app's own CSS decides again.
+    expect((view as HTMLElement).style.pointerEvents).toBe('');
   });
 });
 
@@ -444,6 +445,51 @@ describe('LoadingWidget reset action', () => {
     expect(empty.unregister).not.toHaveBeenCalled();
   });
 
+  it('deletes only caches under this build\'s prefix when one is known', async () => {
+    const { deleted } = installCaches([
+      'my-app-v1',
+      'my-app-temp-v2',
+      'my-app-manifest',
+      'my-app2-v1',
+      'workbox-precache-v2',
+      'firebase-cache',
+      'my-app',
+    ]);
+    installRegistrations([]);
+    const w = new LoadingWidget(uiConfig(), 'sw.js', 'my-app');
+    w.mount();
+
+    clickReset();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(deleted).toEqual(['my-app-v1', 'my-app-temp-v2', 'my-app-manifest']);
+    expect(reloadSpy).toHaveBeenCalledOnce();
+  });
+
+  it('deletes every cache when no prefix is known (older generated bootstrap)', async () => {
+    const { deleted } = installCaches(['my-app-v1', 'workbox-precache-v2']);
+    installRegistrations([]);
+    const w = new LoadingWidget(uiConfig(), 'sw.js', undefined);
+    w.mount();
+
+    clickReset();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(deleted).toEqual(['my-app-v1', 'workbox-precache-v2']);
+  });
+
+  it('treats an empty or non-string prefix as unknown', async () => {
+    const { deleted } = installCaches(['a-v1', 'b']);
+    installRegistrations([]);
+    const w = new LoadingWidget(uiConfig(), 'sw.js', '' as string);
+    w.mount();
+
+    clickReset();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(deleted).toEqual(['a-v1', 'b']);
+  });
+
   it('spares a registration whose script URL it cannot parse, and still reloads', async () => {
     installCaches([]);
     const odd = settledRegistration('not a url');
@@ -456,5 +502,167 @@ describe('LoadingWidget reset action', () => {
 
     expect(odd.unregister).not.toHaveBeenCalled();
     expect(reloadSpy).toHaveBeenCalledOnce();
+  });
+});
+
+describe('LoadingWidget resilience under strict pages', () => {
+  afterEach(cleanup);
+
+  it('builds the reload icon without innerHTML (Trusted Types)', () => {
+    const setter = vi.fn();
+    const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML')!;
+    Object.defineProperty(Element.prototype, 'innerHTML', {
+      configurable: true,
+      get: desc.get,
+      set(this: Element, v: string) {
+        setter(v);
+        throw new TypeError('This document requires TrustedHTML assignment');
+      },
+    });
+    try {
+      const w = new LoadingWidget(uiConfig());
+      expect(() => w.mount()).not.toThrow();
+    } finally {
+      Object.defineProperty(Element.prototype, 'innerHTML', desc);
+    }
+    expect(setter).not.toHaveBeenCalled();
+    const svg = document.querySelector('.sw-reload-overlay svg');
+    expect(svg).not.toBeNull();
+    expect(svg!.namespaceURI).toBe('http://www.w3.org/2000/svg');
+    expect(svg!.getAttribute('aria-hidden')).toBe('true');
+    expect(svg!.querySelectorAll('path')).toHaveLength(4);
+  });
+
+  it('copies the bootstrap script nonce to the injected style', () => {
+    const script = document.createElement('script');
+    script.setAttribute('data-sw-bootstrap', '');
+    script.setAttribute('nonce', 'abc123');
+    document.head.appendChild(script);
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const style = document.head.querySelector('style')!;
+    expect(style.getAttribute('nonce') ?? (style as HTMLStyleElement & { nonce?: string }).nonce).toBe(
+      'abc123',
+    );
+  });
+
+  it('reads the nonce from the property when the attribute is hidden', () => {
+    // Browsers blank the nonce attribute after load; the IDL property keeps it.
+    const script = document.createElement('script');
+    script.setAttribute('data-sw-bootstrap', '');
+    Object.defineProperty(script, 'nonce', { value: 'hidden-n', configurable: true });
+    document.head.appendChild(script);
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const style = document.head.querySelector('style')!;
+    expect(style.getAttribute('nonce')).toBe('hidden-n');
+  });
+
+  it('adds no nonce when the script has none', () => {
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    expect(document.head.querySelector('style')!.hasAttribute('nonce')).toBe(false);
+  });
+
+  it('removes what it added when the mount fails part-way', () => {
+    const w = new LoadingWidget(uiConfig());
+    vi.spyOn(document.body, 'appendChild').mockImplementation(() => {
+      throw new Error('boom');
+    });
+    expect(() => w.mount()).toThrow('boom');
+    expect(document.head.querySelector('style')).toBeNull();
+    // Later calls stay harmless.
+    expect(() => w.updateProgress(10, 'x')).not.toThrow();
+    expect(() => w.showError('e')).not.toThrow();
+    expect(() => w.dispose()).not.toThrow();
+  });
+});
+
+describe('LoadingWidget accessibility', () => {
+  afterEach(cleanup);
+
+  it('exposes the ring as a progressbar with a 0..100 range', () => {
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const bar = document.querySelector('[role="progressbar"]');
+    expect(bar).not.toBeNull();
+    expect(bar!.getAttribute('aria-valuemin')).toBe('0');
+    expect(bar!.getAttribute('aria-valuemax')).toBe('100');
+    expect(bar!.getAttribute('aria-valuenow')).toBe('0');
+    w.updateProgress(42.6, 'x');
+    expect(bar!.getAttribute('aria-valuenow')).toBe('43');
+  });
+
+  it('announces status politely, and assertively on error', () => {
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const status = document.querySelector('.sw-status')!;
+    expect(status.getAttribute('aria-live')).toBe('polite');
+    w.showError('failed');
+    expect(status.getAttribute('role')).toBe('alert');
+    expect(status.getAttribute('aria-live')).toBe('assertive');
+  });
+
+  it('leaves the live status alone when the message has not changed', () => {
+    // Rewriting the same text is a DOM change a screen reader may announce
+    // again; progress updates repeat the message many times per stage.
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const status = document.querySelector('.sw-status')!;
+    w.updateProgress(10, 'Loading application');
+    const node = status.firstElementChild!.firstChild;
+    w.updateProgress(20, 'Loading application');
+    expect(status.firstElementChild!.firstChild).toBe(node);
+    w.updateProgress(30, 'Starting application');
+    expect(status.firstElementChild!.textContent).toBe('Starting application');
+  });
+
+  it('turns off the fade-in, dots and ring transition under reduced motion', () => {
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const css = document.head.querySelector('style')!.textContent!;
+    const block = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'));
+    expect(block).toMatch(/#sw-loading\s*\{[^}]*animation:\s*none/);
+    expect(block).toMatch(/\.sw-loading-dots::after\s*\{[^}]*animation:\s*none/);
+    expect(block).toMatch(/\.sw-progress-ring-fill\s*\{[^}]*transition:\s*none/);
+  });
+
+  it('lets long status text wrap on narrow screens', () => {
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const css = document.head.querySelector('style')!.textContent!;
+    const rule = css.slice(css.indexOf('.sw-status {'));
+    const body = rule.slice(0, rule.indexOf('}'));
+    expect(body).toMatch(/max-width:/);
+    expect(body).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+});
+
+describe('LoadingWidget dispose teardown', () => {
+  afterEach(cleanup);
+
+  it('ignores transitionend bubbling from child transitions', () => {
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    w.dispose();
+    const ring = document.querySelector('.sw-progress-ring-fill')!;
+    ring.dispatchEvent(new Event('transitionend', { bubbles: true }));
+    expect(document.getElementById('sw-loading')).not.toBeNull();
+    // The container's own transition still tears it down.
+    document.getElementById('sw-loading')!.dispatchEvent(new Event('transitionend'));
+    expect(document.getElementById('sw-loading')).toBeNull();
+  });
+
+  it('still tears down on the safety timeout', () => {
+    vi.useFakeTimers();
+    try {
+      const w = new LoadingWidget(uiConfig());
+      w.mount();
+      w.dispose();
+      vi.advanceTimersByTime(700);
+      expect(document.getElementById('sw-loading')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

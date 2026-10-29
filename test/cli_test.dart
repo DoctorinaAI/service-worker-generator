@@ -131,4 +131,55 @@ _flutter.buildConfig = {"engineRevision":"abc123","builds":[{"compileTarget":"da
     expect(result.exitCode, 1);
     expect(result.stderr, contains('Build directory not found'));
   });
+
+  test('an unknown option exits 64 with a hint and no stack trace', () async {
+    final result = await run(['--inptu=${dir.path}']);
+    expect(result.exitCode, 64);
+    expect(result.stderr, contains('Error: Could not find an option named'));
+    expect(result.stderr, contains('--help'));
+    expect(result.stderr, isNot(contains('#0 ')));
+    expect(exists('sw.js'), isFalse);
+  });
+
+  test('a missing option value exits 64', () async {
+    final result = await run(['--input']);
+    expect(result.exitCode, 64);
+    expect(result.stderr, contains('Error: '));
+    expect(result.stderr, isNot(contains('#0 ')));
+  });
+
+  test('a missing build directory prints no stack trace', () async {
+    final result = await run(['--input=${p.join(dir.path, 'nope')}']);
+    expect(result.exitCode, 1);
+    expect(result.stderr, contains('Error: Build directory not found'));
+    expect(result.stderr, isNot(contains('#0 ')));
+    expect(result.stderr, isNot(contains('Bad state')));
+  });
+
+  test('a file system error exits 1 without a stack trace', () async {
+    // The parent of the worker is a file, so it cannot be created.
+    final result = await run([
+      '--input=${dir.path}',
+      '--output=main.dart.js/sw.js',
+    ]);
+    expect(result.exitCode, 1);
+    expect(result.stderr, contains('Error: '));
+    expect(result.stderr, contains('main.dart.js'));
+    expect(result.stderr, isNot(contains('#0 ')));
+  });
+
+  test('an absent implicit sw.yaml is silent', () async {
+    final result = await io.Process.run(
+      io.Platform.resolvedExecutable,
+      [p.absolute('bin/generate.dart'), '--input=${dir.path}'],
+      workingDirectory: dir.path,
+      environment: {
+        for (final e in io.Platform.environment.entries)
+          if (!e.key.startsWith('SW_')) e.key: e.value,
+      },
+      includeParentEnvironment: false,
+    );
+    expect(result.exitCode, 0, reason: '${result.stderr}');
+    expect(result.stderr, isNot(contains('config file not found')));
+  });
 }

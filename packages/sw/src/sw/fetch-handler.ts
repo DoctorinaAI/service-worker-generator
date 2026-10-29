@@ -2,11 +2,17 @@ import type { ResourceManifest, ResourceEntry } from '../shared/types';
 import { ResourceCategory } from '../shared/types';
 import { NEVER_CACHE_FILES, RESERVED_PATH_PREFIXES } from '../shared/constants';
 import {
+  cacheBustUrl,
   getResourceKey,
   fetchWithRetry,
   replayableResponse,
 } from '../shared/utils';
-import { lazyCacheResponse, getContentCacheName } from './cache-manager';
+import {
+  expectedBodySize,
+  lazyCacheResponse,
+  getContentCacheName,
+} from './cache-manager';
+import { reportIfQuotaExceeded } from './quota';
 import type { ProgressReporter } from './progress';
 
 declare const self: ServiceWorkerGlobalScope;
@@ -34,6 +40,12 @@ export function handleFetch(
   const { request } = event;
 
   if (request.method !== 'GET') return;
+
+  // A Range request (media seeking, resumable downloads) wants a slice. The
+  // cache holds whole files and could only answer with a 200 the element
+  // may refuse, and a 206 must never be stored as the file. Straight to
+  // the network: no cache read, no cache write.
+  if (request.headers.has('range')) return;
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
@@ -168,7 +180,9 @@ async function networkFirst(
       // Quota pressure is routine for a wasm-sized app. A cache we could
       // not write is a worse offline story, not a reason to withhold a
       // page the origin just served.
-      console.warn('[SW] App-shell cache write failed:', error);
+      if (!reportIfQuotaExceeded(`writing ${INDEX_KEY}`, error)) {
+        console.warn('[SW] App-shell cache write failed:', error);
+      }
     }
     // Report the refresh only when it happened. Announcing an update we
     // failed to store would hide quota pressure from the one channel
@@ -229,14 +243,25 @@ async function cacheFirst(
       status: 'loading',
     });
 
-    const response = await fetchWithRetry(request);
+    const response =
+      entry.category === ResourceCategory.Core ||
+      entry.category === ResourceCategory.Required
+        ? await fetchRefill(request, resourceKey, entry)
+        : await fetchWithRetry(request);
 
     if (response.ok) {
       if (cache) {
         try {
-          await lazyCacheResponse(cacheName, new Request(resourceKey), response);
+          await lazyCacheResponse(
+            cacheName,
+            new Request(resourceKey),
+            response,
+            expectedBodySize(resourceKey, entry),
+          );
         } catch (error) {
-          console.warn(`[SW] Cache write failed for ${resourceKey}:`, error);
+          if (!reportIfQuotaExceeded(`caching ${resourceKey}`, error)) {
+            console.warn(`[SW] Cache write failed for ${resourceKey}:`, error);
+          }
         }
       }
 
@@ -279,4 +304,62 @@ async function cacheFirst(
       headers: { 'Content-Type': 'text/plain' },
     });
   }
+}
+
+/**
+ * Network copy of a missing Core/Required entry, fetched the way precache
+ * fetches it: `?v={hash}` and `cache: 'reload'`.
+ *
+ * The page asks for `main.dart.wasm` without a hash, so its own request can
+ * be answered by an intermediate or HTTP cache with another build's file,
+ * which would then be pinned in CacheStorage under this version. The
+ * hash-busted URL names exactly this build's bytes.
+ *
+ * Everything else the page sent is kept: its query string (the manifest
+ * key ignores the query, so it does not change what is cached, but a host
+ * may need it — a signed URL, say), headers and credentials. The mode is
+ * not: a same-origin `cors` request yields a readable `basic` response.
+ *
+ * If the busted request fails or is refused (a host or WAF that rejects
+ * unknown query parameters), the page's own request is tried once, so the
+ * page is never worse off than before; that copy is stored as it used to be.
+ */
+async function fetchRefill(
+  request: Request,
+  resourceKey: string,
+  entry: ResourceEntry,
+): Promise<Response> {
+  let busted: Request | null = null;
+  try {
+    const url = new URL(request.url);
+    url.hash = '';
+    busted = new Request(cacheBustUrl(url.href, entry.hash), {
+      cache: 'reload',
+      credentials: request.credentials,
+      headers: request.headers,
+    });
+  } catch (error) {
+    console.warn(`[SW] Could not build refill request for ${resourceKey}:`, error);
+  }
+  if (!busted) return fetchWithRetry(request);
+
+  try {
+    const response = await fetchWithRetry(busted);
+    if (response.ok) return response;
+    console.warn(
+      `[SW] Refill of ${resourceKey} by hash answered HTTP ${response.status}; ` +
+        'retrying with the page request',
+    );
+    try {
+      response.body?.cancel().catch(() => undefined);
+    } catch {
+      // Nothing to release.
+    }
+  } catch (error) {
+    console.warn(
+      `[SW] Refill of ${resourceKey} by hash failed; retrying with the page request:`,
+      error,
+    );
+  }
+  return fetchWithRetry(request, 1);
 }

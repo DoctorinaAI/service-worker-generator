@@ -110,13 +110,14 @@ rebuilt copy with the flag dropped, so a host that normalizes
 3. Load previous manifest from manifest cache
 4. Compare hashes — remove outdated resources from content cache
 5. Save current manifest to manifest cache
-6. Delete all old caches with matching prefix
+6. Delete old caches with matching prefix (keeping the temp caches of
+   workers still installing or waiting)
 7. Delete temp cache
 8. Call `self.clients.claim()`
-9. On error: clear all caches (clean slate recovery)
+9. On error: see Activate Recovery below
 
 ### Fetch Event
-1. Only handle GET requests
+1. Only handle GET requests without a `Range` header
 2. Normalize URL: strip query params, handle trailing slashes
 3. If the path is under a reserved prefix (`__/`): pass-through
 4. If the request is a navigation (or targets `index.html`): network-first,
@@ -148,6 +149,11 @@ Attempt 3: wait 2s
 (fail after 3 attempts)
 ```
 
+Precache and the refill of a missing Core or Required entry also retry a
+`5xx` or `429` answer, waiting for a numeric `Retry-After` (capped at 5 s) or
+the backoff above; the last attempt's response is used as is. A `4xx` is final.
+Navigations keep the plain behaviour (thrown errors only).
+
 ### Fetch with Timeout
 - Default: 10 seconds per request
 - Uses `AbortController` for clean cancellation
@@ -165,8 +171,39 @@ Attempt 3: wait 2s
 - A cancelled body fails that one entry; a `Core` entry fails the install, which
   is retried on the next page load
 
+### Body Size Check
+- Every pre-cached body and every lazily cached Optional body is counted
+  against the manifest's `size` while it streams into the cache; nothing is
+  buffered. `index.html` is exempt (hosts rewrite it).
+- A body that does not match errors the stream, and the Cache API stores
+  nothing. The log line names the key and both sizes.
+- A host that declares a `Content-Length` on an uncompressed response,
+  different from the manifest's size, re-encoded the file (image
+  optimisation, an injected snippet): the body is checked against the
+  declared length instead, with a warning. A transfer cut short still fails.
+- Precache without such a header fetches a mismatched entry once more
+  (`cache: 'reload'`). The same length twice, or a longer body (truncation
+  cannot cause it), is the host: stored as served, with a warning. A different
+  length each time, or a second copy short of its own `Content-Length`, is the
+  wire: the entry fails (a `Core` entry fails the install, retried on the next
+  load).
+- Only a plain `200` is cached lazily (`206`, `203`, `204` are not).
+
+### Range Requests
+A request with a `Range` header (media seeking, resumable downloads) goes
+straight to the network: a slice must never be stored as the whole file, and
+a whole cached file must not answer a slice.
+
+### Orphaned Temp Caches
+An install that was abandoned (tab closed, browser killed) leaves
+`{prefix}-temp-{version}` behind. Each install deletes temp caches of this
+prefix that belong to no installing, waiting or active worker of the
+registration. A `QuotaExceededError` anywhere in caching is logged once per
+10 s with the storage estimate.
+
 ### Activate Recovery
-- On any error during activate: clear all caches
+- Swap, cleanup and navigation preload fail separately: a failed swap drops
+  only this version's own caches, so it starts over from the network
 - Always call `self.clients.claim()` even on error
 - Prevents stuck pages
 
@@ -238,7 +275,7 @@ describes — which is how `Loaded 5 of 4 resources` happened.
 ### Cache Version
 - Each build with different content gets a new cache version (a hash of the manifest by default)
 - New version → new cache name → old caches cleaned on activate
-- Manifest comparison ensures only changed resources are re-fetched
+- Every version starts with an empty content cache: install precaches the whole Core + Required set again, and Optional files are fetched again on first use. The manifest comparison only evicts stale entries
 
 ### Update Flow
 1. Browser detects new `sw.js` (byte comparison)

@@ -4,6 +4,82 @@ import { fetchWithRetry } from '../shared/utils';
 import { logPhase } from './console-logger';
 
 /**
+ * sessionStorage key that pins this tab session to the local engine.
+ *
+ * Set when the CDN probe fails, or when the app failed to load while the
+ * engine came from the CDN. While it is set, `loadCanvasKit` skips the
+ * probe and uses the local `canvaskit/` directory. Per tab session by
+ * design: a CDN that is blocked now may be reachable tomorrow.
+ */
+export const CANVASKIT_LOCAL_KEY = 'sw-canvaskit-local';
+
+/** Whether this tab session is pinned to the local engine. */
+function isPinnedToLocal(): boolean {
+  try {
+    return sessionStorage.getItem(CANVASKIT_LOCAL_KEY) !== null;
+  } catch {
+    // Blocked storage: nothing could have been remembered.
+    return false;
+  }
+}
+
+/**
+ * Pin this tab session to the local engine.
+ *
+ * @returns `'set'` when the flag was written now, `'already-set'` when an
+ *   earlier load in this session wrote it, `'unavailable'` when
+ *   sessionStorage cannot be used.
+ */
+function pinToLocal(reason: string): 'set' | 'already-set' | 'unavailable' {
+  try {
+    if (sessionStorage.getItem(CANVASKIT_LOCAL_KEY) !== null) {
+      return 'already-set';
+    }
+    sessionStorage.setItem(CANVASKIT_LOCAL_KEY, reason.slice(0, 200) || '1');
+    return 'set';
+  } catch {
+    return 'unavailable';
+  }
+}
+
+/**
+ * Recover from an app load that failed with the engine served from the
+ * CDN: pin the session to the local engine and reload once.
+ *
+ * The CDN probe only fetches one byte of the variant's `.js`; a proxy or
+ * blocker that strips the `.wasm` passes it and then fails the engine. The
+ * Flutter loader is not safely re-entrant within one page, so the retry is
+ * a reload rather than a second `load()` call.
+ *
+ * Loop-proof: the flag outlives the reload, so the next load goes local
+ * without probing and never reaches this path with a CDN base. If the flag
+ * is somehow already set, or sessionStorage is unavailable (no way to
+ * guarantee a single reload), nothing happens and the caller shows the
+ * error as before.
+ *
+ * @returns `true` when a reload was started.
+ */
+export function reloadWithLocalCanvasKit(reason: string): boolean {
+  const result = pinToLocal(`app load failed: ${reason}`);
+  if (result !== 'set') {
+    logPhase(
+      'CanvasKit',
+      `App failed with the CDN engine (${reason}); not reloading: ` +
+        (result === 'already-set'
+          ? 'local engine already forced this session'
+          : 'sessionStorage unavailable, cannot guarantee a single reload'),
+    );
+    return false;
+  }
+  logPhase(
+    'CanvasKit',
+    `App failed with the CDN engine (${reason}); reloading once with the local engine`,
+  );
+  window.location.reload();
+  return true;
+}
+
+/**
  * Browser capabilities relevant for CanvasKit variant selection.
  */
 interface BrowserCaps {
@@ -102,6 +178,14 @@ export async function loadCanvasKit(
 
   const variant = getCanvasKitVariant(build, caps);
 
+  if (engineRevision && isPinnedToLocal()) {
+    logPhase(
+      'CanvasKit',
+      `Using local: ${CANVASKIT_LOCAL_PATH}/ (CDN failed earlier in this tab session)`,
+    );
+    return CANVASKIT_LOCAL_PATH;
+  }
+
   // Try CDN first
   if (engineRevision) {
     const cdnBase = `${CANVASKIT_CDN_BASE}/${engineRevision}`;
@@ -127,14 +211,33 @@ export async function loadCanvasKit(
         logPhase('CanvasKit', 'CDN available');
         return cdnBase;
       }
-    } catch {
+      rememberProbeFailure(`HTTP ${response.status}`);
+    } catch (error) {
       logPhase('CanvasKit', 'CDN failed, falling back to local');
+      rememberProbeFailure(
+        error instanceof Error ? error.message : String(error),
+      );
     }
   }
 
   // Fallback to local
   logPhase('CanvasKit', `Using local: ${CANVASKIT_LOCAL_PATH}/`);
   return CANVASKIT_LOCAL_PATH;
+}
+
+/**
+ * Remember a failed CDN probe so later loads in this tab session skip it:
+ * where gstatic.com is blocked the probe costs up to two 8 s timeouts.
+ */
+function rememberProbeFailure(reason: string): void {
+  const result = pinToLocal(`CDN probe failed: ${reason}`);
+  logPhase(
+    'CanvasKit',
+    `CDN probe failed (${reason}); ` +
+      (result === 'unavailable'
+        ? 'sessionStorage unavailable, will probe again next load'
+        : 'using local for the rest of this tab session'),
+  );
 }
 
 function detectBrowserEngine(): 'blink' | 'webkit' | 'gecko' | 'unknown' {

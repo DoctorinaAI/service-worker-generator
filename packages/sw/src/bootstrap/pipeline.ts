@@ -14,8 +14,10 @@ import {
   detectBrowserCaps,
   selectBuild,
   loadCanvasKit,
+  reloadWithLocalCanvasKit,
 } from './canvaskit-loader';
-import { loadFlutterApp } from './flutter-loader';
+import { CANVASKIT_LOCAL_PATH } from '../shared/constants';
+import { FlutterLoaderMissingError, loadFlutterApp } from './flutter-loader';
 
 /**
  * Start the bootstrap pipeline.
@@ -28,9 +30,20 @@ import { loadFlutterApp } from './flutter-loader';
  */
 export function runPipeline(config: ResolvedConfig): BootstrapAPI {
   const { ui } = config;
-  const widget = new LoadingWidget(ui, config.build.swFilename);
+  const widget = new LoadingWidget(
+    ui,
+    config.build.swFilename,
+    config.build.cachePrefix,
+  );
   const api = new BootstrapAPI(widget);
-  widget.mount();
+  // The widget is cosmetic: a page with Trusted Types, a strict CSP or an
+  // unusual DOM must still get its app, so a failed mount is logged and
+  // the pipeline goes on without a loading screen.
+  try {
+    widget.mount();
+  } catch (error) {
+    console.error('[Bootstrap] Loading widget failed to mount; continuing without it:', error);
+  }
 
   // Bridge the `sw-update-available` CustomEvent (fired by sw-registration
   // when a newer SW finishes installing) into `api.onUpdateAvailable`
@@ -209,19 +222,38 @@ async function runPipelineWork(
     // Stage 4-5: Assets + Dart Entry
     updateProgress('assets', STAGE_PROGRESS.canvaskit + 5, 'Loading application');
 
-    await loadFlutterApp(
-      canvasKitBaseUrl,
-      build.engineRevision,
-      build.builds,
-      (percent, message) => {
-        updateProgress('dart-entry', percent, message);
-      },
-    );
+    // An engine served from the CDN passed a one-byte probe of its `.js`,
+    // which says nothing about the `.wasm`. If the app then fails, retry
+    // once with the local copy every build ships (see
+    // `reloadWithLocalCanvasKit`). Failures arrive on two paths — a
+    // rejected `load()` and the engine-init callback — and are handled once.
+    const usedCdn = canvasKitBaseUrl !== CANVASKIT_LOCAL_PATH;
+    let appFailureHandled = false;
+    const onAppFailure = (error: unknown): void => {
+      if (appFailureHandled) return;
+      appFailureHandled = true;
+      if (usedCdn && !(error instanceof FlutterLoaderMissingError)) {
+        const reason = error instanceof Error ? error.message : String(error);
+        if (reloadWithLocalCanvasKit(reason)) return;
+      }
+      reportPipelineError(api, error);
+    };
+
+    try {
+      await loadFlutterApp(
+        canvasKitBaseUrl,
+        build.engineRevision,
+        build.builds,
+        (percent, message) => {
+          updateProgress('dart-entry', percent, message);
+        },
+        onAppFailure,
+      );
+    } catch (error) {
+      onAppFailure(error);
+    }
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : 'Failed to load application';
-    console.error('[Bootstrap] Pipeline error:', error);
-    api.error(message);
+    reportPipelineError(api, error);
   } finally {
     cleanupSWListener?.();
     // Every message came from a worker that is not this build, so the
@@ -236,4 +268,11 @@ async function runPipelineWork(
       );
     }
   }
+}
+
+function reportPipelineError(api: BootstrapAPI, error: unknown): void {
+  const message =
+    error instanceof Error ? error.message : 'Failed to load application';
+  console.error('[Bootstrap] Pipeline error:', error);
+  api.error(message);
 }

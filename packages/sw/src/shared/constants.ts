@@ -88,6 +88,14 @@ export const MAX_RETRY_ATTEMPTS = 3;
 /** Base delay for exponential backoff in milliseconds */
 export const RETRY_BASE_DELAY_MS = 1_000;
 
+/**
+ * Upper bound on a server's `Retry-After` that a precache retry will wait.
+ * Install is on the clock (and blocks the scope's job queue while it runs),
+ * so a host asking for minutes gets a few seconds; the attempt budget is
+ * unchanged.
+ */
+export const RETRY_AFTER_MAX_MS = 5_000;
+
 /** Max parallel fetches during SW install precache. Keeps us under HTTP/2
  * multiplexing limits and spares memory on large manifests. */
 export const PRECACHE_CONCURRENCY = 6;

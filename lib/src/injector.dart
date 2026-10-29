@@ -77,6 +77,9 @@ String injectBootstrapConfig({
     'swVersion': swVersion,
     'swFilename': swFilename,
     'builds': builds,
+    // Scopes the loading widget's "clear cache and reload" to this app's
+    // caches instead of every cache on the origin.
+    if (config.cachePrefix.isNotEmpty) 'cachePrefix': config.cachePrefix,
     // Omitted when false, like uiDefaults: the bootstrap defaults to CDN.
     if (useLocalCanvasKit) 'useLocalCanvasKit': true,
     if (uiDefaults.isNotEmpty) 'uiDefaults': uiDefaults,

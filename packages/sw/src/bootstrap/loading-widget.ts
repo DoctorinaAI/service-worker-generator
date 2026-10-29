@@ -1,4 +1,5 @@
 import type { ResolvedConfig } from './config';
+import { findBootstrapScript, withAlpha } from './config';
 import { RESET_TIMEOUT_MS, STALLED_TIMEOUT_MS } from '../shared/constants';
 import { withTimeout } from '../shared/utils';
 import { FOREIGN_RELOAD_KEY } from './sw-registration';
@@ -15,6 +16,8 @@ export class LoadingWidget {
   private logoContainer: HTMLDivElement | null = null;
   private progressCircle: SVGCircleElement | null = null;
   private statusText: HTMLSpanElement | null = null;
+  private statusContainer: HTMLDivElement | null = null;
+  private progressBar: HTMLDivElement | null = null;
   private percentageText: HTMLDivElement | null = null;
   private reloadButton: HTMLButtonElement | null = null;
   private styleElement: HTMLStyleElement | null = null;
@@ -27,20 +30,45 @@ export class LoadingWidget {
    * @param swFilename - The service worker this bootstrap registers, used to
    *   keep the reset action away from unrelated registrations. Omitted by
    *   callers that only render the widget.
+   * @param cachePrefix - The cache name prefix of this build's worker. When
+   *   set, the reset deletes only caches named `${cachePrefix}-…`; when
+   *   absent (a bootstrap generated before the prefix was injected) it
+   *   deletes every cache on the origin, as it always did.
    */
   constructor(
     private config: ResolvedConfig['ui'],
     private swFilename?: string,
+    private cachePrefix?: string,
   ) {}
 
   /**
    * Create and mount the loading widget into the DOM.
+   *
+   * On failure, whatever was added is removed again before the error is
+   * rethrown: a lone stylesheet would still paint the page background, and
+   * the caller continues loading the app without the widget.
    */
   mount(): void {
-    this.injectStyles();
-    this.container = this.createDOM();
-    document.body.appendChild(this.container);
-    this.resetStallTimer();
+    try {
+      this.injectStyles();
+      this.container = this.createDOM();
+      document.body.appendChild(this.container);
+      this.resetStallTimer();
+    } catch (error) {
+      this.clearStallTimer();
+      this.container?.remove();
+      this.styleElement?.remove();
+      this.container = null;
+      this.styleElement = null;
+      this.logoContainer = null;
+      this.progressCircle = null;
+      this.progressBar = null;
+      this.statusText = null;
+      this.statusContainer = null;
+      this.percentageText = null;
+      this.reloadButton = null;
+      throw error;
+    }
   }
 
   /**
@@ -58,7 +86,14 @@ export class LoadingWidget {
       this.progressCircle.style.strokeDashoffset = String(offset);
     }
 
-    if (this.statusText) {
+    this.progressBar?.setAttribute(
+      'aria-valuenow',
+      String(Math.round(this.currentPercent)),
+    );
+
+    // The status is a live region: rewriting the same text is a change a
+    // screen reader may announce again.
+    if (this.statusText && this.statusText.textContent !== message) {
       this.statusText.textContent = message;
     }
 
@@ -76,6 +111,8 @@ export class LoadingWidget {
     if (this.disposed || !this.statusText) return;
     this.statusText.textContent = error;
     this.statusText.style.color = '#ff4444';
+    this.statusContainer?.setAttribute('role', 'alert');
+    this.statusContainer?.setAttribute('aria-live', 'assertive');
     this.showReloadOverlay();
   }
 
@@ -95,30 +132,48 @@ export class LoadingWidget {
       // safety timeout if the browser skips the animation (reduced-motion,
       // background tab, discarded paint). Without the fallback the widget
       // + its stylesheet can leak indefinitely.
+      //
+      // `transitionend` bubbles: the ring and artwork transitions of the
+      // children would otherwise end the fade before it ran. Only the
+      // container's own transition counts.
+      const container = this.container;
       let torn = false;
       const teardown = (): void => {
         if (torn) return;
         torn = true;
+        container.removeEventListener('transitionend', onTransitionEnd);
         this.container?.remove();
         this.styleElement?.remove();
         this.container = null;
         this.styleElement = null;
       };
-      this.container.addEventListener('transitionend', teardown, {
-        once: true,
-      });
+      const onTransitionEnd = (event: Event): void => {
+        if (event.target === container) teardown();
+      };
+      container.addEventListener('transitionend', onTransitionEnd);
       setTimeout(teardown, 600);
     }
 
-    // Enable pointer events on Flutter view
+    // Re-enable pointer events on the Flutter view. '' rather than 'auto'
+    // drops only the inline override the loader set, so the app's own CSS
+    // decides again.
     const flutterView = document.querySelector('flutter-view') as HTMLElement;
     if (flutterView) {
-      flutterView.style.pointerEvents = 'auto';
+      flutterView.style.pointerEvents = '';
     }
   }
 
   private injectStyles(): void {
     this.styleElement = document.createElement('style');
+    // Under a `style-src` with a nonce and without 'unsafe-inline', the
+    // stylesheet only applies when it carries the page's nonce. Browsers
+    // hide the attribute after load, so the IDL property is read first.
+    const script = findBootstrapScript();
+    const nonce = script?.nonce || script?.getAttribute('nonce') || '';
+    if (nonce) {
+      this.styleElement.nonce = nonce;
+      this.styleElement.setAttribute('nonce', nonce);
+    }
     this.styleElement.textContent = this.getCSS();
     document.head.appendChild(this.styleElement);
   }
@@ -159,6 +214,12 @@ export class LoadingWidget {
     // Artwork wrapper — blurred/dimmed when reload overlay appears
     const artwork = document.createElement('div');
     artwork.className = 'sw-logo-artwork';
+    artwork.setAttribute('role', 'progressbar');
+    artwork.setAttribute('aria-label', 'Loading');
+    artwork.setAttribute('aria-valuemin', '0');
+    artwork.setAttribute('aria-valuemax', '100');
+    artwork.setAttribute('aria-valuenow', '0');
+    this.progressBar = artwork;
     artwork.appendChild(svg);
 
     // Logo image
@@ -178,7 +239,7 @@ export class LoadingWidget {
     this.reloadButton.type = 'button';
     this.reloadButton.setAttribute('aria-label', 'Reload');
     this.reloadButton.title = 'Reload';
-    this.reloadButton.innerHTML = this.reloadIconSVG();
+    this.reloadButton.appendChild(this.createReloadIcon());
     this.reloadButton.addEventListener('click', () => this.resetCache());
     logoContainer.appendChild(this.reloadButton);
 
@@ -195,6 +256,8 @@ export class LoadingWidget {
     // Status text
     const statusContainer = document.createElement('div');
     statusContainer.className = 'sw-status';
+    statusContainer.setAttribute('aria-live', 'polite');
+    this.statusContainer = statusContainer;
     this.statusText = document.createElement('span');
     this.statusText.textContent = 'Initializing';
     const dots = document.createElement('span');
@@ -235,17 +298,38 @@ export class LoadingWidget {
     }
   }
 
-  private reloadIconSVG(): string {
-    return (
-      '<svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" ' +
-      'focusable="false" fill="none" stroke="currentColor" stroke-width="2.25" ' +
-      'stroke-linecap="round" stroke-linejoin="round">' +
-      '<path d="M3 12a9 9 0 0 1 15.5-6.3L21 8"/>' +
-      '<path d="M21 3v5h-5"/>' +
-      '<path d="M21 12a9 9 0 0 1-15.5 6.3L3 16"/>' +
-      '<path d="M3 21v-5h5"/>' +
-      '</svg>'
-    );
+  /**
+   * The reload icon, built node by node: assigning markup to `innerHTML`
+   * throws on pages with `require-trusted-types-for 'script'`.
+   */
+  private createReloadIcon(): SVGSVGElement {
+    const svg = document.createElementNS(SVG_NS, 'svg');
+    const attrs: Record<string, string> = {
+      viewBox: '0 0 24 24',
+      width: '28',
+      height: '28',
+      'aria-hidden': 'true',
+      focusable: 'false',
+      fill: 'none',
+      stroke: 'currentColor',
+      'stroke-width': '2.25',
+      'stroke-linecap': 'round',
+      'stroke-linejoin': 'round',
+    };
+    for (const [name, value] of Object.entries(attrs)) {
+      svg.setAttribute(name, value);
+    }
+    for (const d of [
+      'M3 12a9 9 0 0 1 15.5-6.3L21 8',
+      'M21 3v5h-5',
+      'M21 12a9 9 0 0 1-15.5 6.3L3 16',
+      'M3 21v-5h5',
+    ]) {
+      const path = document.createElementNS(SVG_NS, 'path');
+      path.setAttribute('d', d);
+      svg.appendChild(path);
+    }
+    return svg;
   }
 
   /**
@@ -288,7 +372,23 @@ export class LoadingWidget {
     try {
       if ('caches' in window) {
         const names = await caches.keys();
-        await Promise.all(names.map((n) => caches.delete(n)));
+        const prefix =
+          typeof this.cachePrefix === 'string' && this.cachePrefix
+            ? `${this.cachePrefix}-`
+            : null;
+        // With this build's prefix, other apps, Workbox or Firebase on the
+        // same origin keep their caches. Without one (a bootstrap generated
+        // before it was injected) there is no way to tell, so every cache
+        // goes, as before.
+        const doomed = prefix
+          ? names.filter((n) => n.startsWith(prefix))
+          : names;
+        await Promise.all(doomed.map((n) => caches.delete(n)));
+        console.log(
+          `[Bootstrap] Reset: deleted ${doomed.length} cache(s), kept ` +
+            `${names.length - doomed.length}` +
+            (prefix ? ` (prefix "${prefix}")` : ' (no prefix known, deleted all)'),
+        );
       }
 
       if ('serviceWorker' in navigator) {
@@ -334,7 +434,7 @@ export class LoadingWidget {
 
   private getCSS(): string {
     const color = this.config.color;
-    const colorAlpha = `${color}80`;
+    const colorAlpha = withAlpha(color, '80');
     const isDark =
       this.config.theme === 'dark' ||
       (this.config.theme === 'auto' &&
@@ -421,6 +521,9 @@ export class LoadingWidget {
         font-weight: 500;
         color: ${subtextColor};
         margin-top: 1rem;
+        max-width: 90vw;
+        overflow-wrap: anywhere;
+        text-align: center;
       }
       .sw-loading-dots::after {
         content: '...';
@@ -522,6 +625,9 @@ export class LoadingWidget {
         .sw-title { font-size: 1.6rem; }
       }
       @media (prefers-reduced-motion: reduce) {
+        #sw-loading { animation: none; }
+        .sw-loading-dots::after { animation: none; }
+        .sw-progress-ring-fill { transition: none; }
         .sw-logo-container.is-stalled .sw-reload-overlay { animation: none; }
         .sw-reload-overlay, .sw-reload-overlay svg,
         .sw-logo-artwork { transition: none; }

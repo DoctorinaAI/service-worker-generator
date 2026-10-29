@@ -57,7 +57,7 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
 
 ### Stage 6: Dart Initialization (90% → 100%)
 - Dart application manages remaining progress
-- Dart calls `window.Bootstrap.progress` to update percentage
+- Dart calls `window.updateLoadingProgress(progress, text?)` to update the percentage (`window.Bootstrap.progress` is a read-only getter)
 - When ready, Dart calls `window.Bootstrap.dispose()` to remove loading widget
 - Alternatively, listen for `flutter-first-frame` event as auto-dispose trigger
 
@@ -85,7 +85,7 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
 - Timer starts on widget creation
 - Resets on every progress update
 - After 30 seconds without progress: show "Reset Cache" button with tooltip
-- Button clears all caches, unregisters SWs, clears storage, reloads page
+- Button deletes this app's caches (`{prefix}-…`), unregisters this app's service worker and reloads; it does not touch storage, other apps' caches or foreign service workers
 
 ### Disposal
 - `window.Bootstrap.dispose()` triggers fade-out animation

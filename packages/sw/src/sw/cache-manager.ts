@@ -2,19 +2,24 @@ import type { ResourceEntry, ResourceManifest } from '../shared/types';
 import { ResourceCategory } from '../shared/types';
 import {
   BODY_STALL_TIMEOUT_MS,
+  FETCH_TIMEOUT_MS,
   MANIFEST_CACHE_SUFFIX,
+  MAX_RETRY_ATTEMPTS,
   PRECACHE_CONCURRENCY,
   TEMP_CACHE_SUFFIX,
 } from '../shared/constants';
 import {
+  BodySizeMismatchError,
   cacheBustUrl,
+  declaredBodyLength,
   fetchWithRetry,
   getResourceKey,
-  guardBodyStall,
+  guardBody,
   isHtmlFallback,
   mapWithConcurrency,
   replayableResponse,
 } from '../shared/utils';
+import { reportIfQuotaExceeded } from './quota';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -37,6 +42,26 @@ export function getTempCacheName(prefix: string, version: string): string {
  */
 export function getManifestCacheName(prefix: string): string {
   return `${prefix}${MANIFEST_CACHE_SUFFIX}`;
+}
+
+/**
+ * Manifest key of the app shell. Excluded from the body size check: hosts
+ * inject into HTML (analytics, CSP nonces, edge includes), and the shell is
+ * served network-first anyway, so a byte-exact copy buys nothing.
+ */
+const SHELL_KEY = 'index.html';
+
+/**
+ * Byte length a stored body for [key] must have, or `undefined` when it
+ * must not be checked (the shell, or an entry without a usable size —
+ * `guardBody` ignores anything that is not a non-negative integer).
+ */
+export function expectedBodySize(
+  key: string,
+  entry: ResourceEntry | undefined,
+): number | undefined {
+  if (!entry || key === SHELL_KEY) return undefined;
+  return entry.size;
 }
 
 /**
@@ -65,20 +90,37 @@ export async function precacheResources(
     const url = cacheBustUrl(path, entry.hash);
     const request = new Request(url, { cache: 'reload' });
     let stored = false;
+    let mismatch: BodySizeMismatchError | undefined;
     try {
-      const response = await fetchWithRetry(request);
+      // Transient server errors (5xx, 429) are retried here, not only
+      // thrown network errors: one 503 on a flaky edge would otherwise fail
+      // a Core entry, discard the whole temp cache and restart the download
+      // of every file on the next load. Other 4xx are final.
+      const response = await fetchWithRetry(
+        request,
+        MAX_RETRY_ATTEMPTS,
+        FETCH_TIMEOUT_MS,
+        { retryOnStatus: true },
+      );
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
       if (isHtmlFallback(path, response)) {
         throw new Error('served as HTML (the host has no such file)');
       }
-      // The shell is precached here and replayed for navigations later, so
-      // a host that redirects `index.html?v=…` would otherwise leave us
-      // with a copy the browser refuses to serve. Cheap for everything
-      // else: a response that was not redirected is passed straight back.
+      // The guard wraps every body, redirected or not, before `cache.put`
+      // consumes it, and hands back a rebuilt response. Rebuilt, it has no
+      // `redirected` flag, so a shell from a host that redirects
+      // `index.html?v=…` stays replayable for navigations without being
+      // buffered; `replayableResponse` is then a no-op kept as a backstop.
       //
-      // The stall guard wraps the body before `cache.put` consumes it.
+      // It also counts the bytes against the manifest's `size`. A body cut
+      // short — a chunked response closed early, a truncating proxy —
+      // would otherwise be served cache-first until the next deploy,
+      // breaking the app for this user only. The count is streaming, so a
+      // mismatch errors the body and `cache.put` stores nothing.
+      //
+      // The stall part of the guard:
       // `fetchWithRetry` only bounds the headers, and the bodies here are
       // the largest files the app ships — a stream that dies mid-transfer
       // would otherwise hang `cache.put`, and with it this install, for as
@@ -87,13 +129,30 @@ export async function precacheResources(
       // the origin hangs until the browser kills it minutes later. Failing
       // the entry instead costs one install attempt, retried on the next
       // page load.
-      await cache.put(
-        new Request(path),
-        await replayableResponse(guardBodyStall(response, BODY_STALL_TIMEOUT_MS)),
-      );
+      const guarded = guardBody(response, {
+        idleMs: BODY_STALL_TIMEOUT_MS,
+        expectedBytes: expectedBodySize(path, entry),
+        label: path,
+        onMismatch: (error) => {
+          mismatch = error;
+        },
+      });
+      try {
+        await cache.put(new Request(path), await replayableResponse(guarded));
+      } catch (error) {
+        if (error instanceof BodySizeMismatchError) mismatch = error;
+        if (!mismatch) throw error;
+        if (!(await storeAfterSizeMismatch(cache, path, url, mismatch))) {
+          throw mismatch;
+        }
+      }
       stored = true;
     } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
+      reportIfQuotaExceeded(`precaching ${path}`, error);
+      // The mismatch, when there was one, says more than whatever the Cache
+      // API rejected with.
+      const cause = mismatch ?? error;
+      const reason = cause instanceof Error ? cause.message : String(cause);
       const msg = `[SW] Precache failed for ${path}: ${reason}`;
       if (entry.category === ResourceCategory.Core) {
         coreFailures.push(`${path} (${reason})`);
@@ -125,19 +184,120 @@ export async function precacheResources(
 }
 
 /**
+ * Second look at an entry whose body did not have the manifest's size.
+ *
+ * A short body is either a transfer cut off — random, and fatal to cache —
+ * or a host that rewrites the file (a minifier, an injected snippet) —
+ * deterministic, and stored as served before the size check existed.
+ * Failing the latter would fail every install of a Core entry, leaving the
+ * page on its previous worker for good. So the file is fetched once more:
+ * the same short length twice is the host, a different one is the wire. A
+ * body longer than the build's cannot come from truncation at all.
+ *
+ * Returns whether a copy was stored. Read whole into memory: this only
+ * runs after a mismatch, which is rare.
+ */
+async function storeAfterSizeMismatch(
+  cache: Cache,
+  path: string,
+  url: string,
+  first: BodySizeMismatchError,
+): Promise<boolean> {
+  const response = await fetchWithRetry(
+    new Request(url, { cache: 'reload' }),
+    MAX_RETRY_ATTEMPTS,
+    FETCH_TIMEOUT_MS,
+    { retryOnStatus: true },
+  );
+  if (!response.ok || isHtmlFallback(path, response)) return false;
+  const body = await guardBody(response, {
+    idleMs: BODY_STALL_TIMEOUT_MS,
+    label: path,
+  }).arrayBuffer();
+  const size = body.byteLength;
+  // A host that declares the length of what it sends settles the question:
+  // short of it is the wire, whatever the first copy looked like.
+  const declared = declaredBodyLength(response);
+  if (declared !== undefined && size !== declared) {
+    console.error(
+      `[SW] ${path}: the host declares ${declared} bytes and ${size} were ` +
+        `received (${first.received} the first time); the transfer is being ` +
+        `cut short`,
+    );
+    return false;
+  }
+  const consistent =
+    size === first.expected ||
+    (first.received > first.expected
+      ? size > first.expected
+      : size === first.received);
+  if (!consistent) {
+    console.error(
+      `[SW] ${path}: ${first.received} bytes, then ${size}, for a file of ` +
+        `${first.expected}; the transfer is being cut short`,
+    );
+    return false;
+  }
+  if (size !== first.expected) {
+    console.warn(
+      `[SW] ${path}: the host serves ${size} bytes where the build has ` +
+        `${first.expected}, on every request; storing it as served`,
+    );
+  }
+  await cache.put(
+    new Request(path),
+    new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    }),
+  );
+  return true;
+}
+
+/**
  * Cache a response for an optional resource (lazy caching on first fetch).
+ *
+ * Only a plain `200` is stored: a `206` is a slice of the file, a `203` a
+ * proxy's rewrite and a `204` has no body to serve later.
+ *
+ * With [expectedBytes], the stored copy must have exactly that many bytes;
+ * otherwise the write rejects with a `BodySizeMismatchError` and nothing is
+ * stored. The page's copy, [response] itself, is never consumed or cut.
  */
 export async function lazyCacheResponse(
   cacheName: string,
   request: Request,
   response: Response,
+  expectedBytes?: number,
 ): Promise<void> {
-  if (isHtmlFallback(getResourceKey(request.url), response)) {
+  const key = getResourceKey(request.url);
+  if (response.status !== 200) {
+    console.warn(`[SW] Not caching ${key}: HTTP ${response.status}`);
+    return;
+  }
+  if (isHtmlFallback(key, response)) {
     console.warn(`[SW] Not caching ${request.url}: served as HTML`);
     return;
   }
   const cache = await caches.open(cacheName);
-  await cache.put(request, response.clone());
+  let mismatch: BodySizeMismatchError | undefined;
+  try {
+    await cache.put(
+      request,
+      guardBody(response.clone(), {
+        expectedBytes,
+        label: key,
+        onMismatch: (error) => {
+          mismatch = error;
+        },
+      }),
+    );
+  } catch (error) {
+    // Rethrow the mismatch itself: the Cache API may reject with a generic
+    // error that drops the sizes the caller's log line should show.
+    throw mismatch ?? error;
+  }
 }
 
 /**
@@ -244,6 +404,45 @@ export async function cleanupOldCaches(
       .filter((name) => name.startsWith(`${prefix}-`) && !keep.has(name))
       .map((name) => caches.delete(name)),
   );
+}
+
+/**
+ * Delete this app's temp caches (`{prefix}-temp-{version}`) for every
+ * version not in [keepVersions].
+ *
+ * Run at the start of install: with the opt-in update flow a waiting
+ * worker made redundant by a newer deploy leaves its full temp cache behind,
+ * and `cleanupOldCaches` only runs on activate, which may be days away.
+ * Callers must pass every version that may still use its temp cache — this
+ * one, and the registration's installing, waiting and active workers.
+ *
+ * Uses the same `-` boundary as `cleanupOldCaches`: prefix `app` does not
+ * claim `app2-temp-v1`. Content and manifest caches are never touched.
+ */
+export async function cleanupOrphanedTempCaches(
+  prefix: string,
+  keepVersions: readonly string[],
+): Promise<void> {
+  const tempPrefix = `${prefix}${TEMP_CACHE_SUFFIX}-`;
+  const keep = new Set(keepVersions.map((v) => getTempCacheName(prefix, v)));
+  const doomed = (await caches.keys()).filter(
+    (name) => name.startsWith(tempPrefix) && !keep.has(name),
+  );
+  if (doomed.length === 0) return;
+  const results = await Promise.all(
+    // `false` (already gone) counts as removed; only a rejection does not.
+    doomed.map((name) => caches.delete(name).then(() => true, () => false)),
+  );
+  const removed = doomed.filter((_, i) => results[i]);
+  if (removed.length > 0) {
+    console.log(`[SW] Removed orphaned temp cache(s): ${removed.join(', ')}`);
+  }
+  if (removed.length < doomed.length) {
+    console.warn(
+      `[SW] Could not remove temp cache(s): ` +
+        doomed.filter((_, i) => !results[i]).join(', '),
+    );
+  }
 }
 
 /**

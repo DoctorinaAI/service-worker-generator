@@ -6,6 +6,8 @@ import {
   getTempCacheName,
   swapCaches,
 } from './cache-manager';
+import { reportIfQuotaExceeded } from './quota';
+import { readableVersions } from './registration';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -41,6 +43,7 @@ async function handleActivate(
       // half-finished swap. Only this version's caches: other versions'
       // belong to workers installing beside this one, and to other apps
       // that share the prefix.
+      reportIfQuotaExceeded('swapping the temp cache into the content cache', error);
       console.error('[SW] Cache swap failed, dropping this version\'s caches:', error);
       await Promise.all(
         [
@@ -73,18 +76,9 @@ async function handleActivate(
 
 /**
  * Versions of the workers installing or waiting in this registration, read
- * from the `?v=` that bootstrap registers them with.
+ * from the `?v=` that bootstrap registers them with. An unparsable URL
+ * names no version to keep.
  */
 function pendingVersions(): string[] {
-  const versions: string[] = [];
-  for (const worker of [self.registration.installing, self.registration.waiting]) {
-    if (!worker) continue;
-    try {
-      const v = new URL(worker.scriptURL).searchParams.get('v');
-      if (v) versions.push(v);
-    } catch {
-      // An unparsable URL names no version to keep.
-    }
-  }
-  return versions;
+  return readableVersions(['installing', 'waiting']);
 }

@@ -93,6 +93,11 @@ describe('createInstallHandler', () => {
   });
 
   it('deletes the temp cache and rethrows when a Core precache fails', async () => {
+    // 5xx is retried with backoff now; collapse the delays.
+    const origSetTimeout = globalThis.setTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      fn: () => void,
+    ) => origSetTimeout(fn, 0)) as unknown as typeof setTimeout);
     installMockFetch(async () => textResponse('down', 500));
     const manifest: ResourceManifest = {
       'main.dart.js': {
@@ -190,5 +195,91 @@ describe('createInstallHandler', () => {
     // Empty manifest means nothing gets fetched, but precacheResources
     // still opens the temp cache.
     expect(await mockCaches.keys()).toContain('myorg-app-temp-build-42');
+  });
+});
+
+describe('install — orphaned temp caches', () => {
+  let mockCaches: MockCacheStorage;
+
+  beforeEach(() => {
+    mockCaches = installMockCaches();
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    installMockFetch(async () => textResponse('ok'));
+  });
+
+  afterEach(() => {
+    delete (self as unknown as { registration?: unknown }).registration;
+    vi.restoreAllMocks();
+  });
+
+  const worker = (v: string | null): { scriptURL: string } => ({
+    scriptURL: v === null ? 'not a url' : `${self.location.origin}/sw.js?v=${v}`,
+  });
+
+  async function install(version: string): Promise<void> {
+    const handler = createInstallHandler('app', version, {}, createProgressReporter(version, {}));
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+  }
+
+  it('removes temp caches of abandoned versions at the start of install', async () => {
+    for (const name of [
+      'app-temp-v1', // abandoned waiting worker of an older deploy
+      'app-temp-v2', // active
+      'app-temp-v3', // waiting
+      'app-v2',
+      'app-manifest',
+      'app2-temp-v1',
+    ]) {
+      await mockCaches.open(name);
+    }
+    (self as unknown as { registration: unknown }).registration = {
+      installing: worker('v4'),
+      waiting: worker('v3'),
+      active: worker('v2'),
+    };
+    await install('v4');
+    expect((await mockCaches.keys()).sort()).toEqual(
+      ['app-temp-v2', 'app-temp-v3', 'app-temp-v4', 'app-v2', 'app-manifest', 'app2-temp-v1'].sort(),
+    );
+  });
+
+  it('keeps its own temp cache even without a registration', async () => {
+    await mockCaches.open('app-temp-v1');
+    await mockCaches.open('app-temp-v4');
+    await install('v4');
+    expect((await mockCaches.keys()).sort()).toEqual(['app-temp-v4']);
+  });
+
+  it('removes nothing while the waiting worker has no readable version', async () => {
+    await mockCaches.open('app-temp-v1');
+    (self as unknown as { registration: unknown }).registration = {
+      installing: worker('v4'),
+      waiting: worker(null),
+      active: worker('v2'),
+    };
+    await install('v4');
+    expect(await mockCaches.keys()).toContain('app-temp-v1');
+  });
+
+  it('an active worker without a readable version keeps nothing extra', async () => {
+    await mockCaches.open('app-temp-v1');
+    (self as unknown as { registration: unknown }).registration = {
+      installing: worker('v4'),
+      waiting: null,
+      active: worker(null),
+    };
+    await install('v4');
+    expect(await mockCaches.keys()).not.toContain('app-temp-v1');
+  });
+
+  it('still installs when the cleanup fails', async () => {
+    const keys = vi.spyOn(mockCaches, 'keys').mockRejectedValueOnce(new Error('boom'));
+    await install('v4');
+    expect(keys).toHaveBeenCalled();
+    expect(mockCaches.peek('app-temp-v4')).toBeDefined();
   });
 });

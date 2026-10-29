@@ -48,7 +48,9 @@ export class BootstrapAPI {
     if (this._disposed) return;
 
     this._state = { phase, percent, message };
-    this.widget.updateProgress(percent, message);
+    this.guardWidget('updateProgress', () =>
+      this.widget.updateProgress(percent, message),
+    );
 
     for (const cb of this.subscribers) {
       try {
@@ -80,7 +82,20 @@ export class BootstrapAPI {
    * Show an error in the loading widget.
    */
   error(message: string): void {
-    this.widget.showError(message);
+    this.guardWidget('showError', () => this.widget.showError(message));
+  }
+
+  /**
+   * Run a widget call that must never break loading. The widget only
+   * renders; an exception there (a strict CSP, Trusted Types, a DOM the
+   * page changed underneath it) is logged and the pipeline goes on.
+   */
+  private guardWidget(step: string, fn: () => void): void {
+    try {
+      fn();
+    } catch (e) {
+      console.error(`[Bootstrap] Loading widget ${step} failed:`, e);
+    }
   }
 
   /**
@@ -140,7 +155,7 @@ export class BootstrapAPI {
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
-    this.widget.dispose();
+    this.guardWidget('dispose', () => this.widget.dispose());
     this.subscribers.clear();
   }
 }

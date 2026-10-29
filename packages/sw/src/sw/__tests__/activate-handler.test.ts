@@ -273,4 +273,24 @@ describe('createActivateHandler', () => {
     expect(remaining.some((n) => n.startsWith('app-'))).toBe(false);
     expect(remaining).toContain('other');
   });
+
+  it('logs a quota failure of the swap distinctly, and recovers as before', async () => {
+    (self as unknown as { registration: unknown }).registration = {};
+    const temp = await mockCaches.open('app-temp-v2');
+    await temp.put(new Request('main.dart.js'), textResponse('x'));
+    const content = await mockCaches.open('app-v2');
+    vi.spyOn(content, 'put').mockRejectedValue(new DOMException('full', 'QuotaExceededError'));
+
+    const handler = createActivateHandler('app', 'v2', {});
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    const logged = errorSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n');
+    expect(logged).toMatch(/quota exceeded/i);
+    // Recovery unchanged: this version's caches are dropped.
+    expect(mockCaches.peek('app-v2')).toBeUndefined();
+    expect(mockCaches.peek('app-temp-v2')).toBeUndefined();
+    expect(claimSpy).toHaveBeenCalledOnce();
+  });
 });

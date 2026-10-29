@@ -32,12 +32,18 @@ interface FakeFetchEvent {
 
 function makeEvent(
   url: string,
-  options: { method?: string; mode?: RequestMode; preload?: Response } = {},
+  options: {
+    method?: string;
+    mode?: RequestMode;
+    preload?: Response;
+    headers?: Record<string, string>;
+  } = {},
 ): FakeFetchEvent {
   // Build an underlying Request without the mode option (undici rejects
   // mode: 'navigate'), then overlay mode as a plain property.
   const baseInit: RequestInit = {};
   if (options.method) baseInit.method = options.method;
+  if (options.headers) baseInit.headers = options.headers;
   const baseRequest = new Request(url, baseInit);
   const requestLike = new Proxy(baseRequest, {
     get(target, prop) {
@@ -530,5 +536,205 @@ describe('handleFetch — unusable CacheStorage', () => {
 
     expect(response.status).toBe(503);
     expect(await response.text()).toBe('Offline');
+  });
+});
+
+describe('handleFetch — audit #30', () => {
+  let mockCaches: MockCacheStorage;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    mockCaches = installMockCaches();
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const bytes = (n: number): Uint8Array<ArrayBuffer> => new Uint8Array(n).fill(2);
+
+  /** Make put read the body fully, like the real Cache API. */
+  function consumeOnPut(cache: Cache): void {
+    const original = cache.put.bind(cache);
+    vi.spyOn(cache, 'put').mockImplementation(async (req, response) => {
+      const r = response as Response;
+      const buf = await r.arrayBuffer();
+      await original(req, new Response(buf, { status: r.status, headers: r.headers }));
+    });
+  }
+
+  function instantTimers(): void {
+    const origSetTimeout = globalThis.setTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void) =>
+      origSetTimeout(fn, 0)) as unknown as typeof setTimeout);
+  }
+
+  describe('Range requests', () => {
+    it('passes a Range request straight to the network, even for a cached entry', async () => {
+      const cache = await mockCaches.open('app-v1');
+      await cache.put(new Request('logo.png'), textResponse('cached'));
+      const event = makeEvent(`${ORIGIN}/logo.png`, { headers: { Range: 'bytes=0-0' } });
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      expect(event.respondWith).not.toHaveBeenCalled();
+    });
+
+    it('passes a Range request for a Core entry through as well', () => {
+      const event = makeEvent(`${ORIGIN}/main.dart.js`, { headers: { range: 'bytes=10-' } });
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      expect(event.respondWith).not.toHaveBeenCalled();
+    });
+
+    it('does not store a 206 that reaches the cache-first path', async () => {
+      installMockFetch(async () => new Response('x', { status: 206 }));
+      const cache = await mockCaches.open('app-v1');
+      const event = makeEvent(`${ORIGIN}/logo.png`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      const response = await event._responded!;
+      expect(response.status).toBe(206);
+      expect(await cache.match(new Request('logo.png'))).toBeUndefined();
+    });
+  });
+
+  describe('lazy size check', () => {
+    it('does not store a truncated body, but still serves it', async () => {
+      installMockFetch(async () => new Response(bytes(7)));
+      const cache = await mockCaches.open('app-v1');
+      consumeOnPut(cache);
+      const event = makeEvent(`${ORIGIN}/logo.png`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      const response = await event._responded!;
+      expect(response.status).toBe(200);
+      expect((await response.arrayBuffer()).byteLength).toBe(7);
+      expect(await cache.match(new Request('logo.png'))).toBeUndefined();
+      expect(warnSpy.mock.calls.map((c: unknown[]) => c.map(String).join(' ')).join('\n')).toMatch(
+        /logo\.png.*expected 30 bytes.*received 7/,
+      );
+    });
+
+    it('stores a body of the right size', async () => {
+      installMockFetch(async () => new Response(bytes(30)));
+      const cache = await mockCaches.open('app-v1');
+      consumeOnPut(cache);
+      const event = makeEvent(`${ORIGIN}/logo.png`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      const response = await event._responded!;
+      expect((await response.arrayBuffer()).byteLength).toBe(30);
+      expect(await cache.match(new Request('logo.png'))).toBeDefined();
+    });
+  });
+
+  describe('quota diagnostics', () => {
+    it('logs a quota error on the lazy write distinctly and still serves', async () => {
+      installMockFetch(async () => new Response(bytes(30)));
+      const cache = await mockCaches.open('app-v1');
+      vi.spyOn(cache, 'put').mockRejectedValue(new DOMException('full', 'QuotaExceededError'));
+      const event = makeEvent(`${ORIGIN}/logo.png`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      const response = await event._responded!;
+      expect(response.status).toBe(200);
+      expect(errorSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n')).toMatch(
+        /quota exceeded.*logo\.png/i,
+      );
+    });
+
+    it('logs a quota error on the shell write distinctly', async () => {
+      installMockFetch(async () => textResponse('<html></html>'));
+      const cache = await mockCaches.open('app-v1');
+      vi.spyOn(cache, 'put').mockRejectedValue(new DOMException('full', 'QuotaExceededError'));
+      const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      const response = await event._responded!;
+      expect(await response.text()).toBe('<html></html>');
+      expect(errorSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n')).toMatch(
+        /quota exceeded.*index\.html/i,
+      );
+    });
+  });
+
+  describe('lazy refill of Core/Required', () => {
+    it('refills a Core entry with the hash-busted URL and cache: reload', async () => {
+      const spy = installMockFetch(async () => new Response(bytes(100)));
+      await mockCaches.open('app-v1');
+      const event = makeEvent(`${ORIGIN}/main.dart.js`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await event._responded!;
+      expect(spy).toHaveBeenCalledOnce();
+      const sent = spy.mock.calls[0]![0] as Request;
+      expect(sent.url).toBe(`${ORIGIN}/main.dart.js?v=h-main`);
+      expect(sent.cache).toBe('reload');
+    });
+
+    it('refills a Required entry the same way', async () => {
+      const spy = installMockFetch(async () => new Response(bytes(50)));
+      await mockCaches.open('app-v1');
+      const event = makeEvent(`${ORIGIN}/AssetManifest.json`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await event._responded!;
+      const sent = spy.mock.calls[0]![0] as Request;
+      expect(sent.url).toBe(`${ORIGIN}/AssetManifest.json?v=h-am`);
+      expect(sent.cache).toBe('reload');
+    });
+
+    it('keeps the query string the page sent', async () => {
+      const spy = installMockFetch(async () => new Response(bytes(100)));
+      await mockCaches.open('app-v1');
+      const event = makeEvent(`${ORIGIN}/main.dart.js?token=abc`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await event._responded!;
+      const sent = spy.mock.calls[0]![0] as Request;
+      expect(sent.url).toBe(`${ORIGIN}/main.dart.js?token=abc&v=h-main`);
+    });
+
+    it('fetches Optional entries with the page request, as before', async () => {
+      const spy = installMockFetch(async () => new Response(bytes(30)));
+      await mockCaches.open('app-v1');
+      const event = makeEvent(`${ORIGIN}/logo.png`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await event._responded!;
+      const sent = spy.mock.calls[0]![0] as Request;
+      expect(sent.url).toBe(`${ORIGIN}/logo.png`);
+    });
+
+    it('falls back to the page request when the busted URL is refused', async () => {
+      const spy = installMockFetch(async (req) =>
+        req.url.includes('v=') ? textResponse('forbidden', 403) : new Response(bytes(100)),
+      );
+      await mockCaches.open('app-v1');
+      const event = makeEvent(`${ORIGIN}/main.dart.js`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      const response = await event._responded!;
+      expect(response.status).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect((spy.mock.calls[1]![0] as Request).url).toBe(`${ORIGIN}/main.dart.js`);
+    });
+
+    it('falls back to one plain attempt when the busted fetch throws', async () => {
+      instantTimers();
+      const spy = installMockFetch(async (req) => {
+        if (req.url.includes('v=')) throw new TypeError('Failed to fetch');
+        return new Response(bytes(100));
+      });
+      await mockCaches.open('app-v1');
+      const event = makeEvent(`${ORIGIN}/main.dart.js`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      const response = await event._responded!;
+      expect(response.status).toBe(200);
+      // Three busted attempts (the existing retry budget), then one plain.
+      expect(spy).toHaveBeenCalledTimes(4);
+    });
+
+    it('answers 503 offline after the fallback attempt also fails', async () => {
+      instantTimers();
+      installMockFetch(async () => {
+        throw new TypeError('Failed to fetch');
+      });
+      await mockCaches.open('app-v1');
+      const event = makeEvent(`${ORIGIN}/main.dart.js`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      expect((await event._responded!).status).toBe(503);
+    });
   });
 });

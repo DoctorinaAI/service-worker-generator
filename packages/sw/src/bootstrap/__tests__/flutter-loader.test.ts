@@ -129,6 +129,47 @@ describe('loadFlutterApp', () => {
     view.remove();
   });
 
+  it('reports an engine initialisation failure to onEngineError', async () => {
+    // flutter.js discards the promise of onEntrypointLoaded, so without this
+    // callback an engine that cannot fetch its .wasm fails silently.
+    const failure = new Error('canvaskit.wasm blocked');
+    const initializeEngine = vi.fn(async () => {
+      throw failure;
+    });
+    let inner: Promise<void> | undefined;
+    installLoader(async (opts: unknown) => {
+      const { onEntrypointLoaded } = opts as {
+        onEntrypointLoaded: (init: unknown) => Promise<void>;
+      };
+      inner = onEntrypointLoaded({ initializeEngine });
+      inner.catch(() => undefined);
+    });
+    const onEngineError = vi.fn();
+
+    await loadFlutterApp('/cdn/', 'rev', [{}], vi.fn(), onEngineError);
+    await inner?.catch(() => undefined);
+
+    expect(onEngineError).toHaveBeenCalledWith(failure);
+    // Still rejected, as before, for flutter.js and the console.
+    await expect(inner).rejects.toBe(failure);
+  });
+
+  it('keeps working without an onEngineError callback', async () => {
+    const initializeEngine = vi.fn(async () => {
+      throw new Error('x');
+    });
+    let inner: Promise<void> | undefined;
+    installLoader(async (opts: unknown) => {
+      const { onEntrypointLoaded } = opts as {
+        onEntrypointLoaded: (init: unknown) => Promise<void>;
+      };
+      inner = onEntrypointLoaded({ initializeEngine });
+      inner.catch(() => undefined);
+    });
+    await loadFlutterApp('/cdn/', 'rev', [{}], vi.fn());
+    await expect(inner).rejects.toThrow('x');
+  });
+
   it('throws when _flutter.loader is not available', async () => {
     // Simulate bootstrap without the inlined flutter.js IIFE.
     delete (window as FlutterWindow)._flutter;
