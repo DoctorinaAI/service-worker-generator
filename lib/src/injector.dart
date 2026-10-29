@@ -17,6 +17,7 @@ String injectSWConfig({
   required String cachePrefix,
   required String version,
   required Map<String, ResourceEntry> manifest,
+  String engineRevision = '',
 }) {
   final config = {
     'cachePrefix': cachePrefix,
@@ -24,6 +25,9 @@ String injectSWConfig({
     'manifest': {
       for (final entry in manifest.entries) entry.key: entry.value.toJson(),
     },
+    // Answers `getVersion`, so a later bootstrap can tell whether the code
+    // this worker serves runs on its engine. Omitted when unknown.
+    if (engineRevision.isNotEmpty) 'engineRevision': engineRevision,
   };
 
   final json = jsonEncode(config);

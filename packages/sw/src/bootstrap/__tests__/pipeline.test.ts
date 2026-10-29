@@ -5,7 +5,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { runPipeline } from '../pipeline';
 import type { ResolvedConfig } from '../config';
 import { BootstrapAPI } from '../api';
-import { listenForSWMessages } from '../sw-registration';
+import {
+  listenForSWMessages,
+  registerServiceWorker,
+  settleUpdateAtBootstrap,
+} from '../sw-registration';
 import { loadCanvasKit } from '../canvaskit-loader';
 import { loadFlutterApp } from '../flutter-loader';
 import type { SWProgressMessage } from '../../shared/types';
@@ -16,6 +20,7 @@ vi.mock('../sw-registration', () => ({
   registerServiceWorker: vi.fn(async () => null),
   listenForSWMessages: vi.fn(() => () => undefined),
   reloadIfForeignController: vi.fn(async () => false),
+  settleUpdateAtBootstrap: vi.fn(async () => false),
 }));
 vi.mock('../canvaskit-loader', () => ({
   detectBrowserCaps: vi.fn(() => ({
@@ -206,6 +211,20 @@ describe('runPipeline', () => {
       expect.anything(),
       false,
     );
+  });
+
+  it('stops before loading the engine when the page reloads for an update', async () => {
+    // The previous build's worker would serve its Dart code to this
+    // build's engine; the reload lands the page on the new worker.
+    const registration = {} as ServiceWorkerRegistration;
+    vi.mocked(registerServiceWorker).mockResolvedValueOnce(registration);
+    vi.mocked(settleUpdateAtBootstrap).mockResolvedValueOnce(true);
+    const load = vi.mocked(loadCanvasKit);
+    load.mockClear();
+    runPipeline(resolved());
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+    expect(settleUpdateAtBootstrap).toHaveBeenCalledWith(registration, 'rev');
+    expect(load).not.toHaveBeenCalled();
   });
 
   it('auto-disposes the API when flutter-first-frame is dispatched', async () => {

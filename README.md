@@ -464,7 +464,11 @@ two files above — see [Server Configuration](#server-configuration).
 - **Body stall watchdog**: a pre-cached body idle for 30s is cancelled, so a dead
   stream cannot hang `install` — and with it every `register()` on the origin
 - **Fetch retry**: 3 attempts with exponential backoff (1s → 2s → 4s + jitter)
-- **SW activation timeout**: 4s, continues without SW on timeout
+- **SW activation timeout**: 4s on a first visit, continues without SW on timeout.
+  A page that already has a controller boots with it straight away
+- **Engine change after a deploy**: when the new build runs on a different Flutter
+  engine, the first load waits (up to 60s) for the new worker and switches to it,
+  so the previous build's cached Dart code never meets the new engine
 - **SW step budget**: 10s for the whole registration step; the app boots uncached
   rather than waiting on a blocked service worker job queue
 - **Error recovery**: Always calls `self.clients.claim()` even on errors
@@ -499,7 +503,7 @@ messages with `counted: true`, and only from your own `swVersion` — see
 | Message                  | Action                                        |
 | ------------------------ | --------------------------------------------- |
 | `'skipWaiting'`          | Immediately activate a waiting service worker |
-| `{ type: 'getVersion' }` | Respond with current SW version               |
+| `{ type: 'getVersion' }` | Respond with the SW version and engine revision |
 
 ## Architecture
 

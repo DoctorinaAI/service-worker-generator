@@ -1,7 +1,9 @@
 import {
   RESET_TIMEOUT_MS,
   SW_BOOTSTRAP_TIMEOUT_MS,
+  SW_ENGINE_QUERY_TIMEOUT_MS,
   SW_REGISTRATION_TIMEOUT_MS,
+  SW_UPDATE_INSTALL_TIMEOUT_MS,
 } from '../shared/constants';
 import { withTimeout } from '../shared/utils';
 import { logPhase } from './console-logger';
@@ -90,6 +92,16 @@ async function registerAndActivate(
     // proceeds and the app is running, further updates go through the
     // user-approval flow via `sw-update-available` / `applyUpdate`.
     if (await activateWaitingAtBootstrap(registration)) {
+      return registration;
+    }
+
+    // A page that already has a controller does not wait here. A newer
+    // worker installing or waiting beside it cannot activate while this
+    // page is open, so waiting would only spend the full timeout and then
+    // boot with the current controller anyway. Whether this load must
+    // switch to the new worker first is `settleUpdateAtBootstrap`'s call.
+    const pending = registration.installing ?? registration.waiting;
+    if (pending && navigator.serviceWorker.controller) {
       return registration;
     }
 
@@ -204,6 +216,162 @@ async function activateWaitingAtBootstrap(
 
   logPhase('SW', 'New worker took control during bootstrap');
   return true;
+}
+
+/** Session flag: this tab already reloaded to reach a new engine. */
+const UPDATE_RELOAD_KEY = 'sw-engine-update-reload';
+
+/**
+ * Make the first load after a deploy run on one build, when the Flutter
+ * engine changed.
+ *
+ * Until a new worker takes over, the previous one controls the page and
+ * serves the previous build's `main.dart.*` from its cache, while
+ * `index.html` and this `bootstrap.js` are already the new build's — and
+ * this bootstrap loads CanvasKit or skwasm for the new engine revision.
+ * On the same engine that mix runs (flutter.js and the engine only change
+ * with the Flutter SDK), so the page boots with its controller at once and
+ * the new worker takes over on the next load. On a different engine it
+ * fails in the engine itself (`WebAssembly.instantiate(): Import #N`), so
+ * this waits for the new worker to install, hands control to it before
+ * any app file is requested, and reloads once if the handover is lost.
+ *
+ * A controller from a release that predates `engineRevision` in its
+ * `getVersion` reply counts as a different engine: the first load after
+ * upgrading to this release waits once, which is safe either way.
+ *
+ * Returns `true` when the page is reloading and the pipeline must stop.
+ */
+export async function settleUpdateAtBootstrap(
+  registration: ServiceWorkerRegistration,
+  engineRevision: string,
+): Promise<boolean> {
+  const controller = navigator.serviceWorker?.controller;
+  const pending = registration.installing ?? registration.waiting;
+  if (!controller || !pending) {
+    clearUpdateReloadFlag();
+    return false;
+  }
+  // A worker already waiting when bootstrap started has had its handover
+  // attempt in `registerAndActivate`; trying again would only repeat it.
+  const handoverTried = pending === registration.waiting;
+
+  const controllerEngine = await queryControllerEngine(controller);
+  if (engineRevision && controllerEngine === engineRevision) {
+    logPhase(
+      'SW',
+      'Newer worker pending on the same engine; continuing with the current one until reload',
+    );
+    return false;
+  }
+
+  logPhase(
+    'SW',
+    controllerEngine
+      ? `Engine changed (${controllerEngine.slice(0, 10)} → ${engineRevision.slice(0, 10)}); switching to the new worker first`
+      : 'Engine of the current worker is unknown; switching to the new worker first',
+  );
+
+  if (!(await waitForInstalled(pending, SW_UPDATE_INSTALL_TIMEOUT_MS))) {
+    logPhase('SW', 'New worker did not install; continuing with the current one');
+    return false;
+  }
+  if (!handoverTried && (await activateWaitingAtBootstrap(registration))) {
+    clearUpdateReloadFlag();
+    return false;
+  }
+
+  // The handover lost a race with a request this page made, and the new
+  // worker stays waiting while the page is open. Nothing of the app has
+  // loaded yet, so a reload is cheap; once is enough to avoid a loop.
+  try {
+    if (sessionStorage.getItem(UPDATE_RELOAD_KEY)) {
+      logPhase('SW', 'Handover to the new worker failed again; continuing with the current one');
+      return false;
+    }
+    sessionStorage.setItem(UPDATE_RELOAD_KEY, '1');
+  } catch {
+    // Without a way to guarantee a single reload, don't reload at all.
+    return false;
+  }
+  logPhase('SW', 'Handover to the new worker did not land; reloading once');
+  self.location.reload();
+  return true;
+}
+
+function clearUpdateReloadFlag(): void {
+  try {
+    sessionStorage.removeItem(UPDATE_RELOAD_KEY);
+  } catch {
+    // Blocked storage: the flag could not have been set either.
+  }
+}
+
+/**
+ * Ask [controller] for the engine revision of the build it serves.
+ * Resolves `null` when it does not say, or does not answer in time.
+ */
+function queryControllerEngine(controller: ServiceWorker): Promise<string | null> {
+  const container = navigator.serviceWorker;
+  const requestId = `engine-${Math.random().toString(36).slice(2)}`;
+
+  return new Promise<string | null>((resolve) => {
+    const onMessage = (event: MessageEvent): void => {
+      const data = event.data as {
+        type?: unknown;
+        requestId?: unknown;
+        engineRevision?: unknown;
+      } | null;
+      if (data?.type !== 'version' || data.requestId !== requestId) return;
+      const revision = data.engineRevision;
+      done(typeof revision === 'string' && revision !== '' ? revision : null);
+    };
+    const timer = setTimeout(() => done(null), SW_ENGINE_QUERY_TIMEOUT_MS);
+    function done(revision: string | null): void {
+      clearTimeout(timer);
+      container.removeEventListener('message', onMessage);
+      resolve(revision);
+    }
+
+    container.addEventListener('message', onMessage);
+    try {
+      // Messages to the page are queued until the queue is enabled, which
+      // otherwise happens only once the document has finished parsing.
+      container.startMessages?.();
+      controller.postMessage({ type: 'getVersion', requestId });
+    } catch {
+      done(null);
+    }
+  });
+}
+
+/**
+ * Resolve `true` once [worker] has installed, `false` if it turns
+ * redundant (its install failed) or [timeoutMs] passes first.
+ */
+function waitForInstalled(worker: ServiceWorker, timeoutMs: number): Promise<boolean> {
+  const settled = (): boolean | null => {
+    if (worker.state === 'redundant') return false;
+    if (worker.state !== 'installing' && worker.state !== 'parsed') return true;
+    return null;
+  };
+  const now = settled();
+  if (now !== null) return Promise.resolve(now);
+
+  return new Promise<boolean>((resolve) => {
+    const onChange = (): void => {
+      const result = settled();
+      if (result === null) return;
+      clearTimeout(timer);
+      worker.removeEventListener('statechange', onChange);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      worker.removeEventListener('statechange', onChange);
+      resolve(false);
+    }, timeoutMs);
+    worker.addEventListener('statechange', onChange);
+  });
 }
 
 /**

@@ -22,7 +22,7 @@ declare const self: ServiceWorkerGlobalScope;
 // would DCE it out based on the pre-injection string type).
 const config: SWConfig = "__INJECT_SW_CONFIG__" as unknown as SWConfig;
 
-const { cachePrefix, version, manifest } = config;
+const { cachePrefix, version, manifest, engineRevision } = config;
 
 // Single source of truth for what progress is measured against: the
 // pre-cached set, its byte total, and per-message membership. Every
@@ -55,4 +55,4 @@ self.addEventListener('activate', createActivateHandler(cachePrefix, version, ma
 self.addEventListener('fetch', (event: FetchEvent) => {
   handleFetch(event, manifest, cachePrefix, version, progress);
 });
-self.addEventListener('message', createMessageHandler(version));
+self.addEventListener('message', createMessageHandler(version, engineRevision));

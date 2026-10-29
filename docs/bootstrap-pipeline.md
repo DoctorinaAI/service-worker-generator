@@ -16,7 +16,19 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
 ### Stage 2: Service Worker Registration (1% → 2%)
 - Unregister any existing Flutter service worker (`flutter_service_worker.js`)
 - Register `sw.js` with version query param (`sw.js?v={version}`)
-- Wait for activation with timeout (4s default)
+- A worker left waiting by an earlier load is handed control (`skipWaiting`)
+- If the page already has a controller, it does not wait for a newer worker that
+  is installing or waiting: one cannot activate while the page is open
+- Otherwise (first visit) wait for activation with timeout (4s default)
+- First load after a deploy, while the previous build's worker controls the page:
+  that worker would serve the previous build's `main.dart.*` next to this
+  build's engine. The bootstrap asks it for its engine revision (`getVersion`,
+  500ms). On the same engine the page boots with it at once and the new worker
+  takes over on the next load. On a different or unknown engine (workers from
+  earlier releases don't report it) the bootstrap waits for the new worker to
+  install (up to 60s, with the precache progress on screen), hands control to it
+  before any app file is requested, and reloads once if the handover is lost.
+  If the install fails, the page boots with the current controller
 - The whole stage is capped at 10s: service worker jobs are serialised per scope,
   so a stuck install elsewhere leaves `register()` pending indefinitely
 - On timeout or failure: continue without SW (app still works, just no caching)

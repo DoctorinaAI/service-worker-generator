@@ -65,6 +65,18 @@ describe('createMessageHandler', () => {
     });
   });
 
+  it('reports the engine revision on getVersion when the build has one', () => {
+    const handler = createMessageHandler('v1', 'engine-abc');
+    const event = makeEvent({ type: 'getVersion', requestId: 'r1' });
+    handler(event as unknown as ExtendableMessageEvent);
+    expect(event.source!.postMessage).toHaveBeenCalledWith({
+      type: 'version',
+      version: 'v1',
+      engineRevision: 'engine-abc',
+      requestId: 'r1',
+    });
+  });
+
   it('also accepts skipWaiting as a structured message', () => {
     const handler = createMessageHandler('v1');
     const event = makeEvent({ type: 'skipWaiting' });

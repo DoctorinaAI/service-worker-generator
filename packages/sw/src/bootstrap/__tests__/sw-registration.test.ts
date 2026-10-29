@@ -7,15 +7,18 @@ import {
   registerServiceWorker,
   listenForSWMessages,
   reloadIfForeignController,
+  settleUpdateAtBootstrap,
 } from '../sw-registration';
 import {
   RESET_TIMEOUT_MS,
   SW_BOOTSTRAP_TIMEOUT_MS,
+  SW_ENGINE_QUERY_TIMEOUT_MS,
+  SW_UPDATE_INSTALL_TIMEOUT_MS,
   SW_REGISTRATION_TIMEOUT_MS,
 } from '../../shared/constants';
 
 interface FakeWorker {
-  state: 'installing' | 'installed' | 'activating' | 'activated';
+  state: 'installing' | 'installed' | 'activating' | 'activated' | 'redundant';
   scriptURL: string;
   _listeners: Array<() => void>;
   addEventListener: (evt: 'statechange', cb: () => void) => void;
@@ -277,6 +280,24 @@ describe('registerServiceWorker', () => {
     await vi.advanceTimersByTimeAsync(SW_REGISTRATION_TIMEOUT_MS * 2 + 1);
     const result = await promise;
     expect(result).toBe(registration);
+  });
+
+  it('does not wait for a newly installing worker when the page already has a controller', async () => {
+    vi.useFakeTimers();
+    // The first load after a deploy: register() starts installing the new
+    // build while the previous one controls this page, so the new worker
+    // cannot activate before the page closes. Whether to switch to it is
+    // settleUpdateAtBootstrap's decision, not a 4s wait here.
+    const installing = makeWorker('installing', '/sw.js?v=new');
+    const registration = makeRegistration(installing, 'installing');
+    registration.active = makeWorker('activated', '/sw.js?v=old');
+    const register = vi.fn(async () => registration);
+    installSwContainer({ register, controller: registration.active });
+
+    const promise = registerServiceWorker('sw.js', 'new');
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(promise).resolves.toBe(registration);
+    vi.useRealTimers();
   });
 
   it('dispatches sw-update-available when a new worker installs alongside an active controller', async () => {
@@ -579,6 +600,224 @@ describe('activateWaitingSW', () => {
     await expect(
       activateWaitingSW(makeRegistration(null) as unknown as ServiceWorkerRegistration),
     ).resolves.toBe(false);
+  });
+});
+
+describe('settleUpdateAtBootstrap', () => {
+  const NEW_ENGINE = 'engine-new-0000';
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let reloadSpy: ReturnType<typeof vi.fn>;
+  let originalLocation: Location;
+
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    sessionStorage.clear();
+    originalLocation = window.location;
+    reloadSpy = vi.fn();
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { ...originalLocation, reload: reloadSpy },
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    logSpy.mockRestore();
+    sessionStorage.clear();
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: originalLocation,
+    });
+    try {
+      delete (navigator as unknown as { serviceWorker?: unknown }).serviceWorker;
+    } catch {
+      // ignore
+    }
+  });
+
+  /**
+   * The previous build's worker, controlling the page. [engine] is what it
+   * puts in its `getVersion` reply: a revision, `undefined` for a worker
+   * from a release that predates the field, or `null` for no reply.
+   */
+  function setUp(options: {
+    engine: string | undefined | null;
+    pendingState: 'installing' | 'installed';
+  }): {
+    registration: FakeRegistration;
+    pending: FakeWorker & { postMessage: ReturnType<typeof vi.fn> };
+    controller: { scriptURL: string; postMessage: ReturnType<typeof vi.fn> };
+    container: ReturnType<typeof installSwContainer>;
+    install: () => void;
+    fail: () => void;
+    changeController: () => void;
+  } {
+    const pending = makeWorker(options.pendingState, '/sw.js?v=new') as FakeWorker & {
+      postMessage: ReturnType<typeof vi.fn>;
+    };
+    pending.postMessage = vi.fn();
+    const registration = makeRegistration(
+      pending,
+      options.pendingState === 'installing' ? 'installing' : 'waiting',
+    );
+    registration.active = makeWorker('activated', '/sw.js?v=old');
+
+    const controller = {
+      scriptURL: '/sw.js?v=old',
+      postMessage: vi.fn((msg: { type: string; requestId: string }) => {
+        if (options.engine === null || msg.type !== 'getVersion') return;
+        const data: Record<string, string> = {
+          type: 'version',
+          version: 'old',
+          requestId: msg.requestId,
+        };
+        if (options.engine !== undefined) data.engineRevision = options.engine;
+        queueMicrotask(() => {
+          for (const cb of [...container._messageListeners]) {
+            cb({ data } as MessageEvent);
+          }
+        });
+      }),
+    };
+    const container = installSwContainer({ controller });
+    container.removeEventListener.mockImplementation(
+      (evt: string, cb: (e: MessageEvent) => void) => {
+        if (evt !== 'message') return;
+        const idx = container._messageListeners.indexOf(cb);
+        if (idx >= 0) container._messageListeners.splice(idx, 1);
+      },
+    );
+
+    return {
+      registration,
+      pending,
+      controller,
+      container,
+      install: () => {
+        pending.state = 'installed';
+        registration.installing = null;
+        registration.waiting = pending;
+        pending._listeners.forEach((cb) => cb());
+      },
+      fail: () => {
+        pending.state = 'redundant';
+        registration.installing = null;
+        pending._listeners.forEach((cb) => cb());
+      },
+      changeController: () => {
+        for (const call of container.addEventListener.mock.calls) {
+          if (call[0] === 'controllerchange') (call[1] as () => void)();
+        }
+      },
+    };
+  }
+
+  const settle = (registration: FakeRegistration): Promise<boolean> =>
+    settleUpdateAtBootstrap(
+      registration as unknown as ServiceWorkerRegistration,
+      NEW_ENGINE,
+    );
+
+  it('does nothing when no newer worker is pending', async () => {
+    const { registration, controller } = setUp({ engine: NEW_ENGINE, pendingState: 'installing' });
+    registration.installing = null;
+    await expect(settle(registration)).resolves.toBe(false);
+    expect(controller.postMessage).not.toHaveBeenCalled();
+  });
+
+  it('boots with the current worker at once when the engine is the same', async () => {
+    const { registration, pending } = setUp({ engine: NEW_ENGINE, pendingState: 'installing' });
+    await expect(settle(registration)).resolves.toBe(false);
+    expect(pending.postMessage).not.toHaveBeenCalled();
+    expect(reloadSpy).not.toHaveBeenCalled();
+  });
+
+  it('switches to the new worker before booting when the engine changed', async () => {
+    const env = setUp({ engine: 'engine-old-0000', pendingState: 'installing' });
+    const result = settle(env.registration);
+    await vi.waitFor(() =>
+      expect(env.pending._listeners.length).toBeGreaterThan(0),
+    );
+    // Not before it has installed: an installing worker cannot take over.
+    expect(env.pending.postMessage).not.toHaveBeenCalled();
+
+    env.install();
+    await vi.waitFor(() =>
+      expect(env.pending.postMessage).toHaveBeenCalledWith({ type: 'skipWaiting' }),
+    );
+    env.changeController();
+
+    await expect(result).resolves.toBe(false);
+    expect(reloadSpy).not.toHaveBeenCalled();
+  });
+
+  it('treats a worker that does not report its engine as a different engine', async () => {
+    // Every worker generated before this release replies without it.
+    const env = setUp({ engine: undefined, pendingState: 'installing' });
+    const result = settle(env.registration);
+    await vi.waitFor(() => expect(env.pending._listeners.length).toBeGreaterThan(0));
+    env.install();
+    await vi.waitFor(() => expect(env.pending.postMessage).toHaveBeenCalled());
+    env.changeController();
+    await expect(result).resolves.toBe(false);
+  });
+
+  it('treats a controller that does not answer as a different engine', async () => {
+    vi.useFakeTimers();
+    const env = setUp({ engine: null, pendingState: 'installing' });
+    const result = settle(env.registration);
+    await vi.advanceTimersByTimeAsync(SW_ENGINE_QUERY_TIMEOUT_MS + 1);
+    expect(env.pending._listeners.length).toBeGreaterThan(0);
+    env.install();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(env.pending.postMessage).toHaveBeenCalledWith({ type: 'skipWaiting' });
+    env.changeController();
+    await expect(result).resolves.toBe(false);
+  });
+
+  it('boots with the current worker when the new one fails to install', async () => {
+    const env = setUp({ engine: 'engine-old-0000', pendingState: 'installing' });
+    const result = settle(env.registration);
+    await vi.waitFor(() => expect(env.pending._listeners.length).toBeGreaterThan(0));
+    env.fail();
+    await expect(result).resolves.toBe(false);
+    expect(env.pending.postMessage).not.toHaveBeenCalled();
+    expect(reloadSpy).not.toHaveBeenCalled();
+  });
+
+  it('gives up waiting for an install after its budget', async () => {
+    vi.useFakeTimers();
+    const env = setUp({ engine: 'engine-old-0000', pendingState: 'installing' });
+    const result = settle(env.registration);
+    await vi.advanceTimersByTimeAsync(SW_UPDATE_INSTALL_TIMEOUT_MS + 1);
+    await expect(result).resolves.toBe(false);
+    expect(reloadSpy).not.toHaveBeenCalled();
+  });
+
+  it('reloads once when the handover is lost, and not again', async () => {
+    vi.useFakeTimers();
+    const env = setUp({ engine: 'engine-old-0000', pendingState: 'installing' });
+    const first = settle(env.registration);
+    await vi.advanceTimersByTimeAsync(0);
+    env.install();
+    // No controllerchange: the handover lost its race.
+    await vi.advanceTimersByTimeAsync(SW_REGISTRATION_TIMEOUT_MS + 1);
+    await expect(first).resolves.toBe(true);
+    expect(reloadSpy).toHaveBeenCalledOnce();
+
+    // The reloaded page finds the same state: it boots instead of looping.
+    const again = setUp({ engine: 'engine-old-0000', pendingState: 'installed' });
+    await expect(settle(again.registration)).resolves.toBe(false);
+    expect(reloadSpy).toHaveBeenCalledOnce();
+  });
+
+  it('reloads without a second handover when one already failed at registration', async () => {
+    // A worker already waiting at bootstrap had its handover attempt in
+    // registerAndActivate; repeating it would only cost the timeout again.
+    const env = setUp({ engine: 'engine-old-0000', pendingState: 'installed' });
+    await expect(settle(env.registration)).resolves.toBe(true);
+    expect(env.pending.postMessage).not.toHaveBeenCalled();
+    expect(reloadSpy).toHaveBeenCalledOnce();
   });
 });
 

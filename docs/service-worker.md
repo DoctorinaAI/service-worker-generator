@@ -135,7 +135,7 @@ rebuilt copy with the flag dropped, so a host that normalizes
 | Command | Action |
 |---------|--------|
 | `skipWaiting` | Call `self.skipWaiting()` to activate waiting SW |
-| `getVersion` | Respond with current SW version string |
+| `getVersion` | Respond with the SW version and, when the build has one, its Flutter `engineRevision` |
 
 ## Resilience
 

@@ -8,6 +8,7 @@ import {
   registerServiceWorker,
   listenForSWMessages,
   reloadIfForeignController,
+  settleUpdateAtBootstrap,
 } from './sw-registration';
 import {
   detectBrowserCaps,
@@ -164,7 +165,16 @@ async function runPipelineWork(
 
     // Stage 2: Service Worker
     updateProgress('sw', STAGE_PROGRESS.sw, 'Registering service worker');
-    await registerServiceWorker(build.swFilename, build.swVersion);
+    const registration = await registerServiceWorker(
+      build.swFilename,
+      build.swVersion,
+    );
+    if (
+      registration &&
+      (await settleUpdateAtBootstrap(registration, build.engineRevision))
+    ) {
+      return;
+    }
 
     // Stage 3: CanvasKit
     updateProgress(

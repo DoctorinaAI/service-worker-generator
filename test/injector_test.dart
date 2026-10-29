@@ -6,6 +6,17 @@ import 'package:test/test.dart';
 
 void main() {
   group('injectSWConfig', () {
+    test('carries the engine revision when the build has one', () {
+      final result = injectSWConfig(
+        template: '"__INJECT_SW_CONFIG__"',
+        cachePrefix: 'app',
+        version: 'v1',
+        manifest: const {},
+        engineRevision: 'rev123',
+      );
+      expect(result, contains('"engineRevision":"rev123"'));
+    });
+
     test('replaces placeholder with config JSON', () {
       const template =
           '(function(){var config="__INJECT_SW_CONFIG__";start(config)})();';
@@ -32,6 +43,7 @@ void main() {
       expect(result, contains('"hash":"abc123"'));
       expect(result, contains('"category":"core"'));
       expect(result, isNot(contains('__INJECT_SW_CONFIG__')));
+      expect(result, isNot(contains('engineRevision')));
     });
 
     test('throws if placeholder not found', () {
