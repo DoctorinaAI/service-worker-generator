@@ -100,6 +100,22 @@ void main() {
     expect(content, isNot(contains('__INJECT_BOOTSTRAP_CONFIG__')));
   });
 
+  test('bootstrap.js carries the build\'s useLocalCanvasKit choice', () async {
+    // The example may be built with or without --no-web-resources-cdn, so
+    // compare against what Flutter recorded rather than assume either.
+    final flutterBootstrap = io.File(
+      p.join(exampleBuild.path, 'flutter_bootstrap.js'),
+    ).readAsStringSync();
+    final builtLocal = flutterBootstrap.contains('"useLocalCanvasKit":true');
+
+    await generate(GeneratorConfig(inputDir: tempDir.path, version: 'ck-1'));
+
+    final content = io.File(
+      p.join(tempDir.path, 'bootstrap.js'),
+    ).readAsStringSync();
+    expect(content.contains('"useLocalCanvasKit":true'), builtLocal);
+  });
+
   test('cleanup removes Flutter files', () async {
     // Verify preconditions
     expect(

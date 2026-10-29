@@ -352,7 +352,7 @@ The bootstrap replaces Flutter's initialization with a controlled 6-stage pipeli
 | -------------- | ---------- | ------------------------------------------------------------- |
 | Init           | 0% → 1%    | Environment check, browser capability detection               |
 | Service Worker | 1% → 2%    | Register `sw.js`, unregister old Flutter SW, timeout fallback |
-| CanvasKit      | 2% → 20%   | Load from Google CDN, fall back to local `canvaskit/`         |
+| CanvasKit      | 2% → 20%   | Load from Google CDN, fall back to local `canvaskit/` (local only with `--no-web-resources-cdn`) |
 | Assets         | 20% → 80%  | Load `main.dart.js`/`.wasm` via Flutter's loader              |
 | Dart Entry     | 80% → 90%  | Initialize Flutter engine and run app                         |
 | Dart Init      | 90% → 100% | Dart application manages remaining progress                   |
@@ -379,6 +379,8 @@ The bootstrap automatically determines the correct CanvasKit variant:
 3. Selects the appropriate variant (canvaskit, chromium, skwasm, skwasm_heavy, wimp)
 4. Tries Google CDN: `https://www.gstatic.com/flutter-canvaskit/{engineRevision}/{variant}.js`
 5. Falls back to local `canvaskit/` directory on failure
+
+Build with `flutter build web --no-web-resources-cdn` to serve the engine from your own origin: Flutter records the choice in its build config, and the bootstrap then loads from `canvaskit/` without probing the CDN.
 
 ## Global API (window.Bootstrap)
 

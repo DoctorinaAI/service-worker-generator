@@ -90,6 +90,28 @@ _flutter.buildConfig = {"builds":[{"compileTarget":"dartdevc","renderer":"canvas
       expect(info.engineRevision, '');
       expect(info.builds, hasLength(1));
     });
+
+    test('reads useLocalCanvasKit from a --no-web-resources-cdn build', () {
+      io.File(p.join(tempDir.path, 'flutter_bootstrap.js')).writeAsStringSync(
+        '''
+_flutter.buildConfig = {"engineRevision":"rev123","builds":[{"compileTarget":"dart2wasm","renderer":"skwasm"}],"useLocalCanvasKit":true};
+''',
+      );
+
+      final info = extractFlutterBuildInfo(tempDir);
+      expect(info.useLocalCanvasKit, isTrue);
+    });
+
+    test('defaults useLocalCanvasKit to false when Flutter omits it', () {
+      io.File(p.join(tempDir.path, 'flutter_bootstrap.js')).writeAsStringSync(
+        '''
+_flutter.buildConfig = {"engineRevision":"rev123","builds":[{"compileTarget":"dart2wasm","renderer":"skwasm"}]};
+''',
+      );
+
+      final info = extractFlutterBuildInfo(tempDir);
+      expect(info.useLocalCanvasKit, isFalse);
+    });
   });
 
   group('getConfiguredRenderers', () {

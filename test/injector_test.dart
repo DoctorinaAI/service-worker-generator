@@ -174,6 +174,39 @@ void main() {
       expect(result, isNot(contains('uiDefaults')));
     });
 
+    test('passes useLocalCanvasKit through when the build is local', () {
+      const template = 'c="__INJECT_BOOTSTRAP_CONFIG__"';
+      const config = GeneratorConfig(inputDir: 'build/web', version: '1');
+
+      final result = injectBootstrapConfig(
+        template: template,
+        engineRevision: 'rev',
+        swVersion: '1',
+        swFilename: 'sw.js',
+        builds: const [],
+        config: config,
+        useLocalCanvasKit: true,
+      );
+
+      expect(result, contains('"useLocalCanvasKit":true'));
+    });
+
+    test('omits useLocalCanvasKit for CDN builds', () {
+      const template = 'c="__INJECT_BOOTSTRAP_CONFIG__"';
+      const config = GeneratorConfig(inputDir: 'build/web', version: '1');
+
+      final result = injectBootstrapConfig(
+        template: template,
+        engineRevision: 'rev',
+        swVersion: '1',
+        swFilename: 'sw.js',
+        builds: const [],
+        config: config,
+      );
+
+      expect(result, isNot(contains('useLocalCanvasKit')));
+    });
+
     test('bakes uiDefaults from CLI/YAML config into the bootstrap', () {
       const template = 'c="__INJECT_BOOTSTRAP_CONFIG__"';
       const config = GeneratorConfig(

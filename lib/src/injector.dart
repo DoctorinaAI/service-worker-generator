@@ -41,7 +41,9 @@ String injectSWConfig({
 ///
 /// Replaces the placeholder with the build-time config JSON, including
 /// loading-widget defaults so brand colours/titles/logos supplied via
-/// `sw.yaml` or CLI flags are baked in.
+/// `sw.yaml` or CLI flags are baked in. [useLocalCanvasKit] carries
+/// Flutter's `--no-web-resources-cdn` choice through to the bootstrap,
+/// which then loads the engine locally without probing the CDN.
 String injectBootstrapConfig({
   required String template,
   required String engineRevision,
@@ -49,6 +51,7 @@ String injectBootstrapConfig({
   required String swFilename,
   required List<Map<String, dynamic>> builds,
   required GeneratorConfig config,
+  bool useLocalCanvasKit = false,
 }) {
   // Only ship fields that actually differ from bootstrap's hardcoded
   // defaults — otherwise every generated bootstrap.js would embed the
@@ -70,6 +73,8 @@ String injectBootstrapConfig({
     'swVersion': swVersion,
     'swFilename': swFilename,
     'builds': builds,
+    // Omitted when false, like uiDefaults: the bootstrap defaults to CDN.
+    if (useLocalCanvasKit) 'useLocalCanvasKit': true,
     if (uiDefaults.isNotEmpty) 'uiDefaults': uiDefaults,
   };
 

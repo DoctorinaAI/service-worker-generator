@@ -129,9 +129,10 @@ The renderer and variant are determined from Flutter's `buildConfig`:
 | skwasm | default | `skwasm` |
 
 ### Loading Strategy
-1. Try Google CDN: `https://www.gstatic.com/flutter-canvaskit/{engineRevision}/{variant}.js`
-2. On failure (timeout, network error): fall back to local `canvaskit/` directory
-3. Only download the variant files needed — not the entire canvaskit directory
+1. If the app was built with `flutter build web --no-web-resources-cdn`, Flutter records `"useLocalCanvasKit": true` in its `buildConfig`; load from the local `canvaskit/` directory straight away, without probing the CDN
+2. Otherwise try Google CDN: `https://www.gstatic.com/flutter-canvaskit/{engineRevision}/{variant}.js`
+3. On failure (timeout, network error): fall back to local `canvaskit/` directory
+4. Only download the variant files needed — not the entire canvaskit directory
 
 ### Extracting engineRevision
 The Dart CLI parses `flutter_bootstrap.js` from the build directory to extract `engineRevision` from the `_flutter.buildConfig` object.
