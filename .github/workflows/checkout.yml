@@ -158,7 +158,7 @@ jobs:
 
   e2e:
     name: "E2E (Flutter + Playwright)"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     needs: [typescript]
     steps:
