@@ -215,24 +215,33 @@ export async function swapCaches(
 }
 
 /**
- * Delete all caches with the given prefix except the current version.
+ * Delete this app's caches from other versions.
+ *
+ * Kept: the current version's content cache, the manifest cache, and the
+ * temp caches of [pendingVersions] — workers installing or waiting beside
+ * this one. Deleting a temp cache that an install is still writing would
+ * leave that version activating with an empty content cache.
+ *
+ * Only names of the shapes this worker creates count as its own, matched on
+ * a `-` boundary: prefix `app-cache` does not claim `app-cache2-v1`. Two
+ * apps on one origin still need distinct prefixes, since `app-cache-v1`
+ * reads the same whichever of them wrote it.
  */
 export async function cleanupOldCaches(
   prefix: string,
   currentVersion: string,
+  pendingVersions: readonly string[] = [],
 ): Promise<void> {
   const allCaches = await caches.keys();
-  const currentContentCache = getContentCacheName(prefix, currentVersion);
-  const manifestCache = getManifestCacheName(prefix);
+  const keep = new Set([
+    getContentCacheName(prefix, currentVersion),
+    getManifestCacheName(prefix),
+    ...pendingVersions.map((v) => getTempCacheName(prefix, v)),
+  ]);
 
   await Promise.all(
     allCaches
-      .filter(
-        (name) =>
-          name.startsWith(prefix) &&
-          name !== currentContentCache &&
-          name !== manifestCache,
-      )
+      .filter((name) => name.startsWith(`${prefix}-`) && !keep.has(name))
       .map((name) => caches.delete(name)),
   );
 }

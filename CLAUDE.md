@@ -79,7 +79,7 @@ dart run sw:generate --input=build/web
 - Core + Required: pre-cached on SW install
 - Optional: cached lazily on first fetch
 - Ignore: not cached
-- index.html: pre-cached, but always served network-first (cache is the offline fallback)
+- index.html: pre-cached, but always served network-first (cache answers a failed navigation; offline boot is not supported because bootstrap.js is never cached)
 - bootstrap.js, sw.js: never intercepted by the SW (always fresh from the origin)
 
 ## Coding Conventions

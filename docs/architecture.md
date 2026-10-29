@@ -109,8 +109,12 @@ All cached resources use `?v={hash}` query parameters to prevent stale responses
 - `sw.js` — Browser handles SW updates via its own mechanism
 
 `index.html` is pre-cached but never served from cache while the origin is
-reachable: navigations go network-first, and the cached copy is the offline
-fallback.
+reachable: navigations go network-first, and the cached copy answers a
+navigation the network fails. That is not offline support: the shell loads
+`bootstrap.js`, which is never cached, so without a network the app does not
+start. Keeping `bootstrap.js` out of the cache is what guarantees the shell,
+the bootstrap and the worker come from one deploy, and it is kept that way on
+purpose.
 
 > These files, `index.html` included, also require `Cache-Control: no-cache` at the HTTP layer. See [Server Configuration](../README.md#server-configuration) for the required headers.
 

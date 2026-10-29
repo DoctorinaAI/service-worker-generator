@@ -22,7 +22,7 @@ dart run sw:generate [options]
 | `--input` | `-i` | `build/web` | Path to Flutter build directory |
 | `--output` | `-o` | `sw.js` | Output service worker filename |
 | `--bootstrap-output` | — | `bootstrap.js` | Output bootstrap filename |
-| `--prefix` | `-p` | `app-cache` | Cache name prefix |
+| `--prefix` | `-p` | `app-cache` | Cache name prefix. Give every app on one origin its own: workers sharing a prefix treat each other's caches as their own old versions |
 | `--version` | `-v` | manifest content hash | Cache version string |
 
 ### File Filtering

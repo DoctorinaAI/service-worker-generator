@@ -295,7 +295,7 @@ After this sequence, `build/web/` contains exactly the artifacts that should shi
 | `--input`            | `-i`  | Path to Flutter build directory       | `build/web`       |
 | `--output`           | `-o`  | Output service worker filename        | `sw.js`           |
 | `--bootstrap-output` |       | Output bootstrap filename             | `bootstrap.js`    |
-| `--prefix`           | `-p`  | Cache name prefix                     | `app-cache`       |
+| `--prefix`           | `-p`  | Cache name prefix (unique per app on an origin) | `app-cache`       |
 | `--version`          | `-v`  | Cache version                         | current timestamp |
 | `--glob`             | `-g`  | Include glob patterns (`;` separated) | `**`              |
 | `--no-glob`          | `-e`  | Exclude glob patterns (`;` separated) | —                 |
@@ -434,11 +434,18 @@ These files are always fetched fresh (never stored in the SW cache):
 - `bootstrap.js` — must reflect latest build config
 - `sw.js` — browser handles SW updates natively
 
-`index.html` is a special case: it is pre-cached as the app shell so an
-offline navigation has something to resolve to, but it is served
+`index.html` is a special case: it is pre-cached as the app shell so a
+navigation the network fails still gets an answer, but it is served
 network-first, so an online visitor always gets the copy the origin holds.
 It still requires `Cache-Control: no-cache` at the HTTP layer, alongside the
 two files above — see [Server Configuration](#server-configuration).
+
+**Offline is not supported.** The cached shell is a fallback for a failed
+navigation, but the app cannot start from it without a network: the page
+needs `bootstrap.js`, which is deliberately never cached so that the shell,
+the bootstrap and the worker always come from one deploy. Serving a cached
+`bootstrap.js` would make offline loads possible at the cost of a page that
+can start on a stale bootstrap, and this project chooses the consistent load.
 
 ## Service Worker
 
@@ -446,7 +453,7 @@ two files above — see [Server Configuration](#server-configuration).
 
 | Resource           | Strategy      | Details                                         |
 | ------------------ | ------------- | ----------------------------------------------- |
-| Navigations        | Network-first | Fresh from network, pre-cached shell for offline |
+| Navigations        | Network-first | Fresh from network, pre-cached shell if the network fails |
 | Core + Required    | Pre-cached    | Cached during SW install with cache-busted URLs |
 | Optional           | Lazy cache    | Cached on first fetch for repeat visits         |
 | Ignore             | Pass-through  | Not cached, always from network                 |

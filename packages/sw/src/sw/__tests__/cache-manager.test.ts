@@ -603,6 +603,26 @@ describe('cleanupOldCaches', () => {
     expect(keys).toContain('app-v3');
   });
 
+  it('keeps the temp caches of pending versions', async () => {
+    await mockCaches.open('app-temp-v4');
+    await mockCaches.open('app-temp-v2');
+    await mockCaches.open('app-v3');
+    await cleanupOldCaches('app', 'v3', ['v4']);
+    const keys = await mockCaches.keys();
+    expect(keys).toContain('app-temp-v4');
+    expect(keys).not.toContain('app-temp-v2');
+  });
+
+  it('does not claim caches of a longer prefix', async () => {
+    // `app-cache` must not reach into `app-cache2`'s caches.
+    await mockCaches.open('app-cache2-v1');
+    await mockCaches.open('app-cache-v1');
+    await mockCaches.open('app-cache-v2');
+    await cleanupOldCaches('app-cache', 'v2');
+    const keys = await mockCaches.keys();
+    expect(keys.sort()).toEqual(['app-cache-v2', 'app-cache2-v1']);
+  });
+
   it('does nothing when no matching caches exist', async () => {
     const mockCaches2 = installMockCaches();
     await mockCaches2.open('other-thing');
