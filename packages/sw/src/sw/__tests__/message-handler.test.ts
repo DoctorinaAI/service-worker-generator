@@ -104,4 +104,16 @@ describe('createMessageHandler', () => {
     handler(makeEvent(undefined) as unknown as ExtendableMessageEvent);
     expect(skipWaitingSpy).not.toHaveBeenCalled();
   });
+
+  it('does not throw when replying to getVersion fails', () => {
+    // A client that went away between posting and our reply.
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const handler = createMessageHandler('v1', 'rev');
+    const event = makeEvent({ type: 'getVersion' });
+    event.source!.postMessage.mockImplementation(() => {
+      throw new Error('InvalidStateError');
+    });
+    expect(() => handler(event as unknown as ExtendableMessageEvent)).not.toThrow();
+    expect(skipWaitingSpy).not.toHaveBeenCalled();
+  });
 });

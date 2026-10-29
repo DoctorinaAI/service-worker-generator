@@ -128,6 +128,66 @@ comments: "yes"
       }
     });
 
+    test('YAML flags accept numeric and yes/no spellings', () async {
+      final tempDir = await io.Directory.systemTemp.createTemp('sw-config-');
+      try {
+        final yaml = io.File(p.join(tempDir.path, 'sw.yaml'))
+          ..writeAsStringSync('''
+keep-maps: 1
+no-cleanup: "No"
+comments: ""
+''');
+        final config = GeneratorConfig.parse(['--config=${yaml.path}']);
+        expect(config.keepMaps, isTrue);
+        expect(config.noCleanup, isFalse);
+        expect(config.comments, isFalse);
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    test('a negated CLI flag still wins over YAML true', () async {
+      final tempDir = await io.Directory.systemTemp.createTemp('sw-config-');
+      try {
+        final yaml = io.File(p.join(tempDir.path, 'sw.yaml'))
+          ..writeAsStringSync('no-cleanup: true\ncomments: true\n');
+        final config = GeneratorConfig.parse([
+          '--config=${yaml.path}',
+          '--no-no-cleanup',
+          '--no-comments',
+        ]);
+        expect(config.noCleanup, isFalse);
+        expect(config.comments, isFalse);
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    test('-c is the short form of --comments', () {
+      final config = GeneratorConfig.parse(const ['-c']);
+      expect(config.comments, isTrue);
+    });
+
+    test('YAML fills in globs and progress bounds', () async {
+      final tempDir = await io.Directory.systemTemp.createTemp('sw-config-');
+      try {
+        final yaml = io.File(p.join(tempDir.path, 'sw.yaml'))
+          ..writeAsStringSync('''
+no-glob: "**/*.map; assets/NOTICES"
+ignore: "assets/video/**"
+min-progress: 5
+max-progress: 75
+''');
+        final config = GeneratorConfig.parse(['--config=${yaml.path}']);
+        expect(config.excludeGlobs, {'**/*.map', 'assets/NOTICES'});
+        expect(config.ignoreGlobs, {'assets/video/**'});
+        expect(config.minProgress, 5);
+        expect(config.maxProgress, 75);
+      } finally {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
     test('boolean flags default to false', () {
       final config = GeneratorConfig.parse(const []);
       expect(config.keepMaps, isFalse);

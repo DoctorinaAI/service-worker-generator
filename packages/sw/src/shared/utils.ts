@@ -32,7 +32,9 @@ export function getScopePath(): string {
       self as unknown as { registration?: { scope?: string } }
     ).registration?.scope;
     if (!scope) return '';
-    const path = new URL(scope).pathname;
+    // Decoded like the keys it is compared with in getResourceKey: under
+    // `<base href="/my%20app/">` an encoded scope would match no key.
+    const path = safeDecodeUri(new URL(scope).pathname);
     return path.startsWith('/') ? path.slice(1) : path;
   } catch {
     return '';

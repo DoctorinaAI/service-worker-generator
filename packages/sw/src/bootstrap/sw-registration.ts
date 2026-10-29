@@ -67,7 +67,9 @@ async function registerAndActivate(
   // First, unregister any old Flutter service worker
   await unregisterFlutterSW();
 
-  const swUrl = `${swFilename}?v=${swVersion}`;
+  // Encoded, so a `--version` such as `1.0.0+3` reads back unchanged in the
+  // worker's `searchParams.get('v')`, where `+` would otherwise be a space.
+  const swUrl = `${swFilename}?v=${encodeURIComponent(swVersion)}`;
 
   try {
     logPhase('SW', `Registering ${swUrl}`);
@@ -277,6 +279,14 @@ export async function settleUpdateAtBootstrap(
     return false;
   }
   if (!handoverTried && (await activateWaitingAtBootstrap(registration))) {
+    clearUpdateReloadFlag();
+    return false;
+  }
+  // Another tab may have handed over meanwhile, or the `controllerchange`
+  // may have landed just after the handover timed out: the page is then
+  // already on the new worker, and a reload would buy nothing.
+  if (navigator.serviceWorker.controller !== controller) {
+    logPhase('SW', 'New worker took control during bootstrap');
     clearUpdateReloadFlag();
     return false;
   }

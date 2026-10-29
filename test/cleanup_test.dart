@@ -81,6 +81,111 @@ void main() {
       );
     });
 
+    test('recognises every way a script tag can load flutter_bootstrap', () {
+      const tags = [
+        "<script type=module src='flutter_bootstrap.js'></script>",
+        '<script src=flutter_bootstrap.js async></script>',
+        '<script src="/app/flutter_bootstrap.js?v=1"></script>',
+        '<SCRIPT SRC="FLUTTER_BOOTSTRAP.JS"></SCRIPT>',
+        '<script\n  async\n  src = "flutter_bootstrap.js"></script>',
+      ];
+      final bootstrap = io.File(p.join(tempDir.path, 'flutter_bootstrap.js'));
+      final index = io.File(p.join(tempDir.path, 'index.html'));
+      for (final tag in tags) {
+        bootstrap.writeAsStringSync('bootstrap');
+        index.writeAsStringSync('<html><body>$tag</body></html>');
+        cleanup(buildDir: tempDir, swVersion: 'v1');
+        expect(bootstrap.existsSync(), isTrue, reason: tag);
+      }
+    });
+
+    test('a tag that does not load flutter_bootstrap.js does not keep it', () {
+      const tags = [
+        '<!-- <script src="flutter_bootstrap.js"></script> -->',
+        '<!--\n<script src="flutter_bootstrap.js"></script>\n-->',
+        '<script data-src="flutter_bootstrap.js"></script>',
+        '<script src="my_flutter_bootstrap.js"></script>',
+        '<script src="flutter_bootstrap.json"></script>',
+      ];
+      final bootstrap = io.File(p.join(tempDir.path, 'flutter_bootstrap.js'));
+      final index = io.File(p.join(tempDir.path, 'index.html'));
+      for (final tag in tags) {
+        bootstrap.writeAsStringSync('bootstrap');
+        index.writeAsStringSync(
+          '<html><body>$tag<script src="bootstrap.js" '
+          'data-sw-bootstrap defer></script></body></html>',
+        );
+        cleanup(buildDir: tempDir, swVersion: 'v1');
+        expect(bootstrap.existsSync(), isFalse, reason: tag);
+      }
+    });
+
+    test('a preload hint alone does not keep flutter_bootstrap.js', () {
+      // Only a script tag runs it; a <link> just warms the HTTP cache.
+      io.File(p.join(tempDir.path, 'index.html')).writeAsStringSync('''
+<html><head>
+<link rel="preload" href="flutter_bootstrap.js" as="script">
+</head><body>
+<script src="bootstrap.js" data-sw-bootstrap defer></script>
+</body></html>
+''');
+      cleanup(buildDir: tempDir, swVersion: 'v1');
+      expect(
+        io.File(p.join(tempDir.path, 'flutter_bootstrap.js')).existsSync(),
+        isFalse,
+      );
+    });
+
+    test('removes flutter_bootstrap.js when there is no index.html', () {
+      io.File(p.join(tempDir.path, 'index.html')).deleteSync();
+      cleanup(buildDir: tempDir, swVersion: 'v1');
+      expect(
+        io.File(p.join(tempDir.path, 'flutter_bootstrap.js')).existsSync(),
+        isFalse,
+      );
+    });
+
+    test('applyIndexHtmlVersion reports whether it rewrote the shell', () {
+      final index = io.File(p.join(tempDir.path, 'index.html'));
+      expect(applyIndexHtmlVersion(tempDir, 'v1'), isTrue);
+      expect(index.readAsStringSync(), '<html>v1</html>');
+      // Idempotent: nothing left to substitute, so the file is not touched.
+      expect(applyIndexHtmlVersion(tempDir, 'v2'), isFalse);
+      expect(index.readAsStringSync(), '<html>v1</html>');
+      index.deleteSync();
+      expect(applyIndexHtmlVersion(tempDir, 'v3'), isFalse);
+    });
+
+    test('keeps canvaskit files outside the keep-set subdirectories', () {
+      final ckDir = io.Directory(p.join(tempDir.path, 'canvaskit', 'chromium'))
+        ..createSync(recursive: true);
+      io.File(p.join(ckDir.path, 'canvaskit.js')).writeAsStringSync('js');
+      io.File(p.join(ckDir.path, 'canvaskit.wasm')).writeAsStringSync('wasm');
+      io.File(
+        p.join(tempDir.path, 'canvaskit', 'skwasm.wasm'),
+      ).writeAsStringSync('sw');
+
+      cleanup(
+        buildDir: tempDir,
+        swVersion: 'v1',
+        canvaskitKeep: const {
+          'canvaskit/chromium/canvaskit.js',
+          'canvaskit/chromium/canvaskit.wasm',
+        },
+      );
+
+      // A kept nested file keeps its directory alive.
+      expect(io.File(p.join(ckDir.path, 'canvaskit.js')).existsSync(), isTrue);
+      expect(
+        io.File(p.join(ckDir.path, 'canvaskit.wasm')).existsSync(),
+        isTrue,
+      );
+      expect(
+        io.File(p.join(tempDir.path, 'canvaskit', 'skwasm.wasm')).existsSync(),
+        isFalse,
+      );
+    });
+
     test('preserves version.json', () {
       cleanup(buildDir: tempDir, swVersion: 'v1');
 

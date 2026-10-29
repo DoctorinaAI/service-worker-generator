@@ -152,4 +152,23 @@ describe('createProgressReporter', () => {
     expect(reporter.resourcesCount).toBe(0);
     expect(reporter.resourcesSize).toBe(0);
   });
+
+  it('never rejects when clients cannot be reached', async () => {
+    // Callers sit on the respondWith path; a rejection would fail a fetch.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    mockedNotify.mockRejectedValueOnce(new Error('clients.matchAll failed'));
+    const reporter = createProgressReporter('v1', manifest());
+    await expect(
+      reporter.report({
+        key: 'main.dart.wasm',
+        name: 'main.dart.wasm',
+        url: '/main.dart.wasm',
+        size: 1000,
+        loaded: 1000,
+        status: 'completed',
+      }),
+    ).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
 });

@@ -141,6 +141,29 @@ describe('precacheResources', () => {
     expect(seen.sort()).toEqual(['a.js', 'b.json']);
   });
 
+  it('does not fail a stored Core entry when its progress report throws', async () => {
+    // Telemetry must not decide whether the install succeeds: the entry is
+    // already in the cache when the callback runs.
+    installMockFetch(async () => textResponse('core'));
+    const manifest = buildManifest({
+      'main.dart.js': {
+        name: 'main.dart.js',
+        size: 10,
+        hash: 'h1',
+        category: ResourceCategory.Core,
+      },
+    });
+
+    await expect(
+      precacheResources('temp-v1', manifest, [ResourceCategory.Core], () => {
+        throw new Error('no clients');
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(await mockCaches.peek('temp-v1')!.match('main.dart.js')).toBeDefined();
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
   it('throws aggregated error when any Core resource fails', async () => {
     installMockFetch(async (req) => {
       if (req.url.includes('core.js')) return textResponse('nope', 500);

@@ -401,4 +401,60 @@ describe('LoadingWidget reset action', () => {
 
     expect(window.sessionStorage.getItem(FOREIGN_RELOAD_KEY)).toBeNull();
   });
+  it('unregisters every registration when constructed without a filename', async () => {
+    installCaches([]);
+    const a = settledRegistration('https://example.com/sw.js?v=1');
+    const b = settledRegistration('https://example.com/other-sw.js');
+    installRegistrations([a, b]);
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+
+    clickReset();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(a.unregister).toHaveBeenCalledOnce();
+    expect(b.unregister).toHaveBeenCalledOnce();
+    expect(reloadSpy).toHaveBeenCalledOnce();
+  });
+
+  it('recognises our worker while it is still installing or waiting', async () => {
+    // A reset during a wedged install: the registration has no active
+    // worker yet, and it is exactly the one to drop.
+    installCaches([]);
+    const installing = {
+      active: null,
+      waiting: null,
+      installing: { scriptURL: 'https://example.com/sw.js?v=2' },
+      unregister: vi.fn(async () => true),
+    } as unknown as ServiceWorkerRegistration;
+    const empty = {
+      active: null,
+      waiting: null,
+      installing: null,
+      unregister: vi.fn(async () => true),
+    } as unknown as ServiceWorkerRegistration;
+    installRegistrations([installing, empty]);
+    const w = new LoadingWidget(uiConfig(), 'sw.js');
+    w.mount();
+
+    clickReset();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(installing.unregister).toHaveBeenCalledOnce();
+    expect(empty.unregister).not.toHaveBeenCalled();
+  });
+
+  it('spares a registration whose script URL it cannot parse, and still reloads', async () => {
+    installCaches([]);
+    const odd = settledRegistration('not a url');
+    installRegistrations([odd]);
+    const w = new LoadingWidget(uiConfig(), 'sw.js');
+    w.mount();
+
+    clickReset();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(odd.unregister).not.toHaveBeenCalled();
+    expect(reloadSpy).toHaveBeenCalledOnce();
+  });
 });

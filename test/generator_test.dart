@@ -65,7 +65,7 @@ void main() {
     final bootstrap = io.File(
       p.join(dir.path, 'bootstrap.js'),
     ).readAsStringSync();
-    expect(bootstrap, startsWith('(function(){window.loader=1})();\n'));
+    expect(bootstrap, startsWith('(function(){window.loader=1})()\n;\n'));
     expect(bootstrap, isNot(contains('sourceMappingURL=flutter.js.map')));
   });
 
@@ -135,6 +135,241 @@ void main() {
     await generate(config(noCleanup: true));
     expect(swVersion(), isNot(second));
   });
+
+  group('rejects an incomplete build', () {
+    test('without the build directory', () {
+      dir.deleteSync(recursive: true);
+      expect(
+        generate(config()),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('Build directory not found'),
+          ),
+        ),
+      );
+    });
+
+    test('without index.html', () {
+      writeBuild();
+      io.File(p.join(dir.path, 'index.html')).deleteSync();
+      expect(
+        generate(config()),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('index.html not found'),
+          ),
+        ),
+      );
+    });
+
+    test('without an engine revision', () {
+      writeBuild();
+      io.File(
+        p.join(dir.path, 'flutter_bootstrap.js'),
+      ).writeAsStringSync('_flutter.buildConfig = {"builds":[]};');
+      expect(
+        generate(config()),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('missing engineRevision'),
+          ),
+        ),
+      );
+    });
+
+    test('without flutter.js, before writing anything', () async {
+      writeBuild();
+      io.File(p.join(dir.path, 'flutter.js')).deleteSync();
+      await expectLater(
+        generate(config()),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('flutter.js not found'),
+          ),
+        ),
+      );
+      expect(io.File(p.join(dir.path, 'sw.js')).existsSync(), isFalse);
+      expect(io.File(p.join(dir.path, 'bootstrap.js')).existsSync(), isFalse);
+      expect(
+        io.File(p.join(dir.path, 'flutter_bootstrap.js')).existsSync(),
+        isTrue,
+      );
+    });
+  });
+
+  test('a second run over a cleaned directory fails loudly', () async {
+    writeBuild();
+    await generate(config());
+    // Cleanup removed Flutter's files, so a re-run cannot silently derive a
+    // version from a shell it already stamped.
+    expect(generate(config()), throwsStateError);
+  });
+
+  test('a trailing line comment in flutter.js cannot swallow the ;', () async {
+    writeBuild();
+    io.File(
+      p.join(dir.path, 'flutter.js'),
+    ).writeAsStringSync('(function(){window.loader=1})()\n// trailing comment');
+    await generate(config());
+    final bootstrap = io.File(
+      p.join(dir.path, 'bootstrap.js'),
+    ).readAsStringSync();
+    expect(bootstrap, contains('// trailing comment\n;\n'));
+  });
+
+  test('strips a CRLF source-map comment from flutter.js', () async {
+    writeBuild();
+    io.File(p.join(dir.path, 'flutter.js')).writeAsStringSync(
+      '(function(){window.loader=1})()\r\n'
+      '//# sourceMappingURL=flutter.js.map\r\n',
+    );
+    await generate(config());
+    final bootstrap = io.File(
+      p.join(dir.path, 'bootstrap.js'),
+    ).readAsStringSync();
+    expect(bootstrap, startsWith('(function(){window.loader=1})()\n;\n'));
+    expect(bootstrap, isNot(contains('sourceMappingURL')));
+  });
+
+  test('uses a supplied version verbatim, in sw.js and the shell', () async {
+    writeBuild();
+    await generate(GeneratorConfig(inputDir: dir.path, version: '2026.10.29'));
+    expect(swVersion(), '2026.10.29');
+    expect(
+      io.File(p.join(dir.path, 'index.html')).readAsStringSync(),
+      contains('content="2026.10.29"'),
+    );
+  });
+
+  test(
+    'carries engine revision and local CanvasKit into the artifacts',
+    () async {
+      writeBuild();
+      io.File(p.join(dir.path, 'flutter_bootstrap.js')).writeAsStringSync('''
+_flutter.buildConfig = {"engineRevision":"0123456789abcdef","useLocalCanvasKit":true,"builds":[{"compileTarget":"dart2js","renderer":"canvaskit","mainJsPath":"main.dart.js"}]};
+''');
+      await generate(config());
+      final sw = io.File(p.join(dir.path, 'sw.js')).readAsStringSync();
+      final bootstrap = io.File(
+        p.join(dir.path, 'bootstrap.js'),
+      ).readAsStringSync();
+      expect(sw, contains('"engineRevision":"0123456789abcdef"'));
+      expect(bootstrap, contains('"engineRevision":"0123456789abcdef"'));
+      expect(bootstrap, contains('"useLocalCanvasKit":true'));
+    },
+  );
+
+  test('writes the artifacts under the configured names', () async {
+    writeBuild();
+    await generate(
+      GeneratorConfig(
+        inputDir: dir.path,
+        version: 'v1',
+        swOutput: 'service-worker.js',
+        bootstrapOutput: 'boot.js',
+      ),
+    );
+    expect(io.File(p.join(dir.path, 'service-worker.js')).existsSync(), isTrue);
+    final bootstrap = io.File(p.join(dir.path, 'boot.js')).readAsStringSync();
+    // The bootstrap registers the worker by the name it was written under.
+    expect(bootstrap, contains('"swFilename":"service-worker.js"'));
+    expect(io.File(p.join(dir.path, 'sw.js')).existsSync(), isFalse);
+  });
+
+  test('keeps source maps only with keepMaps', () async {
+    writeBuild();
+    final map = io.File(p.join(dir.path, 'main.dart.js.map'))
+      ..writeAsStringSync('{}');
+    await generate(
+      GeneratorConfig(inputDir: dir.path, version: 'v1', keepMaps: true),
+    );
+    expect(map.existsSync(), isTrue);
+    // Kept on disk, but never part of the manifest.
+    final sw = io.File(p.join(dir.path, 'sw.js')).readAsStringSync();
+    expect(sw, isNot(contains('main.dart.js.map')));
+  });
+
+  test('keeps flutter_bootstrap.js when the shell was never swapped', () async {
+    writeBuild(
+      indexHtml:
+          '<html><body><script src="flutter_bootstrap.js" async></script>'
+          ' </body></html>',
+    );
+    await generate(config());
+    expect(
+      io.File(p.join(dir.path, 'flutter_bootstrap.js')).existsSync(),
+      isTrue,
+    );
+    expect(io.File(p.join(dir.path, 'flutter.js')).existsSync(), isFalse);
+  });
+
+  test(
+    'keeps every skwasm variant and prunes CanvasKit for a skwasm build',
+    () async {
+      writeBuild();
+      io.File(p.join(dir.path, 'flutter_bootstrap.js')).writeAsStringSync('''
+_flutter.buildConfig = {"engineRevision":"abc123","builds":[{"compileTarget":"dart2wasm","renderer":"skwasm","mainWasmPath":"main.dart.wasm","jsSupportRuntimePath":"main.dart.mjs"}]};
+''');
+      const kept = [
+        'canvaskit/skwasm.js',
+        'canvaskit/skwasm.wasm',
+        'canvaskit/skwasm_heavy.js',
+        'canvaskit/skwasm_heavy.wasm',
+        'canvaskit/wimp.js',
+        'canvaskit/wimp.wasm',
+      ];
+      const pruned = [
+        'canvaskit/canvaskit.js',
+        'canvaskit/canvaskit.wasm',
+        'canvaskit/chromium/canvaskit.js',
+        'canvaskit/chromium/canvaskit.wasm',
+      ];
+      for (final path in [...kept, ...pruned]) {
+        io.File(p.join(dir.path, path))
+          ..createSync(recursive: true)
+          ..writeAsStringSync('// $path');
+      }
+
+      await generate(config());
+
+      for (final path in kept) {
+        expect(
+          io.File(p.join(dir.path, path)).existsSync(),
+          isTrue,
+          reason: path,
+        );
+      }
+      for (final path in pruned) {
+        expect(
+          io.File(p.join(dir.path, path)).existsSync(),
+          isFalse,
+          reason: path,
+        );
+      }
+      expect(
+        io.Directory(p.join(dir.path, 'canvaskit/chromium')).existsSync(),
+        isFalse,
+      );
+      // The variants are lazily cached, never pre-cached.
+      final sw = io.File(p.join(dir.path, 'sw.js')).readAsStringSync();
+      final entry = RegExp(
+        r'"canvaskit/skwasm\.wasm":(\{[^}]*\})',
+      ).firstMatch(sw);
+      expect(entry, isNotNull);
+      expect(
+        (jsonDecode(entry!.group(1)!) as Map<String, dynamic>)['category'],
+        'optional',
+      );
+    },
+  );
 
   test(
     'keeps both files of every CanvasKit variant the bootstrap loads',

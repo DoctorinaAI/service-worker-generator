@@ -296,7 +296,7 @@ After this sequence, `build/web/` contains exactly the artifacts that should shi
 | `--output`           | `-o`  | Output service worker filename        | `sw.js`           |
 | `--bootstrap-output` |       | Output bootstrap filename             | `bootstrap.js`    |
 | `--prefix`           | `-p`  | Cache name prefix (unique per app on an origin) | `app-cache`       |
-| `--version`          | `-v`  | Cache version                         | current timestamp |
+| `--version`          | `-v`  | Cache version                         | hash of the manifest |
 | `--glob`             | `-g`  | Include glob patterns (`;` separated) | `**`              |
 | `--no-glob`          | `-e`  | Exclude glob patterns (`;` separated) | —                 |
 | `--core`             |       | Core category glob overrides          | —                 |
@@ -305,6 +305,7 @@ After this sequence, `build/web/` contains exactly the artifacts that should shi
 | `--ignore`           |       | Ignore category glob overrides        | —                 |
 | `--keep-maps`        |       | Keep `.js.map` files                  | `false`           |
 | `--no-cleanup`       |       | Skip Flutter file cleanup             | `false`           |
+| `--comments`         | `-c`  | Reserved; has no effect yet           | `false`           |
 | `--config`           |       | Path to YAML config file              | `sw.yaml`         |
 | `--theme`            |       | Loading widget theme                  | `auto`            |
 | `--logo`             |       | Loading widget logo path              | —                 |
@@ -343,6 +344,8 @@ Priority: CLI arguments > YAML config > environment variables > defaults.
 | `SW_LOGO`    | `--logo`    |
 | `SW_TITLE`   | `--title`   |
 | `SW_COLOR`   | `--color`   |
+
+Every option has one; [docs/configuration.md](docs/configuration.md#environment-variables) lists them all, including `SW_KEEP_MAPS` and `SW_NO_CLEANUP`.
 
 ## Bootstrap Pipeline
 
@@ -413,9 +416,9 @@ Files are automatically categorized based on their path and size:
 
 | Category     | Pre-cached | On Fetch             | Description                                                                                                                                  |
 | ------------ | ---------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Core**     | Install    | Cache-first          | Essential: canvaskit variant, `main.dart.js`/`.wasm`/`.mjs`, `*.support.wasm`                                                                |
-| **Required** | Install    | Cache-first          | Early-needed: `AssetManifest*.json`, `FontManifest.json`                                                                                     |
-| **Optional** | —          | Cache on first fetch | Fonts (`.ttf`, `.otf`, `.woff`, `.woff2`, `.eot`) at any size; `.json`, `.webp`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.ico` under 512KB |
+| **Core**     | Install    | Cache-first          | Essential: `main.dart.js`/`.wasm`/`.mjs`, `*.support.wasm`                                                                                   |
+| **Required** | Install    | Cache-first          | Early-needed: `index.html`, `AssetManifest*.json`, `FontManifest.json`, `manifest.json`                                                      |
+| **Optional** | —          | Cache on first fetch | CanvasKit/skwasm files; fonts (`.ttf`, `.otf`, `.woff`, `.woff2`, `.eot`) at any size; `.json`, `.webp`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.ico` under 512KB |
 | **Ignore**   | —          | Pass-through         | Not cached: `*.map`, `*.symbols`, `NOTICES`, large assets                                                                                    |
 
 Override categorization with glob patterns via CLI or YAML config:

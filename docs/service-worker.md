@@ -11,8 +11,9 @@ The SW receives its configuration via placeholder injection. The Dart CLI replac
 ```typescript
 interface SWConfig {
   cachePrefix: string;        // e.g., "my-app"
-  version: string;            // e.g., "1713200000000" (timestamp)
+  version: string;            // hash of the manifest unless --version is given
   manifest: ResourceManifest; // path → { name, size, hash, category }
+  engineRevision?: string;    // Flutter engine revision, reported by getVersion
 }
 ```
 
@@ -235,7 +236,7 @@ describes — which is how `Loaded 5 of 4 resources` happened.
 - Browser detects byte changes in SW script → triggers update
 
 ### Cache Version
-- Each generation produces a new cache version (timestamp by default)
+- Each build with different content gets a new cache version (a hash of the manifest by default)
 - New version → new cache name → old caches cleaned on activate
 - Manifest comparison ensures only changed resources are re-fetched
 

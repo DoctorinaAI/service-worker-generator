@@ -5,6 +5,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   formatBytes,
   getResourceKey,
+  getScopePath,
   backoffDelay,
   cacheBustUrl,
   fetchWithTimeout,
@@ -86,6 +87,45 @@ describe('getResourceKey', () => {
   it('handles relative paths', () => {
     expect(getResourceKey('main.dart.js'))
       .toBe('main.dart.js');
+  });
+});
+
+describe('getScopePath', () => {
+  const origin = self.location.origin;
+  const target = self as unknown as { registration?: unknown };
+
+  afterEach(() => {
+    delete target.registration;
+  });
+
+  it('is empty outside a service worker and at the origin root', () => {
+    expect(getScopePath()).toBe('');
+    target.registration = { scope: `${origin}/` };
+    expect(getScopePath()).toBe('');
+  });
+
+  it('returns the scope path with its trailing slash', () => {
+    target.registration = { scope: `${origin}/app/` };
+    expect(getScopePath()).toBe('app/');
+    expect(getResourceKey(`${origin}/app/main.dart.js`)).toBe('main.dart.js');
+    expect(getResourceKey(`${origin}/app/`)).toBe('index.html');
+  });
+
+  it('re-bases keys under a percent-encoded scope', () => {
+    // `<base href="/my app/">`: the scope arrives encoded, request paths are
+    // decoded before the comparison, so both must be.
+    target.registration = { scope: `${origin}/my%20app/` };
+    expect(getScopePath()).toBe('my app/');
+    expect(getResourceKey(`${origin}/my%20app/main.dart.js`)).toBe('main.dart.js');
+    expect(getResourceKey(`${origin}/my%20app/__/auth/handler`)).toBe('__/auth/handler');
+    expect(getResourceKey(`${origin}/my%20app/`)).toBe('index.html');
+  });
+
+  it('falls back to the origin root for a scope that does not parse', () => {
+    // Keys then stay origin-relative instead of the lookup throwing.
+    target.registration = { scope: 'not a url' };
+    expect(getScopePath()).toBe('');
+    expect(getResourceKey(`${origin}/app/main.dart.js`)).toBe('app/main.dart.js');
   });
 });
 

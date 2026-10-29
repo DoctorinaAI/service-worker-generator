@@ -57,6 +57,60 @@ describe('detectBrowserCaps', () => {
   });
 });
 
+describe('detectBrowserCaps — browser engine', () => {
+  function pretend(vendor: string, userAgent: string): void {
+    Object.defineProperty(navigator, 'vendor', { configurable: true, get: () => vendor });
+    Object.defineProperty(navigator, 'userAgent', { configurable: true, get: () => userAgent });
+  }
+
+  beforeEach(() => {
+    // Image codecs need both a Blink engine and the API; provide the API so
+    // the engine decides.
+    (globalThis as unknown as { ImageDecoder?: unknown }).ImageDecoder = class {};
+  });
+
+  afterEach(() => {
+    delete (navigator as unknown as { vendor?: unknown }).vendor;
+    // Drops the own-property overrides, exposing jsdom's getters again.
+    delete (navigator as unknown as { userAgent?: unknown }).userAgent;
+    delete (globalThis as unknown as { ImageDecoder?: unknown }).ImageDecoder;
+    vi.restoreAllMocks();
+  });
+
+  it('uses image codecs on Chrome', () => {
+    pretend('Google Inc.', 'Mozilla/5.0 Chrome/130.0');
+    expect(detectBrowserCaps().hasImageCodecs).toBe(true);
+  });
+
+  it('uses image codecs on Edge', () => {
+    pretend('', 'Mozilla/5.0 Chrome/130.0 Edg/130.0');
+    expect(detectBrowserCaps().hasImageCodecs).toBe(true);
+  });
+
+  it('does not use image codecs on Safari, even where ImageDecoder exists', () => {
+    pretend('Apple Computer, Inc.', 'Mozilla/5.0 Version/18.0 Safari/605.1.15');
+    expect(detectBrowserCaps().hasImageCodecs).toBe(false);
+  });
+
+  it('does not use image codecs on Firefox', () => {
+    pretend('', 'Mozilla/5.0 Gecko/20100101 Firefox/133.0');
+    expect(detectBrowserCaps().hasImageCodecs).toBe(false);
+  });
+
+  it('does not use image codecs on an unknown engine', () => {
+    pretend('Some Vendor', 'Mozilla/5.0');
+    expect(detectBrowserCaps().hasImageCodecs).toBe(false);
+  });
+
+  it('reports no WasmGC when WebAssembly validation throws', () => {
+    // A locked-down WebView can expose WebAssembly and still refuse to use it.
+    vi.spyOn(WebAssembly, 'validate').mockImplementation(() => {
+      throw new Error('disabled');
+    });
+    expect(detectBrowserCaps().supportsWasmGC).toBe(false);
+  });
+});
+
 describe('selectBuild', () => {
   it('returns the first build that has compileTarget or renderer', () => {
     const builds: FlutterBuildEntry[] = [

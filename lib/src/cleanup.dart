@@ -78,10 +78,18 @@ void cleanup({
 bool _indexLoadsFlutterBootstrap(io.Directory buildDir) {
   final index = io.File(p.join(buildDir.path, 'index.html'));
   if (!index.existsSync()) return false;
+  // A commented-out tag loads nothing. `src` must be the attribute itself,
+  // not the tail of `data-src`, and the file name must be the whole last
+  // path segment, not `my_flutter_bootstrap.js` or `flutter_bootstrap.json`.
+  final html = index.readAsStringSync().replaceAll(
+    RegExp('<!--.*?-->', dotAll: true),
+    '',
+  );
   return RegExp(
-    r'''<script\b[^>]*\bsrc\s*=\s*["']?[^"'\s>]*flutter_bootstrap\.js''',
+    r'''<script\b[^>]*[\s"']src\s*=\s*["']?(?:[^"'\s>]*/)?'''
+    r'''flutter_bootstrap\.js(?=[?#"'\s>]|$)''',
     caseSensitive: false,
-  ).hasMatch(index.readAsStringSync());
+  ).hasMatch(html);
 }
 
 /// Recursively remove `.js.map`, `.js.symbols`, and `.wasm.map` files.

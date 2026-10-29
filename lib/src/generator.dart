@@ -173,12 +173,13 @@ Future<void> generate(GeneratorConfig config) async {
   // flutter.js keeps its `//# sourceMappingURL=flutter.js.map`, which would
   // point DevTools at a map that is not deployed next to bootstrap.js. The
   // `;` keeps the IIFE that follows from being parsed as a call on the
-  // loader's last expression, should a Flutter release drop its own.
+  // loader's last expression, should a Flutter release drop its own; it
+  // goes on a line of its own so a trailing line comment cannot swallow it.
   final flutterJs = flutterJsFile.readAsStringSync().replaceAll(
     RegExp(r'^//# sourceMappingURL=.*$', multiLine: true),
     '',
   );
-  final bootstrapContent = '${flutterJs.trimRight()};\n$injectedBootstrap';
+  final bootstrapContent = '${flutterJs.trimRight()}\n;\n$injectedBootstrap';
 
   // 6. Write output files
   io.File(p.join(buildDir.path, config.swOutput)).writeAsStringSync(swContent);
@@ -252,9 +253,9 @@ Set<String> _findCanvaskitFiles(io.Directory buildDir, Set<String> renderers) {
 /// The shell is stamped with this value and re-hashed afterwards, which
 /// looks circular but is not: the version is derived from the manifest as
 /// it was *before* the substitution, and the only run that substitutes is
-/// one that also runs `cleanup` — which removes `flutter_bootstrap.js` and
-/// so makes a second run on the same directory fail loudly rather than
-/// silently derive a different version. Under `--no-cleanup` nothing is
+/// one that also runs `cleanup` — which removes `flutter.js` and so makes a
+/// second run on the same directory fail loudly rather than silently derive
+/// a different version. Under `--no-cleanup` nothing is
 /// rewritten at all.
 String _hashManifest(Map<String, ResourceEntry> manifest) {
   // Use the entries' stable metadata (path, hash, size, category). We sort

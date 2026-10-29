@@ -66,7 +66,7 @@ User's build/web/{sw.js, bootstrap.js} (final output)
 | Category | Pre-cached | Cached on Fetch | Description |
 |----------|-----------|-----------------|-------------|
 | Core | Yes (install) | — | Essential for app startup: main.dart.* |
-| Required | Yes (install) | — | Needed early: AssetManifest, FontManifest, PWA manifest |
+| Required | Yes (install) | — | Needed early: `index.html` (app shell), AssetManifest, FontManifest, PWA manifest |
 | Optional | No | Yes (lazy) | CanvasKit variants, fonts (any size), small images/JSON (< 512KB) |
 | Ignore | No | No | Large assets, source maps, debug files |
 
@@ -77,6 +77,7 @@ User's build/web/{sw.js, bootstrap.js} (final output)
 - `*.support.wasm`
 
 **Required:**
+- `index.html` (served network-first)
 - `assets/AssetManifest*.json`
 - `assets/FontManifest.json`
 - `manifest.json`

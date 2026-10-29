@@ -196,6 +196,62 @@ describe('createActivateHandler', () => {
     expect(names).not.toContain('app-v3');
   });
 
+  it('keeps the swapped content cache and still claims when cleanup fails', async () => {
+    const temp = await mockCaches.open('app-temp-v2');
+    await temp.put(new Request('main.dart.js'), textResponse('v2-core'));
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const enableSpy = vi.fn(async () => undefined);
+    (self as unknown as { registration: unknown }).registration = {
+      navigationPreload: { enable: enableSpy },
+    };
+    // swapCaches does not list caches; cleanupOldCaches does.
+    vi.spyOn(caches, 'keys').mockRejectedValue(new Error('storage fault'));
+
+    const handler = createActivateHandler('app', 'v2', {
+      'main.dart.js': { name: 'main.dart.js', size: 1, hash: 'h', category: ResourceCategory.Core },
+    });
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await expect(event._promise).resolves.toBeUndefined();
+
+    expect(await mockCaches.peek('app-v2')?.match('main.dart.js')).toBeDefined();
+    expect(enableSpy).toHaveBeenCalledOnce();
+    expect(claimSpy).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the temp cache of a waiting worker', async () => {
+    await mockCaches.open('app-temp-v3');
+    (self as unknown as { registration: unknown }).registration = {
+      installing: null,
+      waiting: { scriptURL: 'https://example.com/sw.js?v=v3' },
+    };
+
+    const handler = createActivateHandler('app', 'v2', {});
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    expect(await mockCaches.keys()).toContain('app-temp-v3');
+  });
+
+  it('treats a pending worker without a readable version as abandoned', async () => {
+    // No `?v=` to read, or a URL that does not parse: nothing names a temp
+    // cache to keep, and activation must still complete.
+    await mockCaches.open('app-temp-v3');
+    (self as unknown as { registration: unknown }).registration = {
+      installing: { scriptURL: 'not a url' },
+      waiting: { scriptURL: 'https://example.com/sw.js' },
+    };
+
+    const handler = createActivateHandler('app', 'v2', {});
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    expect(await mockCaches.keys()).not.toContain('app-temp-v3');
+    expect(claimSpy).toHaveBeenCalledOnce();
+  });
+
   it('wipes app-prefixed caches on error', async () => {
     (self as unknown as { registration: unknown }).registration = {};
     await mockCaches.open('app-v1');

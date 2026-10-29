@@ -8,6 +8,7 @@ import { BootstrapAPI } from '../api';
 import {
   listenForSWMessages,
   registerServiceWorker,
+  reloadIfForeignController,
   settleUpdateAtBootstrap,
 } from '../sw-registration';
 import { loadCanvasKit } from '../canvaskit-loader';
@@ -225,6 +226,77 @@ describe('runPipeline', () => {
     for (let i = 0; i < 50; i++) await Promise.resolve();
     expect(settleUpdateAtBootstrap).toHaveBeenCalledWith(registration, 'rev');
     expect(load).not.toHaveBeenCalled();
+  });
+
+  it('stops before registering when the page reloads off a foreign controller', async () => {
+    // Registering, or loading anything, would race the navigation the
+    // recovery has just started.
+    vi.mocked(reloadIfForeignController).mockResolvedValueOnce(true);
+    const register = vi.mocked(registerServiceWorker);
+    register.mockClear();
+    const load = vi.mocked(loadFlutterApp);
+    load.mockClear();
+
+    const api = runPipeline(resolved());
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+
+    expect(register).not.toHaveBeenCalled();
+    expect(load).not.toHaveBeenCalled();
+    // The widget stays up until the page goes away.
+    expect(api.disposed).toBe(false);
+  });
+
+  it('boots without the update check when there is no registration', async () => {
+    // Unsupported, failed, or out of time: nothing to settle, and the app
+    // still has to start.
+    vi.mocked(registerServiceWorker).mockResolvedValueOnce(null);
+    const settleSpy = vi.mocked(settleUpdateAtBootstrap);
+    settleSpy.mockClear();
+    const load = vi.mocked(loadFlutterApp);
+    load.mockClear();
+
+    runPipeline(resolved());
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+
+    expect(settleSpy).not.toHaveBeenCalled();
+    expect(load).toHaveBeenCalledOnce();
+  });
+
+  it('boots after the update check decides not to reload', async () => {
+    vi.mocked(registerServiceWorker).mockResolvedValueOnce({} as ServiceWorkerRegistration);
+    vi.mocked(settleUpdateAtBootstrap).mockResolvedValueOnce(false);
+    const load = vi.mocked(loadFlutterApp);
+    load.mockClear();
+
+    runPipeline(resolved());
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+
+    expect(load).toHaveBeenCalledWith('/cdn/base', 'rev', resolved().build.builds, expect.any(Function));
+  });
+
+  it('forwards the Flutter loader\'s progress into the widget range', async () => {
+    vi.mocked(loadFlutterApp).mockImplementationOnce(async (_base, _rev, _builds, onProgress) => {
+      onProgress(100, 'Starting application');
+    });
+    const cfg = resolved();
+    const api = runPipeline(cfg);
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+
+    expect(api.progress.phase).toBe('dart-entry');
+    expect(api.progress.message).toBe('Starting application');
+    expect(api.progress.percent).toBe(cfg.ui.maxProgress);
+  });
+
+  it('shows a generic error when the loader rejects with a non-Error', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.mocked(loadFlutterApp).mockRejectedValueOnce('boom');
+    const api = runPipeline(resolved());
+    const errSpy = vi.spyOn(api, 'error');
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+
+    expect(errSpy).toHaveBeenCalledWith('Failed to load application');
+    expect(api.disposed).toBe(false);
+    errorSpy.mockRestore();
   });
 
   it('auto-disposes the API when flutter-first-frame is dispatched', async () => {

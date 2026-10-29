@@ -123,25 +123,6 @@ jobs:
         run: |
           find bin lib test -name "*.dart" ! -name "*.*.dart" -print0 | xargs -0 dart format --set-exit-if-changed --line-length 80 -o none bin/ lib/ test/
 
-      - name: 🔍 Check what would be published
-        id: check-published-files
-        timeout-minutes: 2
-        # A .pubignore replaces the .gitignore of its own directory for
-        # `pub publish`, so a rule forgotten there uploads credentials or
-        # build output to pub.dev. This is the last line of defence.
-        run: |
-          dart pub publish --dry-run > /tmp/publish-set.txt 2>&1 || true
-          sed -E 's/.*[├└]── //; s/ \([^)]*\)$//' /tmp/publish-set.txt |
-            grep -iE '^([^ ]+\.(key|pem|p12|jks|keystore)|[^ ]+\.vm\.json|credentials\.json|service-account[^ ]*\.json|build|coverage|reports|node_modules)$' \
-            > /tmp/leaked.txt || true
-          if [ -s /tmp/leaked.txt ]; then
-            echo "::error::Files that must never reach pub.dev are in the published set:"
-            cat /tmp/leaked.txt
-            echo "Add them to .pubignore - it replaces .gitignore for pub."
-            exit 1
-          fi
-          echo "The published file set is clean."
-
       - name: 📈 Check analyzer
         id: check-analyzer
         timeout-minutes: 1
@@ -155,6 +136,33 @@ jobs:
             --timeout=60s --reporter=github --file-reporter=json:reports/tests.json \
             --exclude-tags=integration \
             --coverage=coverage
+
+      - name: 🔍 Check what would be published
+        id: check-published-files
+        timeout-minutes: 3
+        # A .pubignore replaces the .gitignore of its own directory for
+        # `pub publish`, so a rule forgotten there uploads credentials or
+        # build output to pub.dev. This is the last line of defence, so it
+        # runs last, on the whole tree: the setup action checks out only
+        # what the Dart steps need, which leaves out .pubignore itself, and
+        # the tests have created coverage/ and reports/ by now.
+        run: |
+          git sparse-checkout disable
+          if ! dart pub publish --dry-run > /tmp/publish-set.txt 2>&1; then
+            cat /tmp/publish-set.txt
+            echo "::error::dart pub publish --dry-run failed"
+            exit 1
+          fi
+          sed -E 's/.*[├└]── //; s/ \([^)]*\)$//' /tmp/publish-set.txt |
+            grep -iE '^([^ ]+\.(key|pem|p12|jks|keystore)|[^ ]+\.vm\.json|credentials\.json|service-account[^ ]*\.json|build|coverage|reports|node_modules)$' \
+            > /tmp/leaked.txt || true
+          if [ -s /tmp/leaked.txt ]; then
+            echo "::error::Files that must never reach pub.dev are in the published set:"
+            cat /tmp/leaked.txt
+            echo "Add them to .pubignore - it replaces .gitignore for pub."
+            exit 1
+          fi
+          echo "The published file set is clean."
 
   e2e:
     name: "E2E (Flutter + Playwright)"

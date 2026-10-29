@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect } from 'vitest';
-import { parseDataConfig, resolveConfig } from '../config';
+import { findBootstrapScript, parseDataConfig, resolveConfig } from '../config';
 import type { BuildConfig } from '../../shared/types';
 
 describe('parseDataConfig', () => {
@@ -124,5 +124,21 @@ describe('resolveConfig', () => {
     const resolved = resolveConfig(cfg, { title: 'Runtime', color: '#ffffff' });
     expect(resolved.ui.title).toBe('Runtime');
     expect(resolved.ui.color).toBe('#ffffff');
+  });
+});
+
+describe('findBootstrapScript', () => {
+  it('finds the script by its data attribute, not by id', () => {
+    document.body.innerHTML =
+      '<script id="bootstrap"></script><script data-sw-bootstrap data-config="{}"></script>';
+    const found = findBootstrapScript();
+    expect(found?.hasAttribute('data-sw-bootstrap')).toBe(true);
+    expect(found?.id).toBe('');
+    document.body.innerHTML = '';
+  });
+
+  it('returns null when the page has no bootstrap script', () => {
+    document.body.innerHTML = '';
+    expect(findBootstrapScript()).toBeNull();
   });
 });

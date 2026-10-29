@@ -473,3 +473,62 @@ describe('handleFetch — progress set membership', () => {
     expect(countedFlagsFor('index.html')).toEqual([true]);
   });
 });
+
+describe('handleFetch — unusable CacheStorage', () => {
+  let mockCaches: MockCacheStorage;
+
+  beforeEach(() => {
+    mockCaches = installMockCaches();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('serves a cache-first resource from the network when the cache cannot be opened', async () => {
+    // Evicted storage or a privacy mode: the app's own files must still load.
+    installMockFetch(async () => textResponse('from-network'));
+    vi.spyOn(caches, 'open').mockRejectedValue(new Error('SecurityError'));
+
+    const event = makeEvent(`${ORIGIN}/main.dart.js`);
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    const response = await event._responded!;
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('from-network');
+    // No write is attempted into a cache that could not be read.
+    expect(caches.open).toHaveBeenCalledOnce();
+  });
+
+  it('still returns the network response when the lazy cache write fails', async () => {
+    installMockFetch(async () => textResponse('fetched-core'));
+    const cache = await mockCaches.open('app-v1');
+    vi.spyOn(cache, 'put').mockRejectedValue(new Error('QuotaExceededError'));
+
+    const event = makeEvent(`${ORIGIN}/main.dart.js`);
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    const response = await event._responded!;
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('fetched-core');
+  });
+
+  it('answers 503 for an offline navigation when the shell cache cannot be opened', async () => {
+    installMockFetch(async () => {
+      throw new Error('offline');
+    });
+    const origSetTimeout = globalThis.setTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
+      fn: () => void,
+    ) => origSetTimeout(fn, 0)) as unknown as typeof setTimeout);
+    vi.spyOn(caches, 'open').mockRejectedValue(new Error('SecurityError'));
+
+    const event = makeEvent(`${ORIGIN}/some/route`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    const response = await event._responded!;
+
+    expect(response.status).toBe(503);
+    expect(await response.text()).toBe('Offline');
+  });
+});

@@ -22,7 +22,7 @@ dart run sw:generate [options]
 | `--input` | `-i` | `build/web` | Path to Flutter build directory |
 | `--output` | `-o` | `sw.js` | Output service worker filename |
 | `--bootstrap-output` | — | `bootstrap.js` | Output bootstrap filename |
-| `--prefix` | `-p` | `app-cache` | Cache name prefix. Give every app on one origin its own: workers sharing a prefix treat each other's caches as their own old versions |
+| `--prefix` | `-p` | `app-cache` | Cache name prefix. Give every app on one origin its own, and don't make one the start of another followed by `-` (`app` and `app-admin`): a worker deletes every cache named `{prefix}-…` that is not its own |
 | `--version` | `-v` | manifest content hash | Cache version string |
 
 ### File Filtering
@@ -68,7 +68,7 @@ manifest entirely.
 |--------|---------|-------------|
 | `--keep-maps` | `false` | Keep `.js.map` and `.js.symbols` files |
 | `--no-cleanup` | `false` | Leave the input tree alone: keep Flutter's files and leave `{{sw_version}}` unsubstituted |
-| `--comments` | `false` | Include comments in output |
+| `--comments` | `false` | Reserved: accepted, but has no effect on the output yet |
 | `--config` | `sw.yaml` | Path to YAML config file |
 
 ## YAML Config File
@@ -122,6 +122,14 @@ dart run sw:generate --config=config/sw-production.yaml
 | `SW_LOGO` | `--logo` |
 | `SW_TITLE` | `--title` |
 | `SW_COLOR` | `--color` |
+| `SW_GLOB` | `--glob` |
+| `SW_EXCLUDE_GLOB` | `--no-glob` |
+| `SW_CORE` | `--core` |
+| `SW_REQUIRED` | `--required` |
+| `SW_OPTIONAL` | `--optional` |
+| `SW_IGNORE` | `--ignore` |
+| `SW_MIN_PROGRESS` | `--min-progress` |
+| `SW_MAX_PROGRESS` | `--max-progress` |
 | `SW_KEEP_MAPS` | `--keep-maps` (`true`/`false`) |
 | `SW_NO_CLEANUP` | `--no-cleanup` (`true`/`false`) |
 | `SW_COMMENTS` | `--comments` (`true`/`false`) |
@@ -135,9 +143,11 @@ main.dart.js
 main.dart.wasm
 main.dart.mjs
 *.support.wasm
-canvaskit/{variant}.js     # Only the variant matching the renderer
-canvaskit/{variant}.wasm   # Only the variant matching the renderer
 ```
+
+CanvasKit and skwasm files are Optional, not Core: the bootstrap loads them
+from the CDN first and falls back to the local copy, which is then cached on
+first fetch (`--no-web-resources-cdn` builds load them locally from the start).
 
 ### Required (pre-cached on install)
 
@@ -148,8 +158,10 @@ assets/FontManifest.json
 manifest.json
 ```
 
-`index.html` is the app shell: pre-caching it is what lets a navigation
-resolve offline, and it puts the shell inside the progress-counted set.
+`index.html` is the app shell: pre-caching it gives a navigation a fallback
+when the network fails (the app still cannot start offline, since
+`bootstrap.js` is never cached), and it puts the shell inside the
+progress-counted set.
 The fetch handler still serves it network-first, so a deploy is picked up
 as soon as the origin is reachable.
 
