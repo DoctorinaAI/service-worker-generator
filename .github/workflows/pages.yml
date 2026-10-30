@@ -1,0 +1,78 @@
+name: Deploy example to GitHub Pages
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "master"
+    paths:
+      - "bin/**.dart"
+      - "lib/**.dart"
+      - "lib/src/assets/**"
+      - "example/**"
+      - "pubspec.yaml"
+      - ".github/workflows/pages.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: "Build"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: 📦 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐦 Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: 🏗️ Build Flutter example web
+        working-directory: example
+        # A project site lives under the repository's name, so the base href
+        # has to say so, and it must end with a slash.
+        run: |
+          flutter pub get
+          flutter build web --release --wasm \
+            --base-href "/${{ github.event.repository.name }}/" -o build/pages
+
+      - name: 🧰 Run Dart CLI on example build
+        run: |
+          dart pub get
+          dart run sw:generate --input=example/build/pages
+
+      - name: 🧭 Answer deep links with the app
+        # Pages has no rewrite rules: it answers an unknown path with 404.html
+        # and a 404 status. Copied after generating, so it stays out of the
+        # manifest. The first visit boots from it; after that the worker
+        # answers the 404 from its cached shell.
+        run: cp example/build/pages/index.html example/build/pages/404.html
+
+      - name: 📤 Upload site
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: example/build/pages
+
+  deploy:
+    name: "Deploy"
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 🚀 Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

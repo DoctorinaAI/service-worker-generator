@@ -8,6 +8,8 @@
 
 A complete **Flutter Web bootstrap replacement** that generates an optimized Service Worker and Bootstrap pipeline. Replaces Flutter's default `flutter_bootstrap.js` with a professional loading experience featuring progress tracking, intelligent caching, CanvasKit CDN loading, and a customizable loading widget.
 
+**[Live demo](https://doctorinaai.github.io/service-worker-generator/)**: the example app, built and deployed from `master`.
+
 ## Features
 
 - **Full Bootstrap Replacement** — Replaces Flutter's `flutter_bootstrap.js` with a controlled initialization pipeline

@@ -1,0 +1,92 @@
+[
+  {
+    "asset": "assets/images/aurora.webp",
+    "title": "Aurora",
+    "bytes": 17456
+  },
+  {
+    "asset": "assets/images/dunes.webp",
+    "title": "Dunes",
+    "bytes": 9894
+  },
+  {
+    "asset": "assets/images/orbits.webp",
+    "title": "Orbits",
+    "bytes": 138002
+  },
+  {
+    "asset": "assets/images/mosaic.webp",
+    "title": "Mosaic",
+    "bytes": 20180
+  },
+  {
+    "asset": "assets/images/bloom.webp",
+    "title": "Bloom",
+    "bytes": 34716
+  },
+  {
+    "asset": "assets/images/tides.webp",
+    "title": "Tides",
+    "bytes": 74110
+  },
+  {
+    "asset": "assets/images/ridge.png",
+    "title": "Ridge",
+    "bytes": 21383
+  },
+  {
+    "asset": "assets/images/dusk.jpg",
+    "title": "Dusk",
+    "bytes": 21503
+  },
+  {
+    "asset": "assets/images/static.webp",
+    "title": "Static",
+    "bytes": 614286
+  },
+  {
+    "asset": "assets/images/1002-1024x768-blur_5.webp",
+    "title": "Soft focus 1",
+    "bytes": 10682
+  },
+  {
+    "asset": "assets/images/485-1024x768-blur_5.webp",
+    "title": "Soft focus 2",
+    "bytes": 7090
+  },
+  {
+    "asset": "assets/images/492-1024x768-blur_5.webp",
+    "title": "Soft focus 3",
+    "bytes": 12202
+  },
+  {
+    "asset": "assets/images/502-1024x768-blur_5.webp",
+    "title": "Soft focus 4",
+    "bytes": 15878
+  },
+  {
+    "asset": "assets/images/535-1024x768-blur_5.webp",
+    "title": "Soft focus 5",
+    "bytes": 12582
+  },
+  {
+    "asset": "assets/images/758-1024x768-blur_5.webp",
+    "title": "Soft focus 6",
+    "bytes": 10514
+  },
+  {
+    "asset": "assets/images/826-1024x768-blur_5.webp",
+    "title": "Soft focus 7",
+    "bytes": 8812
+  },
+  {
+    "asset": "assets/images/984-1024x768-blur_5.webp",
+    "title": "Soft focus 8",
+    "bytes": 9578
+  },
+  {
+    "asset": "assets/images/988-1024x768-blur_5.webp",
+    "title": "Soft focus 9",
+    "bytes": 6854
+  }
+]

@@ -24,6 +24,7 @@ flutter:
   uses-material-design: true
 
   assets:
+    - assets/data/
     - assets/images/
 
   fonts:
@@ -33,5 +34,4 @@ flutter:
           weight: 400
 
   shaders:
-    - assets/shaders/dots.frag
     - assets/shaders/shimmer.frag
