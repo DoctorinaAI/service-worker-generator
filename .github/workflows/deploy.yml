@@ -45,7 +45,9 @@ jobs:
           sdk: stable
 
       - name: 📥 Install Dart dependencies
-        run: dart pub get
+        # Without the flag, pub also resolves example/, which needs the Flutter
+        # SDK this job does not have.
+        run: dart pub get --no-example
 
       - name: 📈 Check analyzer
         run: dart analyze --fatal-warnings lib/ bin/ test/
