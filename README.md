@@ -43,7 +43,7 @@ Or add as a dev dependency:
 
 ```yaml
 dev_dependencies:
-  sw: ^0.2.0
+  sw: ^0.3.0
 ```
 
 Pin the exact version in CI. `sw.js` and `bootstrap.js` are the app's boot
@@ -51,12 +51,12 @@ path, so a template change should arrive through a reviewed bump rather than
 on the next unrelated build:
 
 ```shell
-dart pub global activate sw 0.2.0
+dart pub global activate sw 0.3.0
 ```
 
-Note that a pre-release is not matched by a plain caret constraint — `0.3.0-dev`
-sorts *before* `0.3.0`, so it falls outside `^0.2.0`. Pin a pre-release
-exactly, or write `^0.3.0-dev` to accept it now and the release later.
+Note that a pre-release is not matched by a plain caret constraint — `0.4.0-dev`
+sorts *before* `0.4.0`, so it falls outside `^0.3.0`. Pin a pre-release
+exactly, or write `^0.4.0-dev` to accept it now and the release later.
 
 ## Quick Start
 
@@ -301,7 +301,7 @@ mv build/web/index.prod.html build/web/index.html
 # 3. Generate sw.js + bootstrap.js, inject {{sw_version}} into index.html,
 #    and auto-remove flutter_bootstrap.js / flutter_service_worker.js / flutter.js
 #    (flutter.js is inlined into bootstrap.js, so it's dropped from the output).
-dart pub global activate sw 0.2.0
+dart pub global activate sw 0.3.0
 dart pub global run sw:generate --version="$(git rev-parse --short=8 HEAD)"
 ```
 
@@ -486,6 +486,12 @@ needs `bootstrap.js`, which is deliberately never cached so that the shell,
 the bootstrap and the worker always come from one deploy. Serving a cached
 `bootstrap.js` would make offline loads possible at the cost of a page that
 can start on a stale bootstrap, and this project chooses the consistent load.
+
+A browser may still start the app from its HTTP cache, for as long as that
+cache keeps `bootstrap.js` fresh. To keep text readable when that happens,
+declare `Roboto` in your `pubspec.yaml`. Otherwise Flutter's engine fetches it
+from `fonts.gstatic.com`, which the worker cannot cache, and the page loses all
+of its text while its layout, buttons and images stay in place.
 
 ## Service Worker
 

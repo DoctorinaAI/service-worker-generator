@@ -31,8 +31,10 @@ Open <http://localhost:8080>. The generator refuses a build it has already proce
 |---|---|
 | `assets/images/*`: WebP, PNG and JPEG up to 512 KB | Optional, cached on first fetch |
 | `assets/images/static.webp`: over 512 KB | Not in the manifest, never cached |
-| `assets/fonts/fa-regular-400.ttf` | Optional |
+| `assets/fonts/*`: Roboto and Font Awesome | Optional, or Required with `--required` as `pages.yml` does |
 | `assets/data/gallery.json` | Optional |
 | `assets/shaders/shimmer.frag` | Not in the manifest, always from the network |
+
+Roboto is bundled on purpose. Without it the engine fetches it from `fonts.gstatic.com`, which the worker cannot cache, and text disappears offline.
 
 `tool/generate_assets.mjs` draws the generated pictures and writes `gallery.json`, so re-run it after adding an image. It needs `npm install`, Playwright's Chromium and `cwebp`.

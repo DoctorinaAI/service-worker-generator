@@ -1,7 +1,8 @@
-## Unreleased
+## 0.3.0 — 2026-10-30
 
 ### Fixed
 
+- **Docs**: an app that does not declare `Roboto` lost all of its text when started without a network. Flutter's engine fetches that font from `fonts.gstatic.com`, which the worker cannot cache, while the layout, buttons and images stay in place. The README now says to declare it, and the example bundles it and pre-caches its fonts. Found on an iPad. (`README.md`, `example/pubspec.yaml`, `.github/workflows/pages.yml`)
 - **Service Worker**: the refill of an evicted Core or Required file did not retry a `5xx` or `429`, although this changelog and `docs/service-worker.md` said it did. One `503` on the hash-busted URL went straight to the plain fallback, and a second one reached the page. It now retries like precache before falling back. (`packages/sw/src/sw/fetch-handler.ts`)
 - **Service Worker**: a lazy cache write refused before reading the body (`Vary: *`, say) left its copy of the response buffering the body the page was reading, until the stall timeout cut it. The copy is now released. (`packages/sw/src/sw/cache-manager.ts`)
 - **Service Worker**: a file fetched on a cache miss was often not stored. The write cloned the response after an `await`, by which time the page could already be reading it, so the clone threw and the file stayed uncached until a later request happened to win the race. This hit lazily cached files and the self-healing refill of evicted ones. The clone now happens before the first `await`.

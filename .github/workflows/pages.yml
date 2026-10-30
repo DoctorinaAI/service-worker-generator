@@ -47,7 +47,10 @@ jobs:
       - name: 🧰 Run Dart CLI on example build
         run: |
           dart pub get
-          dart run sw:generate --input=example/build/pages
+          # Fonts at install, not on first fetch: a first visit runs before the
+          # worker controls the page, and text without them is invisible.
+          dart run sw:generate --input=example/build/pages \
+            --required "assets/fonts/**;assets/assets/fonts/**"
 
       - name: 🧭 Answer deep links with the app
         # Pages has no rewrite rules: it answers an unknown path with 404.html
