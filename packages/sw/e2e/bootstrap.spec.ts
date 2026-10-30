@@ -24,7 +24,7 @@ test.describe('Bootstrap E2E', () => {
 
     await page.goto(BASE_URL);
     // Wait for bootstrap.js to start executing
-    await page.waitForTimeout(1000);
+    await page.waitForFunction(() => window.Bootstrap !== undefined);
 
     // No critical JS errors (filter out Flutter-specific ones)
     const criticalErrors = errors.filter(
@@ -76,36 +76,39 @@ test.describe('Bootstrap E2E', () => {
     });
 
     await page.goto(BASE_URL);
-    await page.waitForTimeout(2000);
 
     // Bootstrap should log version info to console
-    const hasBootstrapLog = consoleLogs.some(
-      (log) =>
-        log.includes('Bootstrap') ||
-        log.includes('SW') ||
-        log.includes('Service Worker') ||
-        log.includes('engine'),
-    );
-    expect(hasBootstrapLog).toBe(true);
+    await expect
+      .poll(() =>
+        consoleLogs.some(
+          (log) =>
+            log.includes('Bootstrap') ||
+            log.includes('SW') ||
+            log.includes('Service Worker') ||
+            log.includes('engine'),
+        ),
+      )
+      .toBe(true);
   });
 
   test('window.Bootstrap API is exposed', async ({ page }) => {
     await page.goto(BASE_URL);
-    await page.waitForTimeout(2000);
 
-    const hasBootstrapAPI = await page.evaluate(() => {
-      return typeof window.Bootstrap === 'object' && window.Bootstrap !== null;
-    });
-    expect(hasBootstrapAPI).toBe(true);
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          return typeof window.Bootstrap === 'object' && window.Bootstrap !== null;
+        }),
+      )
+      .toBe(true);
   });
 
   test('window.Bootstrap.progress returns state', async ({ page }) => {
     await page.goto(BASE_URL);
-    await page.waitForTimeout(2000);
+    await page.waitForFunction(() => window.Bootstrap?.progress !== undefined);
 
     const progress = await page.evaluate(() => window.Bootstrap?.progress);
 
-    expect(progress).toBeDefined();
     expect(progress).toHaveProperty('phase');
     expect(progress).toHaveProperty('percent');
     expect(progress).toHaveProperty('message');
@@ -113,16 +116,17 @@ test.describe('Bootstrap E2E', () => {
 
   test('service worker registers', async ({ page }) => {
     await page.goto(BASE_URL);
-    await page.waitForTimeout(3000);
 
-    const swRegistered = await page.evaluate(async () => {
-      if (!('serviceWorker' in navigator)) return false;
-      const registrations =
-        await navigator.serviceWorker.getRegistrations();
-      return registrations.length > 0;
-    });
-
-    expect(swRegistered).toBe(true);
+    await expect
+      .poll(() =>
+        page.evaluate(async () => {
+          if (!('serviceWorker' in navigator)) return false;
+          const registrations =
+            await navigator.serviceWorker.getRegistrations();
+          return registrations.length > 0;
+        }),
+      )
+      .toBe(true);
   });
 });
 

@@ -2,6 +2,8 @@ import type { ResourceManifest, ResourceEntry } from '../shared/types';
 import { ResourceCategory } from '../shared/types';
 import {
   BODY_STALL_TIMEOUT_MS,
+  FETCH_TIMEOUT_MS,
+  MAX_RETRY_ATTEMPTS,
   NEVER_CACHE_FILES,
   RESERVED_PATH_PREFIXES,
 } from '../shared/constants';
@@ -396,7 +398,12 @@ async function fetchRefill(
   if (!busted) return fetchWithRetry(request);
 
   try {
-    const response = await fetchWithRetry(busted);
+    const response = await fetchWithRetry(
+      busted,
+      MAX_RETRY_ATTEMPTS,
+      FETCH_TIMEOUT_MS,
+      { retryOnStatus: true },
+    );
     if (response.ok) return response;
     console.warn(
       `[SW] Refill of ${resourceKey} by hash answered HTTP ${response.status}; ` +

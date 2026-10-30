@@ -325,10 +325,8 @@ describe('navigation handling — app-shell integrity', () => {
 });
 
 describe('precache ↔ fetch-handler cache keys', () => {
-  let mockCaches: MockCacheStorage;
-
   beforeEach(() => {
-    mockCaches = installMockCaches();
+    installMockCaches();
   });
 
   afterEach(() => {

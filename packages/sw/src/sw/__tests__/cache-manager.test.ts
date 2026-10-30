@@ -1153,6 +1153,27 @@ describe('lazyCacheResponse — audit #30', () => {
     expect(await mockCaches.peek('content-v1')!.match('logo.png')).toBeDefined();
   });
 
+  it('releases the stored copy when the write is refused without reading it', async () => {
+    // `Vary: *` and the like reject before the body is touched. The copy has
+    // to go, or it buffers the whole body the page is reading.
+    const cancelled = vi.fn();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        cancel: cancelled,
+      }),
+    );
+    const cache = await caches.open('content-v1');
+    vi.spyOn(cache, 'put').mockRejectedValue(new TypeError('refused'));
+
+    await expect(
+      lazyCacheResponse('content-v1', new Request('logo.png'), response),
+    ).rejects.toThrow('refused');
+
+    // A tee cancels its source once both branches have: the copy already has.
+    await response.body!.cancel();
+    expect(cancelled).toHaveBeenCalledOnce();
+  });
+
   it('does not store a body whose size differs from the manifest', async () => {
     const cache = await caches.open('content-v1');
     consumeOnPut(cache);

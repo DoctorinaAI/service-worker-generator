@@ -39,6 +39,7 @@ npm run build                  # Build sw.js + bootstrap.js via Vite
 npm run build:all              # Build TS + copy to Dart string constants
 npm -w packages/sw run test    # Run Vitest tests
 npm -w packages/sw run check   # TypeScript type check
+npm run lint                   # ESLint on src and e2e
 ```
 
 ### Dart (root)

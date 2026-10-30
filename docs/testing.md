@@ -14,6 +14,7 @@ cannot.
 The specs need a generated build:
 
 ```bash
+npm run build:all
 cd example && flutter build web --release -o build/web && cd ..
 dart run sw:generate --input=example/build/web
 npx -w packages/sw playwright install chromium firefox webkit
@@ -21,7 +22,9 @@ npm -w packages/sw run e2e:all
 ```
 
 `SW_E2E_BROWSERS` picks the engines: `all`, or a list such as `firefox,webkit`.
-Without it, only Chromium runs.
+Without it, only Chromium runs. `npm run build:all` matters after any change in
+`packages/sw/src`: without it `sw:generate` embeds the previous worker and the
+tests pass or fail against old code.
 
 ### Writing a test
 
@@ -34,13 +37,16 @@ Without it, only Chromium runs.
 - **Take the origin down instead of using `setOffline`.** The emulation differs
   from a real outage in both directions, as the known differences below show.
 - **Wait for a condition.** `settle` and `expect.poll` hold on a slow runner
-  where a fixed sleep does not.
+  where a fixed sleep does not. Something that must not happen has no condition
+  to wait for: watch it for a while, as `expectShellIntact` does.
+- **Prove the scenario ran.** A check like "nothing is installing" is also true
+  before the install starts. Assert on the origin that the worker got that far.
 
 ### Known engine differences
 
 | Engine | Behaviour | In the suite |
 |---|---|---|
-| Firefox | With navigation preload on, a refused connection fails the navigation although the worker catches the rejection and answers from cache. `setOffline` does not show this. | `test.fail` in `origin-faults.spec.ts` |
+| Firefox | With navigation preload on, a refused connection fails the navigation although the worker catches the rejection and answers from cache. `setOffline` does not show this. | Pinned by `firefoxRefusesNavigation` in `origin-faults.spec.ts` |
 | WebKit | `context.setOffline(true)` fails the navigation with an internal error. A real outage works. | `test.skip` in `app-shell.spec.ts` |
 
 Playwright's Firefox and WebKit are patched builds, and on Linux its WebKit is
@@ -68,4 +74,4 @@ register.
   known engine gap.
 - [Workbox tests](https://github.com/GoogleChrome/workbox/tree/v7/test): the same
   strategies, tested by another project.
-- [Playwright: service workers](https://playwright.dev/docs/service-workers-experimental)
+- [Playwright: service workers](https://playwright.dev/docs/service-workers)

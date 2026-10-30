@@ -107,7 +107,11 @@ export class Host {
       // worker; harmless for the rest in a test.
       'Cache-Control': 'no-cache',
     });
-    fs.createReadStream(file).pipe(res);
+    // A redeploy or `stop()` can remove the file before it opens. Unhandled,
+    // that error would take the whole test worker down.
+    fs.createReadStream(file)
+      .on('error', () => res.destroy())
+      .pipe(res);
   }
 
   /**
@@ -120,7 +124,12 @@ export class Host {
 
     const edit = (name: string, change: (text: string) => string): void => {
       const file = path.join(this.root, name);
-      fs.writeFileSync(file, change(fs.readFileSync(file, 'utf8')));
+      const before = fs.readFileSync(file, 'utf8');
+      const after = change(before);
+      // A pattern the template outgrew would deploy the same build again, and
+      // a test about a new build would pass without one.
+      if (after === before) throw new Error(`deploy changed nothing in ${name}`);
+      fs.writeFileSync(file, after);
     };
     edit('main.dart.js', (js) => `${js}\n;window.__buildMarker=${JSON.stringify(marker)};\n`);
     // The worker refuses a body whose size differs from its manifest, so the
@@ -197,6 +206,19 @@ export async function settle(page: Page, url: string): Promise<void> {
   await expect
     .poll(() => cachedText(page, 'index.html').catch(() => null), { timeout: 30_000 })
     .toContain('data-sw-bootstrap');
+}
+
+/**
+ * Check the shell stays in place for a while. The worker writes it after
+ * answering, and a write that must not happen has no condition to wait for,
+ * so the slot is watched instead of read once.
+ */
+export async function expectShellIntact(page: Page, ms = 1_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  do {
+    expect(await cachedText(page, 'index.html')).toContain('data-sw-bootstrap');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  } while (Date.now() < deadline);
 }
 
 /** The version the controlling worker reports, over its message protocol. */

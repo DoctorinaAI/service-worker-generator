@@ -23,8 +23,6 @@ import {
 import { ownCacheNames } from '../shared/cache-ownership';
 import { reportIfQuotaExceeded } from './quota';
 
-declare const self: ServiceWorkerGlobalScope;
-
 /**
  * Get the content cache name for a given prefix and version.
  */
@@ -326,19 +324,21 @@ export async function lazyCacheResponse(
     throw error;
   }
   let mismatch: BodySizeMismatchError | undefined;
+  let guarded: Response | undefined;
   try {
-    await cache.put(
-      request,
-      guardBody(copy, {
-        idleMs: BODY_STALL_TIMEOUT_MS,
-        expectedBytes,
-        label: key,
-        onMismatch: (error) => {
-          mismatch = error;
-        },
-      }),
-    );
+    guarded = guardBody(copy, {
+      idleMs: BODY_STALL_TIMEOUT_MS,
+      expectedBytes,
+      label: key,
+      onMismatch: (error) => {
+        mismatch = error;
+      },
+    });
+    await cache.put(request, guarded);
   } catch (error) {
+    // A write refused before reading the body leaves the copy buffering, as
+    // above. One the write already read or locked rejects this, harmlessly.
+    guarded?.body?.cancel().catch(() => undefined);
     // Rethrow the mismatch itself: the Cache API may reject with a generic
     // error that drops the sizes the caller's log line should show.
     throw mismatch ?? error;

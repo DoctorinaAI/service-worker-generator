@@ -1,5 +1,12 @@
-import { expect, test } from '@playwright/test';
-import { cachedText, Host, markerOf, settle, workerVersion } from './support/host';
+import { expect, test, type Page } from '@playwright/test';
+import {
+  cachedText,
+  expectShellIntact,
+  Host,
+  markerOf,
+  settle,
+  workerVersion,
+} from './support/host';
 
 /**
  * What the worker does when the origin misbehaves, in every engine. Faults
@@ -13,10 +20,19 @@ test.describe('origin faults', () => {
    * the navigation even though the worker catches the rejected
    * `preloadResponse` and answers from cache. A minimal worker does the same,
    * and turning preload off fixes it, so the cause is in the engine.
-   * `test.fail` makes this test report the day that stops being true.
+   *
+   * Pins exactly that failure, so these tests report the day it stops being
+   * true, and any other failure in Firefox stays a failure. Returns whether
+   * the engine has this behaviour, and the test has nothing left to check.
    */
-  function expectFirefoxPreloadFailure(browserName: string): void {
-    test.fail(browserName === 'firefox', 'Firefox fails the navigation when preload is refused');
+  async function firefoxRefusesNavigation(
+    page: Page,
+    url: string,
+    browserName: string,
+  ): Promise<boolean> {
+    if (browserName !== 'firefox') return false;
+    await expect(page.goto(url)).rejects.toThrow(/NS_ERROR/);
+    return true;
   }
 
   test.beforeEach(async () => {
@@ -30,10 +46,10 @@ test.describe('origin faults', () => {
   });
 
   test('answers a navigation from cache when the origin is down', async ({ page, browserName }) => {
-    expectFirefoxPreloadFailure(browserName);
     await settle(page, host.origin);
 
     await host.down();
+    if (await firefoxRefusesNavigation(page, host.origin, browserName)) return;
     const response = await page.goto(host.origin);
 
     expect(response?.fromServiceWorker()).toBe(true);
@@ -47,11 +63,12 @@ test.describe('origin faults', () => {
     page,
     browserName,
   }) => {
-    expectFirefoxPreloadFailure(browserName);
     await settle(page, host.origin);
 
     await host.down();
-    const response = await page.goto(`${host.origin}/chat/42`);
+    const deepLink = `${host.origin}/chat/42`;
+    if (await firefoxRefusesNavigation(page, deepLink, browserName)) return;
+    const response = await page.goto(deepLink);
 
     expect(response?.status()).toBe(200);
     expect(page.url()).toBe(`${host.origin}/chat/42`);
@@ -70,7 +87,7 @@ test.describe('origin faults', () => {
 
     expect(response?.status()).toBe(200);
     await expect(page).toHaveTitle('Service Worker');
-    expect(await cachedText(page, 'index.html')).toContain('data-sw-bootstrap');
+    await expectShellIntact(page);
   });
 
   test('retries a precache request that failed once', async ({ page }) => {
@@ -103,12 +120,21 @@ test.describe('origin faults', () => {
     expect(before).not.toBeNull();
 
     host.deploy('b', { suffix: '-b' });
+    host.requests.length = 0;
     host.fault = ({ pathname }, res) => {
       if (pathname !== '/main.dart.js') return false;
       res.writeHead(500, { 'Content-Type': 'text/plain' }).end('broken');
       return true;
     };
     await page.reload();
+
+    // Nothing is installing until the browser has seen the new `sw.js`, so
+    // first make sure the new worker really met the fault.
+    await expect
+      .poll(() => host.seen('/main.dart.js').filter((r) => r.url.includes('v=')).length, {
+        timeout: 30_000,
+      })
+      .toBeGreaterThan(0);
 
     // The failed install ends `redundant`, leaving nothing to hand over to.
     await expect

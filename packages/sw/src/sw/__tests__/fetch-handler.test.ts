@@ -789,6 +789,38 @@ describe('handleFetch — audit #30', () => {
       expect((spy.mock.calls[1]![0] as Request).url).toBe(`${ORIGIN}/main.dart.js`);
     });
 
+    it('retries a transient 5xx or 429 before giving up on the busted URL', async () => {
+      instantTimers();
+      for (const status of [503, 429]) {
+        let failed = false;
+        const spy = installMockFetch(async () => {
+          if (failed) return new Response(bytes(100));
+          failed = true;
+          return textResponse('try later', status);
+        });
+        await mockCaches.open('app-v1');
+        const event = makeEvent(`${ORIGIN}/main.dart.js`);
+        handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+        expect((await event._responded!).status).toBe(200);
+        expect(spy).toHaveBeenCalledTimes(2);
+        // The retry is what stored this build's bytes, not the plain fallback.
+        expect((spy.mock.calls[1]![0] as Request).url).toContain('v=h-main');
+        await mockCaches.delete('app-v1');
+      }
+    });
+
+    it('takes one plain attempt after the busted URL stays at 5xx', async () => {
+      instantTimers();
+      const spy = installMockFetch(async (req) =>
+        req.url.includes('v=') ? textResponse('down', 503) : new Response(bytes(100)),
+      );
+      await mockCaches.open('app-v1');
+      const event = makeEvent(`${ORIGIN}/main.dart.js`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      expect((await event._responded!).status).toBe(200);
+      expect(spy).toHaveBeenCalledTimes(4);
+    });
+
     it('falls back to one plain attempt when the busted fetch throws', async () => {
       instantTimers();
       const spy = installMockFetch(async (req) => {

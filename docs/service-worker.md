@@ -104,6 +104,15 @@ the shell, install-time pre-cache and the network-first refresh, store a
 rebuilt copy with the flag dropped, so a host that normalizes
 `/index.html` to `/` does not poison the offline path.
 
+### Firefox and a refused connection
+
+With navigation preload on, Firefox fails a navigation whose connection is
+refused, even though the worker catches the rejected `preloadResponse` and
+answers from cache: the user sees the browser's error page, not the cached
+shell. A minimal worker does the same and turning preload off avoids it, so the
+cause is in the engine. Seen on Playwright's Firefox; `docs/testing.md` lists it
+with the other engine differences.
+
 
 ## Event Handlers
 

@@ -7,7 +7,7 @@ const requested = (process.env.SW_E2E_BROWSERS ?? 'chromium')
   .map((s) => s.trim().toLowerCase())
   .filter(Boolean);
 const all = ['chromium', 'firefox', 'webkit'] as const;
-const enabled = requested.includes('all')
+const enabled: readonly (typeof all)[number][] = requested.includes('all')
   ? all
   : all.filter((name) => requested.includes(name));
 
@@ -20,7 +20,7 @@ export default defineConfig({
     headless: true,
     viewport: { width: 1280, height: 720 },
   },
-  projects: (enabled.length > 0 ? enabled : ['chromium']).map((name) => ({
+  projects: (enabled.length > 0 ? enabled : (['chromium'] as const)).map((name) => ({
     name,
     use: { browserName: name },
   })),

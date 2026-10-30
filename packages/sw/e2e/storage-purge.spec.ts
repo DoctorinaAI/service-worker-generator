@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { cachedText, controllerUrl, Host, markerOf, settle } from './support/host';
 
@@ -14,6 +16,21 @@ async function purgeCaches(page: Page): Promise<void> {
   await page.evaluate(async () => {
     await Promise.all((await caches.keys()).map((name) => caches.delete(name)));
   });
+}
+
+async function evictMainDartJs(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    for (const name of await caches.keys()) {
+      await (await caches.open(name)).delete(new Request('main.dart.js'));
+    }
+  });
+}
+
+/** The files the deployed worker stores on install, from its manifest. */
+function precachedFiles(root: string): string[] {
+  const sw = fs.readFileSync(path.join(root, 'sw.js'), 'utf8');
+  const entry = /"([^"]+)":\{"name":"[^"]+","size":\d+,"hash":"[^"]+","category":"(?:core|required)"/g;
+  return [...sw.matchAll(entry)].map((match) => match[1]!);
 }
 
 test.describe('storage purge', () => {
@@ -61,11 +78,7 @@ test.describe('storage purge', () => {
 
   test('refills one evicted file without refetching the rest', async ({ page }) => {
     await settle(page, host.origin);
-    await page.evaluate(async () => {
-      for (const name of await caches.keys()) {
-        await (await caches.open(name)).delete(new Request('main.dart.js'));
-      }
-    });
+    await evictMainDartJs(page);
     host.requests.length = 0;
 
     await page.reload();
@@ -74,6 +87,35 @@ test.describe('storage purge', () => {
     await expect
       .poll(() => cachedText(page, 'main.dart.js').then((text) => text !== null))
       .toBe(true);
-    expect(host.seen('/manifest.json')).toHaveLength(0);
+    expect(host.seen('/main.dart.js').length).toBeGreaterThan(0);
+    // Every other file install stored must still come from the cache. The shell
+    // is network-first, so it is the one exception.
+    const stored = precachedFiles(host.root).filter(
+      (file) => file !== 'main.dart.js' && file !== 'index.html',
+    );
+    expect(stored.length).toBeGreaterThan(0);
+    expect(stored.filter((file) => host.seen(`/${file}`).length > 0)).toEqual([]);
+  });
+
+  test('retries the refill when the origin answers 503 once', async ({ page }) => {
+    await settle(page, host.origin);
+    await evictMainDartJs(page);
+    host.requests.length = 0;
+    let failed = false;
+    host.fault = ({ pathname }, res) => {
+      if (failed || pathname !== '/main.dart.js') return false;
+      failed = true;
+      res.writeHead(503, { 'Content-Type': 'text/plain' }).end('try later');
+      return true;
+    };
+
+    await page.reload();
+
+    await expect.poll(() => markerOf(page), { timeout: 30_000 }).toBe('a');
+    // Both by hash: without the retry, the second would be the plain fallback,
+    // which can be answered with another build's file.
+    const refills = host.seen('/main.dart.js');
+    expect(refills).toHaveLength(2);
+    expect(refills.every((r) => r.url.includes('v='))).toBe(true);
   });
 });

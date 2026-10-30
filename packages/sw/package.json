@@ -10,14 +10,15 @@
     "dev": "vite build -c vite.config.sw.ts --watch",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "tsc --noEmit",
-    "lint": "eslint src/",
+    "check": "tsc --noEmit && tsc -p tsconfig.e2e.json",
+    "lint": "eslint src/ e2e/ *.ts",
     "e2e": "playwright test",
     "e2e:all": "SW_E2E_BROWSERS=all playwright test",
     "e2e:headed": "playwright test --headed"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
+    "@types/node": "^22.20.5",
     "@typescript-eslint/eslint-plugin": "^8.58.2",
     "@typescript-eslint/parser": "^8.58.2",
     "eslint": "^10.2.1",

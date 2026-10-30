@@ -440,7 +440,6 @@ export class LoadingWidget {
       (this.config.theme === 'auto' &&
         window.matchMedia('(prefers-color-scheme: dark)').matches);
     const bg = isDark ? '#1a1a2e' : '#f4fdf7';
-    const textColor = isDark ? '#e0e0e0' : '#333';
     const subtextColor = isDark ? '#b0b0b0' : '#666';
     const titleColor = isDark ? color : color;
 

@@ -19,6 +19,7 @@ on:
       - "packages/sw/src/**"
       - "scripts/**"
       - ".github/workflows/*.yml"
+      - ".github/actions/**"
       - "pubspec.yaml"
       - "package.json"
       - "analysis_options.yaml"
@@ -27,7 +28,8 @@ on:
       - "package-lock.json"
       - "packages/sw/package.json"
       - "packages/sw/*.ts"
-      - "packages/sw/tsconfig.json"
+      - "packages/sw/tsconfig*.json"
+      - "packages/sw/eslint.config.js"
       - "packages/sw/e2e/**"
       - "example/**"
   pull_request:
@@ -48,6 +50,7 @@ on:
       - "packages/sw/src/**"
       - "scripts/**"
       - ".github/workflows/*.yml"
+      - ".github/actions/**"
       - "pubspec.yaml"
       - "package.json"
       - "analysis_options.yaml"
@@ -56,7 +59,8 @@ on:
       - "package-lock.json"
       - "packages/sw/package.json"
       - "packages/sw/*.ts"
-      - "packages/sw/tsconfig.json"
+      - "packages/sw/tsconfig*.json"
+      - "packages/sw/eslint.config.js"
       - "packages/sw/e2e/**"
       - "example/**"
 
@@ -89,6 +93,9 @@ jobs:
 
       - name: 🔍 Type check
         run: npm run check
+
+      - name: 🧹 Lint
+        run: npm run lint
 
       - name: 🧪 Run tests
         run: npm test

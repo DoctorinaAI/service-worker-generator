@@ -1,7 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { expect, test } from '@playwright/test';
-import { cachedText, Host, settle, WEB_ROOT, workerVersion } from './support/host';
+import {
+  cachedText,
+  expectShellIntact,
+  Host,
+  settle,
+  WEB_ROOT,
+  workerVersion,
+} from './support/host';
 
 /**
  * Which requests the worker answers, and how, in every engine. The scenarios
@@ -21,7 +28,7 @@ test.describe('fetch routing', () => {
     await host.stop();
   });
 
-  test('a redirecting navigation is followed, and does not touch the shell', async ({ page }) => {
+  test('a redirecting navigation is followed', async ({ page }) => {
     await settle(page, host.origin);
     host.fault = ({ pathname }, res) => {
       if (pathname !== '/old') return false;
@@ -32,14 +39,47 @@ test.describe('fetch routing', () => {
     await page.goto(`${host.origin}/old`);
 
     expect(page.url()).toBe(`${host.origin}/offline.html`);
-    expect(await cachedText(page, 'index.html')).toContain('data-sw-bootstrap');
   });
 
-  test('a Range request goes to the network and is never stored', async ({ page }) => {
+  test('a redirect answering a request for the shell does not replace it', async ({ page }) => {
     await settle(page, host.origin);
+    // A sign-in gateway in front of the app. `/` is the one navigation allowed
+    // to refresh the shell, so this is the one that could store its target.
+    host.fault = ({ pathname }, res) => {
+      if (pathname !== '/') return false;
+      res.writeHead(302, { Location: '/offline.html' }).end();
+      return true;
+    };
+
+    await page.goto(host.origin);
+
+    expect(page.url()).toBe(`${host.origin}/offline.html`);
+    await expectShellIntact(page);
+  });
+
+  test('a Range request goes to the network even with the file cached', async ({ page }) => {
+    await settle(page, host.origin);
+    const file = fs.readFileSync(path.join(WEB_ROOT, 'favicon.png'));
+    const cachedSize = () =>
+      page.evaluate(async () => {
+        for (const name of await caches.keys()) {
+          const hit = await (await caches.open(name)).match(new Request('favicon.png'));
+          if (hit) return (await hit.arrayBuffer()).byteLength;
+        }
+        return null;
+      });
+    await page.evaluate(async () => {
+      await (await fetch('favicon.png')).arrayBuffer();
+    });
+    await expect.poll(cachedSize).toBe(file.length);
     host.fault = ({ pathname, headers }, res) => {
       if (pathname !== '/favicon.png' || !headers.range) return false;
-      res.writeHead(206, { 'Content-Range': 'bytes 0-1/917', 'Content-Length': '2' }).end('ok');
+      res
+        .writeHead(206, {
+          'Content-Range': `bytes 0-1/${file.length}`,
+          'Content-Length': '2',
+        })
+        .end('ok');
       return true;
     };
 
@@ -47,17 +87,10 @@ test.describe('fetch routing', () => {
       async () => (await fetch('favicon.png', { headers: { Range: 'bytes=0-1' } })).status,
     );
 
+    // Answered from cache, this would be a 200 with the whole file.
     expect(status).toBe(206);
     expect(host.seen('/favicon.png').some((r) => r.headers.range)).toBe(true);
-    const stored = await page.evaluate(async () => {
-      const statuses: number[] = [];
-      for (const name of await caches.keys()) {
-        const hit = await (await caches.open(name)).match(new Request('favicon.png'));
-        if (hit) statuses.push(hit.status);
-      }
-      return statuses;
-    });
-    expect(stored).not.toContain(206);
+    expect(await cachedSize()).toBe(file.length);
   });
 
   test('POST and unlisted requests pass through uncached', async ({ page }) => {

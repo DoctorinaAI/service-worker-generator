@@ -295,7 +295,6 @@ describe('installGlobalAPI', () => {
       (
         type: string,
         listener: EventListenerOrEventListenerObject,
-        options?: boolean | AddEventListenerOptions,
       ) => {
         if (type === 'controllerchange') {
           setTimeout(() => {
