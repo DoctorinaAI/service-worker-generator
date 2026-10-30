@@ -28,6 +28,16 @@ flutter:
     - assets/images/
 
   fonts:
+    # Declared so that the engine does not fetch Roboto from fonts.gstatic.com,
+    # which the worker cannot cache: offline, all text would disappear.
+    - family: Roboto
+      fonts:
+        - asset: assets/fonts/Roboto-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Roboto-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Roboto-Bold.ttf
+          weight: 700
     - family: FontAwesome
       fonts:
         - asset: assets/fonts/fa-regular-400.ttf
