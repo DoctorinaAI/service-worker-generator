@@ -37,6 +37,16 @@ export const BODY_STALL_TIMEOUT_MS = 30_000;
 export const SW_REGISTRATION_TIMEOUT_MS = 4_000;
 
 /**
+ * How long bootstrap waits for a waiting worker to take control after
+ * `skipWaiting`. A handover that works lands in a few milliseconds. One
+ * that loses the race described at `activateWaitingAtBootstrap` does not
+ * land while the page is open at all, so waiting longer only delays the
+ * same outcome: booting with the current controller, or the one reload
+ * `settleUpdateAtBootstrap` makes on an engine change.
+ */
+export const SW_HANDOFF_TIMEOUT_MS = 500;
+
+/**
  * How long bootstrap waits for the current controller to answer
  * `getVersion` with its engine revision. A live worker answers in
  * milliseconds; a worker from a release that predates the field answers

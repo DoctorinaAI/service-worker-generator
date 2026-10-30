@@ -5,6 +5,7 @@ import {
   MANIFEST_CACHE_SUFFIX,
   CANVASKIT_CDN_BASE,
   FETCH_TIMEOUT_MS,
+  SW_HANDOFF_TIMEOUT_MS,
   SW_REGISTRATION_TIMEOUT_MS,
   STALLED_TIMEOUT_MS,
   MAX_RETRY_ATTEMPTS,
@@ -30,6 +31,7 @@ describe('constants', () => {
   it('has reasonable timeout values', () => {
     expect(FETCH_TIMEOUT_MS).toBe(10_000);
     expect(SW_REGISTRATION_TIMEOUT_MS).toBe(4_000);
+    expect(SW_HANDOFF_TIMEOUT_MS).toBe(500);
     expect(STALLED_TIMEOUT_MS).toBe(30_000);
   });
 

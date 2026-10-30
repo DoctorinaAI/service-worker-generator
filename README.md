@@ -478,6 +478,9 @@ can start on a stale bootstrap, and this project chooses the consistent load.
 - **Fetch retry**: 3 attempts with exponential backoff (1s → 2s → 4s + jitter)
 - **SW activation timeout**: 4s on a first visit, continues without SW on timeout.
   A page that already has a controller boots with it straight away
+- **Waiting-worker handover**: 500ms for a worker left waiting by an earlier
+  load to take control at bootstrap, then the page boots with its current
+  controller (or, on an engine change, reloads once)
 - **Engine change after a deploy**: when the new build runs on a different Flutter
   engine, the first load waits (up to 60s) for the new worker and switches to it,
   so the previous build's cached Dart code never meets the new engine

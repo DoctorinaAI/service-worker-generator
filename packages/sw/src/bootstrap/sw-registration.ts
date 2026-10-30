@@ -2,6 +2,7 @@ import {
   RESET_TIMEOUT_MS,
   SW_BOOTSTRAP_TIMEOUT_MS,
   SW_ENGINE_QUERY_TIMEOUT_MS,
+  SW_HANDOFF_TIMEOUT_MS,
   SW_REGISTRATION_TIMEOUT_MS,
   SW_UPDATE_INSTALL_TIMEOUT_MS,
 } from '../shared/constants';
@@ -184,8 +185,18 @@ export function listenForSWMessages(
  * yet and swapping controllers is non-disruptive. Post-bootstrap updates
  * continue to use the user-approval flow (`sw-update-available` →
  * `applyUpdate`) so running apps are never yanked out from under the
- * user. Bounded by a timeout — if the controller handoff doesn't land,
- * we fall back to the existing `waitForActivation` path rather than hang.
+ * user.
+ *
+ * The handover can lose a race it cannot see. Activation stops the old
+ * worker, and a request this page makes at that moment (the browser's
+ * favicon fetch, a logo, the web manifest) is dispatched to the old worker
+ * all the same, which restarts it. Chromium then keeps the new worker
+ * waiting for as long as this page stays open; sending `skipWaiting` again
+ * does not help. A handover that works lands in milliseconds, so it is
+ * bounded by `SW_HANDOFF_TIMEOUT_MS`, and the caller carries on as if
+ * there had been no waiting worker: a controlled page boots with its
+ * current controller (or reloads once, on an engine change), and a first
+ * visit falls back to `waitForActivation`.
  *
  * Returns true if the new worker took control.
  */
@@ -205,7 +216,7 @@ async function activateWaitingAtBootstrap(
     );
   });
   const timedOut = new Promise<'timeout'>((resolve) =>
-    setTimeout(() => resolve('timeout'), SW_REGISTRATION_TIMEOUT_MS),
+    setTimeout(() => resolve('timeout'), SW_HANDOFF_TIMEOUT_MS),
   );
 
   waiting.postMessage({ type: 'skipWaiting' });

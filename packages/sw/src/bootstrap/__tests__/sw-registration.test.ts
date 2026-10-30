@@ -13,6 +13,7 @@ import {
   RESET_TIMEOUT_MS,
   SW_BOOTSTRAP_TIMEOUT_MS,
   SW_ENGINE_QUERY_TIMEOUT_MS,
+  SW_HANDOFF_TIMEOUT_MS,
   SW_UPDATE_INSTALL_TIMEOUT_MS,
   SW_REGISTRATION_TIMEOUT_MS,
 } from '../../shared/constants';
@@ -276,7 +277,7 @@ describe('registerServiceWorker', () => {
     expect(result).toBe(registration);
   });
 
-  it('falls back to waitForActivation if the waiting-worker handoff times out', async () => {
+  it('falls back to waitForActivation if the handoff times out on an uncontrolled page', async () => {
     vi.useFakeTimers();
     const waiting = makeWorker('installed', '/sw.js?v=new');
     const active = makeWorker('activated', '/sw.js?v=old');
@@ -286,12 +287,19 @@ describe('registerServiceWorker', () => {
     const register = vi.fn(async () => registration);
     installSwContainer({ register });
 
-    const promise = registerServiceWorker('sw.js', 'new');
-    // Advance past both the activate-at-bootstrap timeout AND the
-    // waitForActivation timeout (same duration, chained sequentially).
-    await vi.advanceTimersByTimeAsync(SW_REGISTRATION_TIMEOUT_MS * 2 + 1);
-    const result = await promise;
-    expect(result).toBe(registration);
+    let settled = false;
+    const promise = registerServiceWorker('sw.js', 'new').then((r) => {
+      settled = true;
+      return r;
+    });
+    // No controller, so after the short handoff bound the pipeline still
+    // waits for activation, as on a first visit.
+    await vi.advanceTimersByTimeAsync(SW_HANDOFF_TIMEOUT_MS + 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(SW_REGISTRATION_TIMEOUT_MS);
+    expect(settled).toBe(true);
+    await expect(promise).resolves.toBe(registration);
   });
 
   it('does not wait for a newly installing worker when the page already has a controller', async () => {
@@ -400,8 +408,12 @@ describe('registerServiceWorker', () => {
     await expect(registerServiceWorker('sw.js', 'v1')).resolves.toBe(registration);
   });
 
-  it('spends one handover timeout, not two, when a waiting worker will not take over a controlled page', async () => {
+  it('boots with the current controller once a handover has not landed within its bound', async () => {
     vi.useFakeTimers();
+    // A lost handover: the old worker was restarted for a request this page
+    // made, and the browser holds the new one back while the page is open.
+    // Waiting longer cannot change that, so the bound is the whole cost,
+    // and there is no second wait for activation after it.
     const waiting = makeWorker('installed', '/sw.js?v=new');
     (waiting as unknown as { postMessage: () => void }).postMessage = vi.fn();
     const registration = makeRegistration(waiting, 'waiting');
@@ -416,7 +428,10 @@ describe('registerServiceWorker', () => {
       settled = true;
       return r;
     });
-    await vi.advanceTimersByTimeAsync(SW_REGISTRATION_TIMEOUT_MS + 1);
+    await vi.advanceTimersByTimeAsync(SW_HANDOFF_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(2);
     expect(settled).toBe(true);
     await expect(promise).resolves.toBe(registration);
   });
@@ -943,8 +958,9 @@ describe('settleUpdateAtBootstrap', () => {
     const first = settle(env.registration);
     await vi.advanceTimersByTimeAsync(0);
     env.install();
-    // No controllerchange: the handover lost its race.
-    await vi.advanceTimersByTimeAsync(SW_REGISTRATION_TIMEOUT_MS + 1);
+    // No controllerchange: the handover lost its race, and the reload
+    // follows its bound, not the 4s activation timeout.
+    await vi.advanceTimersByTimeAsync(SW_HANDOFF_TIMEOUT_MS + 1);
     await expect(first).resolves.toBe(true);
     expect(reloadSpy).toHaveBeenCalledOnce();
 
@@ -975,7 +991,7 @@ describe('settleUpdateAtBootstrap', () => {
     const result = settle(env.registration);
     await vi.advanceTimersByTimeAsync(0);
     env.install();
-    await vi.advanceTimersByTimeAsync(SW_REGISTRATION_TIMEOUT_MS - 1);
+    await vi.advanceTimersByTimeAsync(SW_HANDOFF_TIMEOUT_MS - 1);
     // Too late for the handover's race, but before the reload decision.
     (env.container as unknown as { controller: unknown }).controller = env.pending;
     await vi.advanceTimersByTimeAsync(2);
@@ -1145,7 +1161,7 @@ describe('settleUpdateAtBootstrap', () => {
     const result = settle(env.registration);
     await vi.advanceTimersByTimeAsync(SW_ENGINE_QUERY_TIMEOUT_MS + 1);
     env.install();
-    await vi.advanceTimersByTimeAsync(SW_REGISTRATION_TIMEOUT_MS + 1);
+    await vi.advanceTimersByTimeAsync(SW_HANDOFF_TIMEOUT_MS + 1);
     await expect(result).resolves.toBe(true);
     expect(reloadSpy).toHaveBeenCalledOnce();
   });
