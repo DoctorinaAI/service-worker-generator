@@ -251,7 +251,22 @@ describe('install — orphaned temp caches', () => {
     await mockCaches.open('app-temp-v1');
     await mockCaches.open('app-temp-v4');
     await install('v4');
-    expect((await mockCaches.keys()).sort()).toEqual(['app-temp-v4']);
+    // `app-manifest` is opened first, as the claim on the prefix.
+    expect((await mockCaches.keys()).sort()).toEqual(['app-manifest', 'app-temp-v4']);
+  });
+
+  it('opens the manifest cache before it creates its temp cache', async () => {
+    // The manifest cache marks the prefix as in use: an app with prefix
+    // `app` must see it in any listing that already has our temp cache.
+    const opened: string[] = [];
+    const origOpen = caches.open.bind(caches);
+    vi.spyOn(caches, 'open').mockImplementation(async (name: string) => {
+      opened.push(name);
+      return origOpen(name);
+    });
+    await install('v4');
+    expect(opened[0]).toBe('app-manifest');
+    expect(opened).toContain('app-temp-v4');
   });
 
   it('removes nothing while the waiting worker has no readable version', async () => {

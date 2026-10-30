@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -83,6 +84,15 @@ class Host {
       fs.writeFileSync(file, change(fs.readFileSync(file, 'utf8')));
     };
     edit('main.dart.js', (js) => `${js}\n;window.__buildMarker=${JSON.stringify(marker)};\n`);
+    // The worker refuses a body whose size differs from its manifest, so the
+    // marked file gets a manifest entry of its own, as a real build would.
+    const marked = fs.readFileSync(path.join(this.root, 'main.dart.js'));
+    edit('sw.js', (js) =>
+      js.replace(
+        /("main\.dart\.js":\{"name":"main\.dart\.js","size":)\d+(,"hash":")[0-9a-f]+/,
+        `$1${marked.length}$2${crypto.createHash('md5').update(marked).digest('hex')}`,
+      ),
+    );
 
     const { suffix, engine } = options;
     if (suffix) {

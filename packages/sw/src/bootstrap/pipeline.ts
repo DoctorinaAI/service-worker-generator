@@ -13,7 +13,9 @@ import {
 import {
   detectBrowserCaps,
   selectBuild,
+  getCanvasKitVariant,
   loadCanvasKit,
+  isCdnEngineFailure,
   reloadWithLocalCanvasKit,
 } from './canvaskit-loader';
 import { CANVASKIT_LOCAL_PATH } from '../shared/constants';
@@ -182,9 +184,16 @@ async function runPipelineWork(
       build.swFilename,
       build.swVersion,
     );
+    // Waiting for a new engine's worker to install can outlast the
+    // widget's stall threshold without a single `sw-progress`; the wait is
+    // bounded on its own, so keep it from reading as a stall.
     if (
       registration &&
-      (await settleUpdateAtBootstrap(registration, build.engineRevision))
+      (await settleUpdateAtBootstrap(
+        registration,
+        build.engineRevision,
+        () => updateProgress('sw', STAGE_PROGRESS.sw, 'Installing update'),
+      ))
     ) {
       return;
     }
@@ -223,20 +232,31 @@ async function runPipelineWork(
     updateProgress('assets', STAGE_PROGRESS.canvaskit + 5, 'Loading application');
 
     // An engine served from the CDN passed a one-byte probe of its `.js`,
-    // which says nothing about the `.wasm`. If the app then fails, retry
-    // once with the local copy every build ships (see
-    // `reloadWithLocalCanvasKit`). Failures arrive on two paths — a
-    // rejected `load()` and the engine-init callback — and are handled once.
+    // which says nothing about the `.wasm`. If the app then fails because
+    // of that engine, retry once with the local copy every build ships
+    // (see `reloadWithLocalCanvasKit`); any other failure — the app's own
+    // files, the network, being offline — shows the error screen, whose
+    // reset button a reload would only hide (`isCdnEngineFailure`).
+    // Failures arrive on two paths — a rejected `load()` and the
+    // engine-init callback — and are handled once.
     const usedCdn = canvasKitBaseUrl !== CANVASKIT_LOCAL_PATH;
+    const variant = getCanvasKitVariant(activeBuild, caps);
     let appFailureHandled = false;
-    const onAppFailure = (error: unknown): void => {
-      if (appFailureHandled) return;
-      appFailureHandled = true;
-      if (usedCdn && !(error instanceof FlutterLoaderMissingError)) {
+    const handleAppFailure = async (error: unknown): Promise<void> => {
+      if (
+        usedCdn &&
+        !(error instanceof FlutterLoaderMissingError) &&
+        (await isCdnEngineFailure(error, canvasKitBaseUrl, variant))
+      ) {
         const reason = error instanceof Error ? error.message : String(error);
         if (reloadWithLocalCanvasKit(reason)) return;
       }
       reportPipelineError(api, error);
+    };
+    const onAppFailure = (error: unknown): void => {
+      if (appFailureHandled) return;
+      appFailureHandled = true;
+      void handleAppFailure(error);
     };
 
     try {

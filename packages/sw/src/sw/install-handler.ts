@@ -1,6 +1,7 @@
 import type { ResourceManifest } from '../shared/types';
 import {
   cleanupOrphanedTempCaches,
+  getManifestCacheName,
   precacheResources,
   getTempCacheName,
 } from './cache-manager';
@@ -33,6 +34,17 @@ async function handleInstall(
   progress: ProgressReporter,
 ): Promise<void> {
   const tempCacheName = getTempCacheName(cachePrefix, version);
+
+  // Claim the prefix before creating any other cache under it. The manifest
+  // cache marks the prefix as in use, so an app whose prefix is a shorter
+  // start of ours (`app` for our `app-admin`) leaves our temp cache alone
+  // even on our very first install (see `ownCacheNames`). Best-effort: the
+  // precache below opens caches the same way and reports its own failure.
+  try {
+    await caches.open(getManifestCacheName(cachePrefix));
+  } catch (error) {
+    console.warn('[SW] Could not open the manifest cache:', error);
+  }
 
   await removeOrphanedTempCaches(cachePrefix, version);
 

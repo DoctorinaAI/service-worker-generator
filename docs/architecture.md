@@ -67,7 +67,7 @@ User's build/web/{sw.js, bootstrap.js} (final output)
 |----------|-----------|-----------------|-------------|
 | Core | Yes (install) | — | Essential for app startup: main.dart.* |
 | Required | Yes (install) | — | Needed early: `index.html` (app shell), AssetManifest, FontManifest, PWA manifest |
-| Optional | No | Yes (lazy) | CanvasKit variants, fonts (any size), small images/JSON (< 512KB) |
+| Optional | No | Yes (lazy) | CanvasKit variants, fonts (any size), small images/JSON (≤ 512 KB) |
 | Ignore | No | No | Large assets, source maps, debug files |
 
 ### Default Categorization Rules
@@ -85,7 +85,7 @@ User's build/web/{sw.js, bootstrap.js} (final output)
 **Optional:**
 - CanvasKit variant files for the selected renderer (lazy — CDN-first)
 - Fonts (`.ttf`, `.otf`, `.woff`, `.woff2`, `.eot`) — any size, since they're declared in `FontManifest.json` and the app will fetch them on startup
-- `.json`, `.webp`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.ico` files under 512KB
+- `.json`, `.webp`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.ico` files up to 512 KB (inclusive)
 
 **Ignore:**
 - `*.map`, `*.symbols`, `assets/NOTICES`
@@ -140,7 +140,7 @@ The renderer and variant are determined from Flutter's `buildConfig`:
 4. Only download the variant files needed — not the entire canvaskit directory
 
 ### Extracting engineRevision
-The Dart CLI parses `flutter_bootstrap.js` from the build directory to extract `engineRevision` from the `_flutter.buildConfig` object.
+The Dart CLI parses `flutter_bootstrap.js` from the build directory to extract `engineRevision` from the `_flutter.buildConfig` object. A build without one generates with a warning: the bootstrap then loads the local `canvaskit/` directory, and every deploy takes the install-and-handover update path.
 
 ## Configuration Priority
 

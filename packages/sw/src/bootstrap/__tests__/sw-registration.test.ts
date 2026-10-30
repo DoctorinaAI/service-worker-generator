@@ -15,6 +15,7 @@ import {
   SW_ENGINE_QUERY_TIMEOUT_MS,
   SW_UPDATE_INSTALL_TIMEOUT_MS,
   SW_REGISTRATION_TIMEOUT_MS,
+  STALLED_TIMEOUT_MS,
 } from '../../shared/constants';
 
 interface FakeWorker {
@@ -194,6 +195,34 @@ describe('registerServiceWorker', () => {
     expect(result).toBe(registration);
   });
 
+  it('stops listening for activation once it gives up on it', async () => {
+    vi.useFakeTimers();
+    const worker = makeWorker('installing');
+    const registration = makeRegistration(worker, 'installing');
+    installSwContainer({ register: vi.fn(async () => registration) });
+
+    const promise = registerServiceWorker('sw.js', 'v1');
+    await vi.advanceTimersByTimeAsync(0);
+    // wireUpdateDetection's own listener stays for the page's lifetime.
+    const before = worker._listeners.length;
+    await vi.advanceTimersByTimeAsync(SW_REGISTRATION_TIMEOUT_MS + 1);
+    await promise;
+    expect(worker._listeners).toHaveLength(before - 1);
+  });
+
+  it('stops listening for activation once it lands', async () => {
+    const worker = makeWorker('installing');
+    const registration = makeRegistration(worker, 'installing');
+    installSwContainer({ register: vi.fn(async () => registration) });
+
+    const promise = registerServiceWorker('sw.js', 'v1');
+    await vi.waitFor(() => expect(worker._listeners).toHaveLength(2));
+    worker.state = 'activated';
+    [...worker._listeners].forEach((cb) => cb());
+    await promise;
+    expect(worker._listeners).toHaveLength(1);
+  });
+
   it('returns null when register() throws', async () => {
     const register = vi.fn(async () => {
       throw new Error('blocked');
@@ -274,6 +303,44 @@ describe('registerServiceWorker', () => {
 
     const result = await promise;
     expect(result).toBe(registration);
+  });
+
+  it('clears the handoff timer once the new worker takes control', async () => {
+    vi.useFakeTimers();
+    const waiting = makeWorker('installed', '/sw.js?v=new');
+    const registration = makeRegistration(waiting, 'waiting');
+    registration.active = makeWorker('activated', '/sw.js?v=old');
+    (waiting as unknown as { postMessage: () => void }).postMessage = vi.fn();
+    const container = installSwContainer({ register: vi.fn(async () => registration) });
+
+    const promise = registerServiceWorker('sw.js', 'new');
+    await vi.advanceTimersByTimeAsync(0);
+    container.addEventListener.mock.calls
+      .filter((c) => c[0] === 'controllerchange')
+      .forEach((c) => (c[1] as () => void)());
+    await expect(promise).resolves.toBe(registration);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('drops its controllerchange listener when the handoff times out', async () => {
+    vi.useFakeTimers();
+    const waiting = makeWorker('installed', '/sw.js?v=new');
+    const registration = makeRegistration(waiting, 'waiting');
+    registration.active = makeWorker('activated', '/sw.js?v=old');
+    (waiting as unknown as { postMessage: () => void }).postMessage = vi.fn();
+    const container = installSwContainer({ register: vi.fn(async () => registration) });
+
+    const promise = registerServiceWorker('sw.js', 'new');
+    await vi.advanceTimersByTimeAsync(SW_REGISTRATION_TIMEOUT_MS * 2 + 1);
+    await promise;
+    const added = container.addEventListener.mock.calls
+      .filter((c) => c[0] === 'controllerchange')
+      .map((c) => c[1]);
+    const removed = container.removeEventListener.mock.calls
+      .filter((c) => c[0] === 'controllerchange')
+      .map((c) => c[1]);
+    expect(added).toHaveLength(1);
+    expect(removed).toEqual(added);
   });
 
   it('falls back to waitForActivation if the waiting-worker handoff times out', async () => {
@@ -1137,6 +1204,121 @@ describe('settleUpdateAtBootstrap', () => {
     await expect(result).resolves.toBe(false);
     expect(env.pending._listeners).toHaveLength(0);
     expect(reloadSpy).not.toHaveBeenCalled();
+  });
+
+  /** Another tab's `skipWaiting`: the worker moves past `waiting`. */
+  function activateElsewhere(env: ReturnType<typeof setUp>, state: 'activating' | 'activated'): void {
+    env.pending.state = state;
+    env.registration.installing = null;
+    env.registration.waiting = null;
+    env.registration.active = env.pending;
+    env.pending._listeners.forEach((cb) => cb());
+  }
+
+  it('waits for the claim instead of reloading when another tab activated the worker', async () => {
+    vi.useFakeTimers();
+    sessionStorage.setItem('sw-engine-update-reload', '1');
+    const env = setUp({ engine: 'engine-old-0000', pendingState: 'installing' });
+    const result = settle(env.registration);
+    await vi.advanceTimersByTimeAsync(0);
+    activateElsewhere(env, 'activating');
+    await vi.advanceTimersByTimeAsync(SW_REGISTRATION_TIMEOUT_MS / 2);
+    // Nothing waiting to hand over, and not claimed yet: still waiting.
+    expect(reloadSpy).not.toHaveBeenCalled();
+
+    (env.container as unknown as { controller: unknown }).controller = env.pending;
+    env.changeController();
+    await expect(result).resolves.toBe(false);
+    expect(reloadSpy).not.toHaveBeenCalled();
+    expect(env.pending.postMessage).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem('sw-engine-update-reload')).toBeNull();
+  });
+
+  it('reloads once when a worker activated elsewhere never claims the page', async () => {
+    vi.useFakeTimers();
+    const env = setUp({ engine: 'engine-old-0000', pendingState: 'installing' });
+    const result = settle(env.registration);
+    await vi.advanceTimersByTimeAsync(0);
+    activateElsewhere(env, 'activated');
+    await vi.advanceTimersByTimeAsync(SW_REGISTRATION_TIMEOUT_MS + 1);
+    await expect(result).resolves.toBe(true);
+    expect(reloadSpy).toHaveBeenCalledOnce();
+    const added = env.container.addEventListener.mock.calls
+      .filter((c) => c[0] === 'controllerchange')
+      .map((c) => c[1]);
+    const removed = env.container.removeEventListener.mock.calls
+      .filter((c) => c[0] === 'controllerchange')
+      .map((c) => c[1]);
+    expect(removed).toEqual(added);
+  });
+
+  it('re-arms the reload guard when it boots on the same engine', async () => {
+    // A same-engine update boots consistently; a guard left set by an
+    // earlier reload would deny an engine-changing deploy later in this tab
+    // its one reload, and that load would boot mixed.
+    sessionStorage.setItem('sw-engine-update-reload', '1');
+    const { registration } = setUp({ engine: NEW_ENGINE, pendingState: 'installing' });
+    await expect(settle(registration)).resolves.toBe(false);
+    expect(sessionStorage.getItem('sw-engine-update-reload')).toBeNull();
+  });
+
+  it('warns once when the build has no engineRevision', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const { registration } = setUp({ engine: NEW_ENGINE, pendingState: 'installing' });
+      registration.installing = null;
+      await settleUpdateAtBootstrap(
+        registration as unknown as ServiceWorkerRegistration,
+        '',
+      );
+      expect(warnSpy).toHaveBeenCalledOnce();
+      expect(String(warnSpy.mock.calls[0][0])).toContain('engineRevision');
+
+      warnSpy.mockClear();
+      await settle(registration);
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('keeps the loading widget fed while it waits, and only then', async () => {
+    // A slow precache sends no sw-progress to this page; without a beat the
+    // widget would call the wait a stall, and its reset would unregister
+    // the worker being waited for.
+    vi.useFakeTimers();
+    const onWait = vi.fn();
+    const env = setUp({ engine: 'engine-old-0000', pendingState: 'installing' });
+    const result = settleUpdateAtBootstrap(
+      env.registration as unknown as ServiceWorkerRegistration,
+      NEW_ENGINE,
+      onWait,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onWait).toHaveBeenCalledOnce();
+
+    // Never a stall-threshold-long gap between beats.
+    await vi.advanceTimersByTimeAsync(STALLED_TIMEOUT_MS * 1.5);
+    expect(onWait.mock.calls.length).toBeGreaterThanOrEqual(4);
+
+    env.install();
+    await vi.advanceTimersByTimeAsync(0);
+    env.changeController();
+    await expect(result).resolves.toBe(false);
+    const calls = onWait.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(STALLED_TIMEOUT_MS * 2);
+    expect(onWait).toHaveBeenCalledTimes(calls);
+  });
+
+  it('does not report a wait on the same engine', async () => {
+    const onWait = vi.fn();
+    const { registration } = setUp({ engine: NEW_ENGINE, pendingState: 'installing' });
+    await settleUpdateAtBootstrap(
+      registration as unknown as ServiceWorkerRegistration,
+      NEW_ENGINE,
+      onWait,
+    );
+    expect(onWait).not.toHaveBeenCalled();
   });
 
   it('is bounded when the install lands but the handover never does', async () => {

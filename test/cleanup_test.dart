@@ -4,6 +4,8 @@ import 'package:path/path.dart' as p;
 import 'package:sw/src/cleanup.dart';
 import 'package:test/test.dart';
 
+import 'support/capture.dart';
+
 void main() {
   group('cleanup', () {
     late io.Directory tempDir;
@@ -322,6 +324,116 @@ void main() {
         isFalse,
       );
       expect(chromiumDir.existsSync(), isFalse);
+    });
+
+    group('a shell that boots through Flutter\'s loader', () {
+      io.File bootstrap() =>
+          io.File(p.join(tempDir.path, 'flutter_bootstrap.js'));
+
+      Future<String> run(String body) async {
+        io.File(
+          p.join(tempDir.path, 'index.html'),
+        ).writeAsStringSync('<html><body>$body</body></html>');
+        final out = await captureOutput(
+          () => cleanup(
+            buildDir: tempDir,
+            swVersion: 'v1',
+            bootstrapOutput: 'boot.js',
+          ),
+        );
+        return out.stderr;
+      }
+
+      test(
+        'warns about a loader inlined by {{flutter_bootstrap_js}}',
+        () async {
+          final stderr = await run(
+            '<script>\n'
+            '_flutter.buildConfig = {"engineRevision":"abc","builds":[]};\n'
+            '_flutter.loader.load({serviceWorkerSettings: {}});\n'
+            '</script>',
+          );
+          expect(stderr, contains('{{flutter_bootstrap_js}}'));
+          expect(stderr, contains('without boot.js and the service worker'));
+          expect(
+            stderr,
+            contains('<script src="boot.js" data-sw-bootstrap defer></script>'),
+          );
+          // The page does not need the file: the loader is in the page.
+          expect(bootstrap().existsSync(), isFalse);
+        },
+      );
+
+      test('recognises the load call on its own', () async {
+        final stderr = await run(
+          '<script type="text/javascript">\n'
+          '_flutter.loader.load ({});</script>',
+        );
+        expect(stderr, contains('{{flutter_bootstrap_js}}'));
+      });
+
+      test('keeps flutter_bootstrap.js when a script injects it', () async {
+        final stderr = await run(
+          '<script>const s = document.createElement("script");\n'
+          's.src = "flutter_bootstrap.js"; document.body.append(s);</script>',
+        );
+        expect(bootstrap().existsSync(), isTrue);
+        expect(stderr, contains('still loads flutter_bootstrap.js'));
+        expect(stderr, contains('Load boot.js instead'));
+      });
+
+      test('ignores a commented-out inline loader', () async {
+        final stderr = await run(
+          '<!-- <script>_flutter.loader.load();</script> -->\n'
+          '<script src="boot.js" defer></script>',
+        );
+        expect(stderr, isEmpty);
+      });
+
+      test('is silent for an inline script that is not the loader', () async {
+        final stderr = await run(
+          '<script>window.flutterConfig = {};</script>\n'
+          '<script src="boot.js" defer></script>',
+        );
+        expect(stderr, isEmpty);
+        expect(bootstrap().existsSync(), isFalse);
+      });
+    });
+
+    group('stampIndexHtmlVersion', () {
+      test('returns null without a placeholder', () {
+        expect(stampIndexHtmlVersion('<html></html>', 'v1'), isNull);
+      });
+
+      test('HTML-escapes the version for text and attributes', () {
+        const html =
+            '<meta content="{{sw_version}}">\n'
+            "<p data-v='{{flutter_service_worker_version}}'> {{sw_version}}</p>";
+        expect(
+          stampIndexHtmlVersion(html, '''a&b<c>"d'e'''),
+          '<meta content="a&amp;b&lt;c&gt;&quot;d&#39;e">\n'
+          "<p data-v='a&amp;b&lt;c&gt;&quot;d&#39;e'>"
+          ' a&amp;b&lt;c&gt;&quot;d&#39;e</p>',
+        );
+      });
+
+      test('leaves a generated version unchanged', () {
+        expect(
+          stampIndexHtmlVersion('{{sw_version}}', '2026.10.29-abc_1'),
+          '2026.10.29-abc_1',
+        );
+      });
+
+      test('applyIndexHtmlVersion escapes too', () {
+        io.File(
+          p.join(tempDir.path, 'index.html'),
+        ).writeAsStringSync('<meta content="{{sw_version}}">');
+        applyIndexHtmlVersion(tempDir, '"><script>');
+        expect(
+          io.File(p.join(tempDir.path, 'index.html')).readAsStringSync(),
+          '<meta content="&quot;&gt;&lt;script&gt;">',
+        );
+      });
     });
   });
 }

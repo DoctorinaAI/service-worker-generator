@@ -8,6 +8,7 @@ import {
   getCanvasKitVariant,
   loadCanvasKit,
   CANVASKIT_LOCAL_KEY,
+  isCdnEngineFailure,
   reloadWithLocalCanvasKit,
 } from '../canvaskit-loader';
 import type { FlutterBuildEntry } from '../../shared/types';
@@ -458,5 +459,53 @@ describe('reloadWithLocalCanvasKit', () => {
     reloadWithLocalCanvasKit('wasm 403');
     const lines = logSpy.mock.calls.map((c: unknown[]) => String(c[0]));
     expect(lines.some((l: string) => l.includes('wasm 403'))).toBe(true);
+  });
+});
+
+describe('isCdnEngineFailure', () => {
+  const CDN = `${CANVASKIT_CDN_BASE}/rev`;
+  const variant = { jsFile: 'canvaskit.js', wasmFile: 'canvaskit.wasm' };
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let originalFetch: typeof fetch;
+
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    originalFetch = globalThis.fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    logSpy.mockRestore();
+    vi.restoreAllMocks();
+  });
+
+  it('looks at the cause of a wrapped error', async () => {
+    const spy = installMockFetch(async () => textResponse('x'));
+    const error = new Error('Engine failed', {
+      cause: new TypeError(`Failed to fetch dynamically imported module: ${CDN}/canvaskit.js`),
+    });
+    await expect(isCdnEngineFailure(error, CDN, variant)).resolves.toBe(true);
+    // Only the origin was probed: the error already named the CDN.
+    expect(spy).toHaveBeenCalledOnce();
+    expect((spy.mock.calls[0][0] as Request).url).toContain(
+      `${CANVASKIT_LOCAL_PATH}/canvaskit.wasm`,
+    );
+  });
+
+  it('probes past the service worker cache with a no-store range request', async () => {
+    const spy = installMockFetch(async () => textResponse('x', 403));
+    await isCdnEngineFailure('boom', CDN, variant);
+    const request = spy.mock.calls[0][0] as Request;
+    expect(request.url).toBe(`${CDN}/canvaskit.wasm`);
+    expect(request.headers.get('Range')).toBe('bytes=0-0');
+    expect(request.cache).toBe('no-store');
+  });
+
+  it('counts a probe that cannot connect as unreachable', async () => {
+    installMockFetch(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    // The CDN is unreachable, but so is the origin: no reload.
+    await expect(isCdnEngineFailure('boom', CDN, variant)).resolves.toBe(false);
   });
 });

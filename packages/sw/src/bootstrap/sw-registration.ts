@@ -4,6 +4,7 @@ import {
   SW_ENGINE_QUERY_TIMEOUT_MS,
   SW_REGISTRATION_TIMEOUT_MS,
   SW_UPDATE_INSTALL_TIMEOUT_MS,
+  STALLED_TIMEOUT_MS,
 } from '../shared/constants';
 import { withTimeout } from '../shared/utils';
 import { logPhase } from './console-logger';
@@ -197,21 +198,14 @@ async function activateWaitingAtBootstrap(
 
   logPhase('SW', 'Waiting worker present at bootstrap; activating');
 
-  const controllerChanged = new Promise<'ok'>((resolve) => {
-    navigator.serviceWorker.addEventListener(
-      'controllerchange',
-      () => resolve('ok'),
-      { once: true },
-    );
-  });
-  const timedOut = new Promise<'timeout'>((resolve) =>
-    setTimeout(() => resolve('timeout'), SW_REGISTRATION_TIMEOUT_MS),
+  // Subscribed before the message goes out, so a fast swap is not missed.
+  const controllerChanged = waitForControllerChange(
+    navigator.serviceWorker.controller,
+    SW_REGISTRATION_TIMEOUT_MS,
   );
-
   waiting.postMessage({ type: 'skipWaiting' });
-  const outcome = await Promise.race([controllerChanged, timedOut]);
 
-  if (outcome === 'timeout') {
+  if (!(await controllerChanged)) {
     logPhase('SW', 'Waiting-worker handoff timed out, continuing with old');
     return false;
   }
@@ -220,8 +214,38 @@ async function activateWaitingAtBootstrap(
   return true;
 }
 
+/**
+ * Resolve `true` once the page's controller is no longer [previous] (a
+ * `controllerchange`, or one that already happened), `false` after
+ * [timeoutMs]. The listener and the timer go away either way.
+ */
+function waitForControllerChange(
+  previous: ServiceWorker | null,
+  timeoutMs: number,
+): Promise<boolean> {
+  const container = navigator.serviceWorker;
+  if (container.controller !== previous) return Promise.resolve(true);
+
+  return new Promise<boolean>((resolve) => {
+    const done = (changed: boolean): void => {
+      clearTimeout(timer);
+      container.removeEventListener('controllerchange', onChange);
+      resolve(changed);
+    };
+    const onChange = (): void => done(true);
+    const timer = setTimeout(() => done(false), timeoutMs);
+    container.addEventListener('controllerchange', onChange);
+  });
+}
+
 /** Session flag: this tab already reloaded to reach a new engine. */
 const UPDATE_RELOAD_KEY = 'sw-engine-update-reload';
+
+/**
+ * How often `settleUpdateAtBootstrap` calls its `onWait` while it waits
+ * for the new worker: well inside the loading widget's stall threshold.
+ */
+const UPDATE_WAIT_KEEPALIVE_MS = STALLED_TIMEOUT_MS / 3;
 
 /**
  * Make the first load after a deploy run on one build, when the Flutter
@@ -240,14 +264,35 @@ const UPDATE_RELOAD_KEY = 'sw-engine-update-reload';
  *
  * A controller from a release that predates `engineRevision` in its
  * `getVersion` reply counts as a different engine: the first load after
- * upgrading to this release waits once, which is safe either way.
+ * upgrading to this release waits once, which is safe either way. So does
+ * a build without an `engineRevision` of its own, on every update; that
+ * is warned about once per load, as this runs once per load.
+ *
+ * The wait can outlast the loading widget's stall threshold — a large
+ * precache on a slow link reports no `sw-progress` to this page until a
+ * resource completes — and the stall overlay's reset would unregister the
+ * very worker being waited for. The wait is bounded on its own, so
+ * [onWait] is called at its start and then every
+ * `UPDATE_WAIT_KEEPALIVE_MS` until it ends, for the caller to show it as
+ * progress rather than as a stall.
  *
  * Returns `true` when the page is reloading and the pipeline must stop.
  */
 export async function settleUpdateAtBootstrap(
   registration: ServiceWorkerRegistration,
   engineRevision: string,
+  onWait?: () => void,
 ): Promise<boolean> {
+  if (!engineRevision) {
+    console.warn(
+      '[Bootstrap] The build config has no engineRevision, so the engine ' +
+        'of a new deploy cannot be compared with the current one: every ' +
+        'update waits for the new service worker to install before the ' +
+        'app loads. Regenerate from a `flutter build web` output whose ' +
+        'flutter_bootstrap.js carries "engineRevision".',
+    );
+  }
+
   const controller = navigator.serviceWorker?.controller;
   const pending = registration.installing ?? registration.waiting;
   if (!controller || !pending) {
@@ -264,6 +309,9 @@ export async function settleUpdateAtBootstrap(
       'SW',
       'Newer worker pending on the same engine; continuing with the current one until reload',
     );
+    // The mix runs on one engine, so this load is consistent: re-arm the
+    // guard for an engine-changing deploy later in this tab.
+    clearUpdateReloadFlag();
     return false;
   }
 
@@ -274,21 +322,14 @@ export async function settleUpdateAtBootstrap(
       : 'Engine of the current worker is unknown; switching to the new worker first',
   );
 
-  if (!(await waitForInstalled(pending, SW_UPDATE_INSTALL_TIMEOUT_MS))) {
-    logPhase('SW', 'New worker did not install; continuing with the current one');
-    return false;
-  }
-  if (!handoverTried && (await activateWaitingAtBootstrap(registration))) {
-    clearUpdateReloadFlag();
-    return false;
-  }
-  // Another tab may have handed over meanwhile, or the `controllerchange`
-  // may have landed just after the handover timed out: the page is then
-  // already on the new worker, and a reload would buy nothing.
-  if (navigator.serviceWorker.controller !== controller) {
-    logPhase('SW', 'New worker took control during bootstrap');
-    clearUpdateReloadFlag();
-    return false;
+  onWait?.();
+  const keepAlive = onWait ? setInterval(onWait, UPDATE_WAIT_KEEPALIVE_MS) : undefined;
+  try {
+    if (!(await switchToPending(registration, pending, controller, handoverTried))) {
+      return false;
+    }
+  } finally {
+    clearInterval(keepAlive);
   }
 
   // The handover lost a race with a request this page made, and the new
@@ -306,6 +347,50 @@ export async function settleUpdateAtBootstrap(
   }
   logPhase('SW', 'Handover to the new worker did not land; reloading once');
   self.location.reload();
+  return true;
+}
+
+/**
+ * The waiting half of `settleUpdateAtBootstrap`: let [pending] install,
+ * then move this page from [controller] onto it.
+ *
+ * Returns `false` when the page can boot as it is — on the new worker, or
+ * on the current one because the new one did not install — and `true`
+ * when only a reload can reach the new worker.
+ */
+async function switchToPending(
+  registration: ServiceWorkerRegistration,
+  pending: ServiceWorker,
+  controller: ServiceWorker,
+  handoverTried: boolean,
+): Promise<boolean> {
+  if (!(await waitForInstalled(pending, SW_UPDATE_INSTALL_TIMEOUT_MS))) {
+    logPhase('SW', 'New worker did not install; continuing with the current one');
+    return false;
+  }
+  if (!handoverTried && (await activateWaitingAtBootstrap(registration))) {
+    clearUpdateReloadFlag();
+    return false;
+  }
+  // Another tab may have handed over meanwhile, or the `controllerchange`
+  // may have landed just after the handover timed out: the page is then
+  // already on the new worker, and a reload would buy nothing.
+  if (navigator.serviceWorker.controller !== controller) {
+    logPhase('SW', 'New worker took control during bootstrap');
+    clearUpdateReloadFlag();
+    return false;
+  }
+  // Another tab's `skipWaiting` moved the worker past `waiting` while this
+  // page waited for its install, so there was nothing here to hand over.
+  // Its activation claims this page; a reload now would only race it.
+  if (
+    (pending.state === 'activating' || pending.state === 'activated') &&
+    (await waitForControllerChange(controller, SW_REGISTRATION_TIMEOUT_MS))
+  ) {
+    logPhase('SW', 'New worker took control during bootstrap');
+    clearUpdateReloadFlag();
+    return false;
+  }
   return true;
 }
 
@@ -387,30 +472,45 @@ function waitForInstalled(worker: ServiceWorker, timeoutMs: number): Promise<boo
 /**
  * Activate a freshly-installed but waiting service worker.
  *
- * Sends `skipWaiting` to the registration's waiting worker, waits for the
- * browser to swap controllers, then resolves. Callers can then trigger a
- * page reload to pick up the new resources. Resolves to `false` when no
- * waiting worker is available, SW is unsupported, or the controller has
- * not changed within `SW_BOOTSTRAP_TIMEOUT_MS`.
+ * Sends `skipWaiting` to the registration's waiting worker, waits for it
+ * to take over, then resolves. Callers can then trigger a page reload to
+ * pick up the new resources.
+ *
+ * Taking over is a `controllerchange`, or the worker reaching `activated`:
+ * a page without a controller (a hard reload) is not claimed by the new
+ * worker and never sees the former, yet the update has applied and a
+ * reload loads it.
+ *
+ * Resolves to `false` when no waiting worker is available, the worker
+ * turns redundant, or neither happens within `SW_BOOTSTRAP_TIMEOUT_MS`.
  */
 export async function activateWaitingSW(
   registration: ServiceWorkerRegistration,
 ): Promise<boolean> {
   const waiting = registration.waiting;
   if (!waiting) return false;
+  const container = navigator.serviceWorker;
 
-  const controllerChanged = new Promise<boolean>((resolve) => {
-    navigator.serviceWorker.addEventListener('controllerchange', () => resolve(true), {
-      once: true,
-    });
+  return new Promise<boolean>((resolve) => {
+    const done = (applied: boolean): void => {
+      clearTimeout(timer);
+      container.removeEventListener('controllerchange', onControllerChange);
+      waiting.removeEventListener('statechange', onStateChange);
+      resolve(applied);
+    };
+    const onControllerChange = (): void => done(true);
+    const onStateChange = (): void => {
+      if (waiting.state === 'activated') done(true);
+      else if (waiting.state === 'redundant') done(false);
+    };
+    // A worker that never takes over must not hang an update prompt
+    // awaiting this. After the bound the caller gets `false` and the page
+    // stays as it is.
+    const timer = setTimeout(() => done(false), SW_BOOTSTRAP_TIMEOUT_MS);
+    container.addEventListener('controllerchange', onControllerChange);
+    waiting.addEventListener('statechange', onStateChange);
+    waiting.postMessage({ type: 'skipWaiting' });
   });
-
-  waiting.postMessage({ type: 'skipWaiting' });
-  // A worker that turns redundant instead of activating never fires
-  // `controllerchange`, and an update prompt awaiting this must not hang
-  // on it. After the bound the caller gets `false` and the page stays as
-  // it is.
-  return withTimeout(controllerChanged, SW_BOOTSTRAP_TIMEOUT_MS, false);
 }
 
 /**
@@ -551,15 +651,15 @@ async function waitForActivation(
   if (worker.state === 'activated') return true;
 
   return new Promise<boolean>((resolve) => {
-    const timeout = setTimeout(() => {
-      resolve(false);
-    }, SW_REGISTRATION_TIMEOUT_MS);
-
-    worker.addEventListener('statechange', () => {
-      if (worker.state === 'activated') {
-        clearTimeout(timeout);
-        resolve(true);
-      }
-    });
+    const done = (activated: boolean): void => {
+      clearTimeout(timeout);
+      worker.removeEventListener('statechange', onChange);
+      resolve(activated);
+    };
+    const onChange = (): void => {
+      if (worker.state === 'activated') done(true);
+    };
+    const timeout = setTimeout(() => done(false), SW_REGISTRATION_TIMEOUT_MS);
+    worker.addEventListener('statechange', onChange);
   });
 }

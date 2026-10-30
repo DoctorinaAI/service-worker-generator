@@ -29,6 +29,21 @@ export function workerVersion(slot: WorkerSlot): string | null | undefined {
 }
 
 /**
+ * Versions of the workers in [slots], or `null` when one of them is there
+ * but its version cannot be read. Callers that delete temp caches must
+ * then keep them all: one of them belongs to that worker.
+ */
+export function allVersionsOrNull(slots: readonly WorkerSlot[]): string[] | null {
+  const versions: string[] = [];
+  for (const slot of slots) {
+    const v = workerVersion(slot);
+    if (v === null) return null;
+    if (v) versions.push(v);
+  }
+  return versions;
+}
+
+/**
  * Versions of the workers in [slots] that could be read. A worker without
  * a readable version names no version to keep.
  */

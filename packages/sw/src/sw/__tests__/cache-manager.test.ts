@@ -643,6 +643,51 @@ describe('cleanupOldCaches', () => {
     expect(keys).not.toContain('app-temp-v2');
   });
 
+  it('leaves an app whose prefix extends ours with a `-` alone', async () => {
+    // Prefix `app-cache-admin` names every cache `app-cache-…`. Its
+    // manifest cache marks the prefix as in use.
+    for (const name of [
+      'app-cache-admin-manifest',
+      'app-cache-admin-v7',
+      'app-cache-admin-temp-v8',
+      'app-cache-manifest',
+      'app-cache-v1',
+      'app-cache-temp-v0',
+      'app-cache-v2',
+    ]) {
+      await mockCaches.open(name);
+    }
+    await cleanupOldCaches('app-cache', 'v2');
+    expect((await mockCaches.keys()).sort()).toEqual(
+      [
+        'app-cache-admin-manifest',
+        'app-cache-admin-temp-v8',
+        'app-cache-admin-v7',
+        'app-cache-manifest',
+        'app-cache-v2',
+      ].sort(),
+    );
+  });
+
+  it('keeps every temp cache when the pending versions are unknown', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    for (const name of ['app-temp-v4', 'app-v1', 'app-v3', 'app-manifest']) {
+      await mockCaches.open(name);
+    }
+    await cleanupOldCaches('app', 'v3', () => null);
+    expect((await mockCaches.keys()).sort()).toEqual(
+      ['app-manifest', 'app-temp-v4', 'app-v3'].sort(),
+    );
+    vi.restoreAllMocks();
+  });
+
+  it('never deletes its own manifest cache, whatever the versions', async () => {
+    await mockCaches.open('app-manifest');
+    await mockCaches.open('app-temp-manifest');
+    await cleanupOldCaches('app', 'temp-x', ['manifest']);
+    expect(await mockCaches.keys()).toContain('app-manifest');
+  });
+
   it('does not claim caches of a longer prefix', async () => {
     // `app-cache` must not reach into `app-cache2`'s caches.
     await mockCaches.open('app-cache2-v1');
@@ -762,27 +807,61 @@ describe('precacheResources — audit #30', () => {
     expect(await mockCaches.peek('temp-v1')!.match('main.dart.wasm')).toBeUndefined();
     const logged = errorSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n');
     expect(logged).toMatch(/main\.dart\.wasm.*expected 100 bytes.*received 60/);
+    expect(logged).toMatch(/70 bytes where the build has 100.*60 the first time/);
+  });
+
+  it('fails a re-encoded Core entry whose length changes between fetches', async () => {
+    const sizes = [60, 70];
+    installMockFetch(
+      async () =>
+        new Response(body(sizes.shift() ?? 80), { headers: { 'Content-Encoding': 'br' } }),
+    );
+    consumeOnPut(await caches.open('temp-v1'));
+    await expect(
+      precacheResources('temp-v1', core(100), [ResourceCategory.Core]),
+    ).rejects.toThrow(/main\.dart\.wasm/);
+    const logged = errorSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n');
     expect(logged).toMatch(/60 bytes, then 70.*cut short/);
   });
 
-  it('stores a Core entry the host serves short the same way twice, with a warning', async () => {
-    // A host that rewrites the file. Failing it would fail every install
-    // and leave the page on its previous worker for good.
-    installMockFetch(async () => new Response(body(60)));
+  it('fails a Core entry served short the same way twice, uncompressed', async () => {
+    // A deterministic truncation (a proxy with a body limit, a file cut on
+    // the origin) repeats its length too. Uncompressed, the bytes on the
+    // wire are the body: nothing rewrote it.
+    const spy = installMockFetch(async () => new Response(body(60)));
+    consumeOnPut(await caches.open('temp-v1'));
+    await expect(
+      precacheResources('temp-v1', core(100), [ResourceCategory.Core]),
+    ).rejects.toThrow(/main\.dart\.wasm/);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(await mockCaches.peek('temp-v1')!.match('main.dart.wasm')).toBeUndefined();
+    expect(errorSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n')).toMatch(
+      /60 bytes where the build has 100, sent uncompressed/,
+    );
+  });
+
+  it('stores a Core entry a re-encoding host serves short the same way twice, with a warning', async () => {
+    // A host that rewrites the file as it compresses it (a minifier, an
+    // injected snippet). Failing it would fail every install and leave the
+    // page on its previous worker for good.
+    installMockFetch(
+      async () => new Response(body(60), { headers: { 'Content-Encoding': 'gzip' } }),
+    );
     consumeOnPut(await caches.open('temp-v1'));
     await expect(
       precacheResources('temp-v1', core(100), [ResourceCategory.Core]),
     ).resolves.toBeUndefined();
     const stored = await mockCaches.peek('temp-v1')!.match('main.dart.wasm');
-    expect(stored).toBeDefined();
     expect((await stored!.arrayBuffer()).byteLength).toBe(60);
     expect(warnSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n')).toMatch(
-      /main\.dart\.wasm: the host serves 60 bytes where the build has 100/,
+      /main\.dart\.wasm: the host serves 60 bytes where the build has 100, re-encoded/,
     );
   });
 
-  it('stores a body longer than the build has, since truncation cannot cause it', async () => {
-    installMockFetch(async () => new Response(body(120)));
+  it('stores a re-encoded body longer than the build has', async () => {
+    installMockFetch(
+      async () => new Response(body(120), { headers: { 'Content-Encoding': 'gzip' } }),
+    );
     consumeOnPut(await caches.open('temp-v1'));
     await expect(
       precacheResources('temp-v1', core(100), [ResourceCategory.Core]),
@@ -791,15 +870,65 @@ describe('precacheResources — audit #30', () => {
     expect((await stored!.arrayBuffer()).byteLength).toBe(120);
   });
 
-  it('stores a Core entry of the length the host declares in one fetch', async () => {
+  it('fails an uncompressed body longer than the build has', async () => {
+    installMockFetch(async () => new Response(body(120)));
+    consumeOnPut(await caches.open('temp-v1'));
+    await expect(
+      precacheResources('temp-v1', core(100), [ResourceCategory.Core]),
+    ).rejects.toThrow(/main\.dart\.wasm/);
+    expect(await mockCaches.peek('temp-v1')!.match('main.dart.wasm')).toBeUndefined();
+  });
+
+  it('fails a Core entry served whole at another length, as a CDN ignoring ?v= does', async () => {
+    // CloudFront's default cache key drops the query string: `?v={hash}`
+    // gets the previous build's file, sent whole with its own
+    // Content-Length, on every request. Pinning it under this version
+    // would run the old Dart code until the next deploy.
     const spy = installMockFetch(
       async () => new Response(body(80), { headers: { 'Content-Length': '80' } }),
     );
     consumeOnPut(await caches.open('temp-v1'));
-    await precacheResources('temp-v1', core(100), [ResourceCategory.Core]);
-    const stored = await mockCaches.peek('temp-v1')!.match('main.dart.wasm');
-    expect((await stored!.arrayBuffer()).byteLength).toBe(80);
-    expect(spy).toHaveBeenCalledTimes(1);
+    await expect(
+      precacheResources('temp-v1', core(100), [ResourceCategory.Core]),
+    ).rejects.toThrow(/main\.dart\.wasm/);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(await mockCaches.peek('temp-v1')!.match('main.dart.wasm')).toBeUndefined();
+  });
+
+  it('fails a Core entry answered with an empty 200 twice', async () => {
+    // Two empty bodies agree with each other, but never with a file of
+    // 100 bytes.
+    installMockFetch(async () => new Response(new Uint8Array(0)));
+    consumeOnPut(await caches.open('temp-v1'));
+    await expect(
+      precacheResources('temp-v1', core(100), [ResourceCategory.Core]),
+    ).rejects.toThrow(/main\.dart\.wasm/);
+    expect(await mockCaches.peek('temp-v1')!.match('main.dart.wasm')).toBeUndefined();
+  });
+
+  it('fails a re-encoded Core entry answered empty twice', async () => {
+    installMockFetch(
+      async () => new Response(new Uint8Array(0), { headers: { 'Content-Encoding': 'gzip' } }),
+    );
+    consumeOnPut(await caches.open('temp-v1'));
+    await expect(
+      precacheResources('temp-v1', core(100), [ResourceCategory.Core]),
+    ).rejects.toThrow(/main\.dart\.wasm/);
+    expect(errorSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n')).toMatch(
+      /main\.dart\.wasm: an empty body for a file of 100 bytes/,
+    );
+  });
+
+  it('fails a Core entry answered with a 204, as a size mismatch', async () => {
+    // `204` is `ok` but has no body: the guard's mismatch is thrown before
+    // any stream exists, and gets the same second look.
+    const spy = installMockFetch(async () => new Response(null, { status: 204 }));
+    consumeOnPut(await caches.open('temp-v1'));
+    await expect(
+      precacheResources('temp-v1', core(100), [ResourceCategory.Core]),
+    ).rejects.toThrow(/main\.dart\.wasm.*expected 100 bytes.*received 0/);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(await mockCaches.peek('temp-v1')!.match('main.dart.wasm')).toBeUndefined();
   });
 
   it('fails a second copy that falls short of its own Content-Length', async () => {
@@ -1031,14 +1160,47 @@ describe('lazyCacheResponse — audit #30', () => {
     await lazyCacheResponse('content-v1', new Request('logo.png'), new Response(body(30)), 30);
     expect(await mockCaches.peek('content-v1')!.match('logo.png')).toBeDefined();
   });
-  it('stores an image the host re-encoded, when it declares the new length', async () => {
-    // Image optimisation on the host: a smaller file, sent whole. It was
-    // cached before the size check existed, and still is.
+
+  it('does not store a body sent whole at a length other than the build\'s', async () => {
+    // A declared Content-Length proves the body was not cut, not that it is
+    // this build's file: a CDN ignoring `?v=` sends the old one whole. The
+    // page still gets it; the cache does not pin it for this version.
     consumeOnPut(await caches.open('content-v1'));
     const response = new Response(body(4), { headers: { 'Content-Length': '4' } });
-    await lazyCacheResponse('content-v1', new Request('logo.png'), response, 30);
-    const stored = await mockCaches.peek('content-v1')!.match('logo.png');
-    expect((await stored!.arrayBuffer()).byteLength).toBe(4);
+    await expect(
+      lazyCacheResponse('content-v1', new Request('logo.png'), response, 30),
+    ).rejects.toThrow(/expected 30 bytes.*received 4/);
+    expect(await mockCaches.peek('content-v1')!.match('logo.png')).toBeUndefined();
+  });
+
+  it('does not store an empty 200 for a non-empty file', async () => {
+    consumeOnPut(await caches.open('content-v1'));
+    for (const empty of [new Response(new Uint8Array(0)), new Response(null)]) {
+      await expect(
+        lazyCacheResponse('content-v1', new Request('logo.png'), empty, 30),
+      ).rejects.toThrow(/expected 30 bytes.*received 0/);
+    }
+    expect(await mockCaches.peek('content-v1')!.match('logo.png')).toBeUndefined();
+  });
+
+  it('gives up on a stored copy whose body stalls', async () => {
+    vi.useFakeTimers();
+    try {
+      consumeOnPut(await caches.open('content-v1'));
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(body(3));
+          },
+        }),
+      );
+      const write = lazyCacheResponse('content-v1', new Request('main.dart.wasm'), response, 30);
+      const assertion = expect(write).rejects.toThrow(/stalled/);
+      await vi.advanceTimersByTimeAsync(BODY_STALL_TIMEOUT_MS + 1);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -1074,6 +1236,24 @@ describe('cleanupOrphanedTempCaches', () => {
     expect(String(vi.mocked(console.log).mock.calls[0]?.[0])).toMatch(
       /app-temp-v1.*app-temp-v2|app-temp-v2.*app-temp-v1/,
     );
+  });
+
+  it('leaves the in-flight temp cache of an app whose prefix extends ours alone', async () => {
+    for (const name of ['app-admin-manifest', 'app-admin-temp-v1', 'app-temp-v0']) {
+      await mockCaches.open(name);
+    }
+    await cleanupOrphanedTempCaches('app', ['v3']);
+    expect((await mockCaches.keys()).sort()).toEqual(
+      ['app-admin-manifest', 'app-admin-temp-v1'].sort(),
+    );
+  });
+
+  it('keeps the content cache of a kept version shaped like a temp cache', async () => {
+    // Version `temp-x` names its content cache `app-temp-x`.
+    await mockCaches.open('app-temp-x');
+    await mockCaches.open('app-temp-temp-x');
+    await cleanupOrphanedTempCaches('app', ['temp-x']);
+    expect((await mockCaches.keys()).sort()).toEqual(['app-temp-temp-x', 'app-temp-x']);
   });
 
   it('is silent when there is nothing to remove', async () => {

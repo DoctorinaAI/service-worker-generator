@@ -234,22 +234,76 @@ describe('createActivateHandler', () => {
     expect(await mockCaches.keys()).toContain('app-temp-v3');
   });
 
-  it('treats a pending worker without a readable version as abandoned', async () => {
-    // No `?v=` to read, or a URL that does not parse: nothing names a temp
-    // cache to keep, and activation must still complete.
-    await mockCaches.open('app-temp-v3');
-    (self as unknown as { registration: unknown }).registration = {
-      installing: { scriptURL: 'not a url' },
-      waiting: { scriptURL: 'https://example.com/sw.js' },
-    };
+  it('keeps every temp cache while a pending worker\'s version cannot be read', async () => {
+    // Install applies the same guard: a temp cache that no readable version
+    // names may be that worker's, still being written.
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    for (const name of ['app-temp-v3', 'app-temp-v0', 'app-v1']) {
+      await mockCaches.open(name);
+    }
+    for (const unreadable of [
+      { installing: { scriptURL: 'not a url' } },
+      { waiting: { scriptURL: 'https://example.com/sw.js' } },
+    ]) {
+      (self as unknown as { registration: unknown }).registration = unreadable;
+      const handler = createActivateHandler('app', 'v2', {});
+      const event = makeEvent();
+      handler(event as unknown as ExtendableEvent);
+      await event._promise;
+
+      const names = await mockCaches.keys();
+      expect(names).toContain('app-temp-v3');
+      expect(names).toContain('app-temp-v0');
+      expect(names).not.toContain('app-v1');
+      expect(claimSpy).toHaveBeenCalled();
+      await mockCaches.open('app-v1');
+    }
+  });
+
+  it('reads the pending workers after listing the caches', async () => {
+    // v5 starts installing after cleanup listed the caches. Read before the
+    // listing, the registration names no v5, and the temp cache v5 created
+    // in between is in the listing and gets deleted mid-install.
+    (self as unknown as { registration: unknown }).registration = {};
+    await mockCaches.open('app-temp-v0');
+    const origKeys = caches.keys.bind(caches);
+    vi.spyOn(caches, 'keys').mockImplementationOnce(async () => {
+      await mockCaches.open('app-temp-v5');
+      (self as unknown as { registration: unknown }).registration = {
+        installing: { scriptURL: 'https://example.com/sw.js?v=v5' },
+      };
+      return origKeys();
+    });
 
     const handler = createActivateHandler('app', 'v2', {});
     const event = makeEvent();
     handler(event as unknown as ExtendableEvent);
     await event._promise;
 
-    expect(await mockCaches.keys()).not.toContain('app-temp-v3');
-    expect(claimSpy).toHaveBeenCalledOnce();
+    const names = await mockCaches.keys();
+    expect(names).toContain('app-temp-v5');
+    expect(names).not.toContain('app-temp-v0');
+  });
+
+  it('leaves the caches of an app whose prefix extends ours alone', async () => {
+    (self as unknown as { registration: unknown }).registration = {};
+    for (const name of [
+      'app-admin-manifest',
+      'app-admin-v1',
+      'app-admin-temp-v2', // that app's install, in flight
+      'app-v1',
+    ]) {
+      await mockCaches.open(name);
+    }
+
+    const handler = createActivateHandler('app', 'v2', {});
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    expect((await mockCaches.keys()).sort()).toEqual(
+      ['app-admin-manifest', 'app-admin-temp-v2', 'app-admin-v1', 'app-manifest', 'app-v2'].sort(),
+    );
   });
 
   it('wipes app-prefixed caches on error', async () => {
@@ -257,6 +311,7 @@ describe('createActivateHandler', () => {
     await mockCaches.open('app-v1');
     await mockCaches.open('app-v2');
     await mockCaches.open('other');
+    await (await mockCaches.open('app-manifest')).put(new Request('manifest'), textResponse('{}'));
 
     const origOpen = caches.open.bind(caches);
     vi.spyOn(caches, 'open').mockImplementation(async (name: string) => {
@@ -269,8 +324,11 @@ describe('createActivateHandler', () => {
     handler(event as unknown as ExtendableEvent);
     await event._promise;
 
+    // The manifest cache stays as the prefix's marker, but without the
+    // stored manifest: the next swap diffs against nothing.
     const remaining = await mockCaches.keys();
-    expect(remaining.some((n) => n.startsWith('app-'))).toBe(false);
+    expect(remaining.filter((n) => n.startsWith('app-'))).toEqual(['app-manifest']);
+    expect(await mockCaches.peek('app-manifest')!.match('manifest')).toBeUndefined();
     expect(remaining).toContain('other');
   });
 

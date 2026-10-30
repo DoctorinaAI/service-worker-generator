@@ -2,6 +2,7 @@ import type { ResolvedConfig } from './config';
 import { findBootstrapScript, withAlpha } from './config';
 import { RESET_TIMEOUT_MS, STALLED_TIMEOUT_MS } from '../shared/constants';
 import { withTimeout } from '../shared/utils';
+import { ownCacheNames } from '../shared/cache-ownership';
 import { FOREIGN_RELOAD_KEY } from './sw-registration';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -374,15 +375,14 @@ export class LoadingWidget {
         const names = await caches.keys();
         const prefix =
           typeof this.cachePrefix === 'string' && this.cachePrefix
-            ? `${this.cachePrefix}-`
+            ? this.cachePrefix
             : null;
         // With this build's prefix, other apps, Workbox or Firebase on the
-        // same origin keep their caches. Without one (a bootstrap generated
-        // before it was injected) there is no way to tell, so every cache
-        // goes, as before.
-        const doomed = prefix
-          ? names.filter((n) => n.startsWith(prefix))
-          : names;
+        // same origin keep their caches — including an app whose prefix
+        // extends ours, by the same rule the worker cleans up with. Without
+        // one (a bootstrap generated before it was injected) there is no
+        // way to tell, so every cache goes, as before.
+        const doomed = prefix ? ownCacheNames(prefix, names) : names;
         await Promise.all(doomed.map((n) => caches.delete(n)));
         console.log(
           `[Bootstrap] Reset: deleted ${doomed.length} cache(s), kept ` +

@@ -466,6 +466,27 @@ describe('LoadingWidget reset action', () => {
     expect(reloadSpy).toHaveBeenCalledOnce();
   });
 
+  it('spares the caches of an app whose prefix extends ours', async () => {
+    // `my-app-admin` names its caches `my-app-…`; its manifest cache marks
+    // the prefix as in use, as it does for the worker's own cleanup.
+    const { deleted } = installCaches([
+      'my-app-v1',
+      'my-app-manifest',
+      'my-app-admin-manifest',
+      'my-app-admin-v3',
+      'my-app-admin-temp-v4',
+    ]);
+    installRegistrations([]);
+    const w = new LoadingWidget(uiConfig(), 'sw.js', 'my-app');
+    w.mount();
+
+    clickReset();
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(deleted).toEqual(['my-app-v1', 'my-app-manifest']);
+    expect(reloadSpy).toHaveBeenCalledOnce();
+  });
+
   it('deletes every cache when no prefix is known (older generated bootstrap)', async () => {
     const { deleted } = installCaches(['my-app-v1', 'workbox-precache-v2']);
     installRegistrations([]);

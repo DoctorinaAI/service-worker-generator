@@ -28,7 +28,13 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
   earlier releases don't report it) the bootstrap waits for the new worker to
   install (up to 60s, with the precache progress on screen), hands control to it
   before any app file is requested, and reloads once if the handover is lost.
-  If the install fails, the page boots with the current controller
+  The status reads "Installing update" during the wait, refreshed every 10s so
+  the stall overlay does not appear. When another tab has already activated
+  the new worker, the bootstrap waits up to 4s for it to claim the page before
+  reloading. If the install fails, the page boots with the current controller
+- A build config without `engineRevision` sends every update down the
+  unknown-engine path; the bootstrap logs one `console.warn` per load naming
+  the cause
 - The whole stage is capped at 10s: service worker jobs are serialised per scope,
   so a stuck install elsewhere leaves `register()` pending indefinitely
 - On timeout or failure: continue without SW (app still works, just no caching)
@@ -39,7 +45,9 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
 - Select appropriate CanvasKit variant based on browser capabilities
 - Built with `--no-web-resources-cdn` (`useLocalCanvasKit`): use the local `canvaskit/` directory, with no CDN probe
 - Otherwise try loading from Google CDN (`gstatic.com/flutter-canvaskit/{engineRevision}/`)
-- On CDN failure: fall back to local `canvaskit/` directory
+- On CDN probe failure: fall back to local `canvaskit/` directory. A later app
+  failure on a CDN engine falls back only when it involves the CDN engine (see
+  CanvasKit Fallback)
 - Stream-compile WASM for better performance
 
 ### Stage 4: Assets Download (20% → 80%)
@@ -85,7 +93,9 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
 - Timer starts on widget creation
 - Resets on every progress update
 - After 30 seconds without progress: show "Reset Cache" button with tooltip
-- Button deletes this app's caches (`{prefix}-…`), unregisters this app's service worker and reloads; it does not touch storage, other apps' caches or foreign service workers
+- Button deletes this app's caches (`{prefix}-…`, by the same ownership rule
+  as the worker's cleanup, so it leaves alone an app on this release whose
+  prefix extends this one; see [Cache Names](service-worker.md#cache-names)), unregisters this app's service worker and reloads; besides its own one-shot reload key in `sessionStorage`, it does not touch storage (`localStorage`, IndexedDB, cookies), other apps' caches or foreign service workers
 
 ### Disposal
 - `window.Bootstrap.dispose()` triggers fade-out animation
@@ -174,6 +184,14 @@ Periodic progress updates as styled console messages.
 </html>
 ```
 
+Flutter's `<script>{{flutter_bootstrap_js}}</script>` must not stay in the
+shell: `flutter build web` expands it into Flutter's whole loader, which boots
+the app without `bootstrap.js` or the service worker. The generator warns when
+`index.html` contains that inline loader (an inline script setting
+`_flutter.buildConfig` or calling `_flutter.loader.load(`) but does not rewrite
+the shell; replace it in `web/index.html` with
+`<script src="bootstrap.js" data-sw-bootstrap defer></script>` and rebuild.
+
 ### Configuration Options (data-config)
 
 | Option | Type | Default | Description |
@@ -196,7 +214,12 @@ Periodic progress updates as styled console messages.
 ### CanvasKit Fallback
 - Skipped for `--no-web-resources-cdn` builds, which load locally without trying the CDN
 - Try CDN with timeout (10s)
-- On any failure: automatically try local `canvaskit/` directory
+- On a failed CDN probe: automatically try local `canvaskit/` directory
+- If the app then fails on the CDN engine: one reload onto the local engine
+  (pinned for the tab session), only when the failure involves the CDN engine
+  (the error names a CDN URL, or names no URL and a `no-store` probe of the CDN
+  `.wasm` fails), the browser is online and the origin answers for the local
+  engine. Otherwise the error screen is shown
 - Log which source was used
 
 ### SW Registration Fallback

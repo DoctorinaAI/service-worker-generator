@@ -16,9 +16,11 @@ import {
   getResourceKey,
   guardBody,
   isHtmlFallback,
+  isReencoded,
   mapWithConcurrency,
   replayableResponse,
 } from '../shared/utils';
+import { ownCacheNames } from '../shared/cache-ownership';
 import { reportIfQuotaExceeded } from './quota';
 
 declare const self: ServiceWorkerGlobalScope;
@@ -129,15 +131,19 @@ export async function precacheResources(
       // the origin hangs until the browser kills it minutes later. Failing
       // the entry instead costs one install attempt, retried on the next
       // page load.
-      const guarded = guardBody(response, {
-        idleMs: BODY_STALL_TIMEOUT_MS,
-        expectedBytes: expectedBodySize(path, entry),
-        label: path,
-        onMismatch: (error) => {
-          mismatch = error;
-        },
-      });
+      //
+      // Built inside the `try` below: for a null body (a `204`, which is
+      // `ok`) the guard throws its mismatch synchronously, and that must get
+      // the same second look as one found while streaming.
       try {
+        const guarded = guardBody(response, {
+          idleMs: BODY_STALL_TIMEOUT_MS,
+          expectedBytes: expectedBodySize(path, entry),
+          label: path,
+          onMismatch: (error) => {
+            mismatch = error;
+          },
+        });
         await cache.put(new Request(path), await replayableResponse(guarded));
       } catch (error) {
         if (error instanceof BodySizeMismatchError) mismatch = error;
@@ -186,13 +192,22 @@ export async function precacheResources(
 /**
  * Second look at an entry whose body did not have the manifest's size.
  *
- * A short body is either a transfer cut off — random, and fatal to cache —
- * or a host that rewrites the file (a minifier, an injected snippet) —
- * deterministic, and stored as served before the size check existed.
- * Failing the latter would fail every install of a Core entry, leaving the
- * page on its previous worker for good. So the file is fetched once more:
- * the same short length twice is the host, a different one is the wire. A
- * body longer than the build's cannot come from truncation at all.
+ * A body of the wrong size is a transfer cut off, a different file (a CDN
+ * that ignores `?v=` and serves the previous build's copy), or a host that
+ * rewrites the file on the fly (a minifier, an injected snippet). Only the
+ * last may be stored, and only a host that re-encodes the response
+ * (`Content-Encoding` other than `identity`) can be doing it. Failing it
+ * would fail every install of a Core entry, leaving the page on its
+ * previous worker for good. So the file is fetched once more and stored
+ * when:
+ * - it now has the build's size (the first copy was the wire's fault), or
+ * - it is re-encoded and repeats the first copy's length (both longer
+ *   than the build's counts as a repeat: the guard stops counting at the
+ *   limit).
+ *
+ * An uncompressed copy of another size is never stored, however often it
+ * repeats: the bytes on the wire are the body, so it is a different file
+ * or a deterministic truncation. Nor is an empty one.
  *
  * Returns whether a copy was stored. Read whole into memory: this only
  * runs after a mismatch, which is rare.
@@ -226,6 +241,20 @@ async function storeAfterSizeMismatch(
     );
     return false;
   }
+  if (size !== first.expected && size === 0) {
+    console.error(
+      `[SW] ${path}: an empty body for a file of ${first.expected} bytes`,
+    );
+    return false;
+  }
+  if (size !== first.expected && !isReencoded(response)) {
+    console.error(
+      `[SW] ${path}: ${size} bytes where the build has ${first.expected}, ` +
+        `sent uncompressed (${first.received} the first time); a different ` +
+        `or truncated copy of the file, not stored`,
+    );
+    return false;
+  }
   const consistent =
     size === first.expected ||
     (first.received > first.expected
@@ -241,7 +270,7 @@ async function storeAfterSizeMismatch(
   if (size !== first.expected) {
     console.warn(
       `[SW] ${path}: the host serves ${size} bytes where the build has ` +
-        `${first.expected}, on every request; storing it as served`,
+        `${first.expected}, re-encoded, on every request; storing it as served`,
     );
   }
   await cache.put(
@@ -264,6 +293,10 @@ async function storeAfterSizeMismatch(
  * With [expectedBytes], the stored copy must have exactly that many bytes;
  * otherwise the write rejects with a `BodySizeMismatchError` and nothing is
  * stored. The page's copy, [response] itself, is never consumed or cut.
+ *
+ * The stored copy is cut off after `BODY_STALL_TIMEOUT_MS` of silence, so
+ * the write always settles. Callers must not make the page wait for it:
+ * see `cacheFirst`, which keeps it alive with `waitUntil` instead.
  */
 export async function lazyCacheResponse(
   cacheName: string,
@@ -286,6 +319,7 @@ export async function lazyCacheResponse(
     await cache.put(
       request,
       guardBody(response.clone(), {
+        idleMs: BODY_STALL_TIMEOUT_MS,
         expectedBytes,
         label: key,
         onMismatch: (error) => {
@@ -375,33 +409,56 @@ export async function swapCaches(
 }
 
 /**
+ * Versions of the workers installing or waiting beside this one, or `null`
+ * when one of them has a version that cannot be read (keep every temp
+ * cache then: one of them is that worker's).
+ */
+export type PendingVersions = readonly string[] | null;
+
+/**
  * Delete this app's caches from other versions.
  *
  * Kept: the current version's content cache, the manifest cache, and the
- * temp caches of [pendingVersions] — workers installing or waiting beside
- * this one. Deleting a temp cache that an install is still writing would
- * leave that version activating with an empty content cache.
+ * temp caches of the pending versions — workers installing or waiting
+ * beside this one. Deleting a temp cache that an install is still writing
+ * would leave that version activating with an empty content cache.
  *
- * Only names of the shapes this worker creates count as its own, matched on
- * a `-` boundary: prefix `app-cache` does not claim `app-cache2-v1`. Two
- * apps on one origin still need distinct prefixes, since `app-cache-v1`
- * reads the same whichever of them wrote it.
+ * [pendingVersions] may be a function, and then it is called after the
+ * cache listing: a worker that starts installing after the registration was
+ * read but before the listing would otherwise have its fresh temp cache
+ * listed and not kept. Read after, any temp cache in the listing belongs to
+ * a worker the registration already shows. `null` keeps every temp cache.
+ *
+ * Which names are this app's at all is decided by `ownCacheNames`: prefix
+ * `app-cache` claims neither `app-cache2-v1` nor the caches of an app with
+ * prefix `app-cache-admin`.
  */
 export async function cleanupOldCaches(
   prefix: string,
   currentVersion: string,
-  pendingVersions: readonly string[] = [],
+  pendingVersions: PendingVersions | (() => PendingVersions) = [],
 ): Promise<void> {
   const allCaches = await caches.keys();
+  const pending =
+    typeof pendingVersions === 'function' ? pendingVersions() : pendingVersions;
+  const tempPrefix = `${prefix}${TEMP_CACHE_SUFFIX}-`;
   const keep = new Set([
     getContentCacheName(prefix, currentVersion),
     getManifestCacheName(prefix),
-    ...pendingVersions.map((v) => getTempCacheName(prefix, v)),
+    ...(pending ?? []).map((v) => getTempCacheName(prefix, v)),
   ]);
+  if (pending === null) {
+    console.warn(
+      '[SW] A pending worker has no readable version; keeping all temp caches',
+    );
+  }
 
   await Promise.all(
-    allCaches
-      .filter((name) => name.startsWith(`${prefix}-`) && !keep.has(name))
+    ownCacheNames(prefix, allCaches)
+      .filter(
+        (name) =>
+          !keep.has(name) && !(pending === null && name.startsWith(tempPrefix)),
+      )
       .map((name) => caches.delete(name)),
   );
 }
@@ -416,16 +473,21 @@ export async function cleanupOldCaches(
  * Callers must pass every version that may still use its temp cache — this
  * one, and the registration's installing, waiting and active workers.
  *
- * Uses the same `-` boundary as `cleanupOldCaches`: prefix `app` does not
- * claim `app2-temp-v1`. Content and manifest caches are never touched.
+ * Uses `ownCacheNames` like `cleanupOldCaches`. Content and manifest caches
+ * are never touched — including the content cache of a kept version that
+ * itself starts with `temp-`, whose name has the temp shape.
  */
 export async function cleanupOrphanedTempCaches(
   prefix: string,
   keepVersions: readonly string[],
 ): Promise<void> {
   const tempPrefix = `${prefix}${TEMP_CACHE_SUFFIX}-`;
-  const keep = new Set(keepVersions.map((v) => getTempCacheName(prefix, v)));
-  const doomed = (await caches.keys()).filter(
+  const keep = new Set([
+    getManifestCacheName(prefix),
+    ...keepVersions.map((v) => getTempCacheName(prefix, v)),
+    ...keepVersions.map((v) => getContentCacheName(prefix, v)),
+  ]);
+  const doomed = ownCacheNames(prefix, await caches.keys()).filter(
     (name) => name.startsWith(tempPrefix) && !keep.has(name),
   );
   if (doomed.length === 0) return;

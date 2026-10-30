@@ -247,19 +247,31 @@ function isByteCount(n: unknown): n is number {
 }
 
 /**
+ * Whether the host re-encoded the transfer: `Content-Encoding` is present
+ * and is not `identity`. The body a `Response` hands out is then decoded,
+ * so its length is not what `Content-Length` counts, and a host that
+ * compresses on the fly is also the kind that rewrites what it compresses
+ * (a minifier, an injected snippet).
+ */
+export function isReencoded(response: Response): boolean {
+  const encoding = response.headers.get('Content-Encoding')?.trim().toLowerCase();
+  return !!encoding && encoding !== 'identity';
+}
+
+/**
  * The body length an uncompressed response declares in `Content-Length`,
  * or `undefined` when it declares none, a malformed one, zero, or the
- * transfer is compressed (the header then counts the encoded bytes, while
+ * transfer is re-encoded (the header then counts the encoded bytes, while
  * the body is read decoded).
  *
- * A host that re-encodes a file (image optimisation, an injected snippet)
- * serves a different size than the build but declares it; a transfer that
- * is cut short cannot reach the declared length. Zero is not trusted: an
- * empty answer for a non-empty file is never what the build meant.
+ * It tells a body cut short in transit — which cannot reach the declared
+ * length — from one the host sent whole. It never says the body is the
+ * build's file: a CDN that ignores the `?v=` query serves the previous
+ * build's copy with that copy's length, sent whole. Zero is not trusted:
+ * an empty answer for a non-empty file is never what the build meant.
  */
 export function declaredBodyLength(response: Response): number | undefined {
-  const encoding = response.headers.get('Content-Encoding')?.trim().toLowerCase();
-  if (encoding && encoding !== 'identity') return undefined;
+  if (isReencoded(response)) return undefined;
   const raw = response.headers.get('Content-Length')?.trim();
   if (!raw || !/^\d+$/.test(raw)) return undefined;
   const length = Number(raw);
@@ -286,10 +298,12 @@ export function declaredBodyLength(response: Response): number | undefined {
  * a navigation — so redirected responses are guarded like any other, not
  * passed through and later buffered whole.
  *
- * When an uncompressed response declares a `Content-Length` other than
- * `expectedBytes`, the body is checked against the declared length instead,
- * with a warning: the host re-encoded the file but sends all of it, and a
- * transfer cut short still fails (see [declaredBodyLength]).
+ * The body is always checked against `expectedBytes`, whatever
+ * `Content-Length` the response declares. A declared length that differs
+ * from the build's is a different file, not a licence to store it: a CDN
+ * that ignores the `?v=` query (CloudFront's default) serves the previous
+ * build's copy, whole and with its own length. Hosts that rewrite files
+ * are dealt with by the caller (see `storeAfterSizeMismatch`).
  *
  * A null body is treated as zero bytes: with a non-zero `expectedBytes` this
  * throws [BodySizeMismatchError] synchronously.
@@ -300,20 +314,9 @@ export function guardBody(
 ): Response {
   const idleMs = options.idleMs ?? 0;
   const label = options.label || response.url || 'response';
-  let expected = isByteCount(options.expectedBytes)
+  const expected = isByteCount(options.expectedBytes)
     ? options.expectedBytes
     : undefined;
-  if (expected !== undefined && response.body) {
-    const declared = declaredBodyLength(response);
-    if (declared !== undefined && declared !== expected) {
-      console.warn(
-        `[SW] ${label}: the host declares Content-Length ${declared} where ` +
-          `the build has ${expected} bytes (re-encoded or rewritten by the ` +
-          `host?); checking the transfer against the declared length.`,
-      );
-      expected = declared;
-    }
-  }
   if (idleMs <= 0 && expected === undefined) return response;
   const mismatch = (received: number): BodySizeMismatchError => {
     const error = new BodySizeMismatchError(label, expected!, received);

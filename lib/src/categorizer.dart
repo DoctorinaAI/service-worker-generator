@@ -30,9 +30,10 @@ const Set<String> _defaultCorePatterns = {
 /// Patterns for resources the app needs before it can render anything.
 ///
 /// `index.html` belongs here even though the fetch handler serves it
-/// network-first: pre-caching the app shell is what makes an offline
-/// navigation resolvable, and it puts the shell inside the progress-counted
-/// set instead of alongside it.
+/// network-first: pre-caching it puts the shell inside the
+/// progress-counted set instead of alongside it, and gives a failed
+/// navigation a cached answer. It does not make the app start offline:
+/// `bootstrap.js` is never cached, so offline boot is not supported.
 const Set<String> _defaultRequiredPatterns = {
   'index.html',
   'assets/AssetManifest*.json',

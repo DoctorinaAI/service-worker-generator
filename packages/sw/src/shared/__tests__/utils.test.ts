@@ -540,36 +540,35 @@ describe('guardBody size check', () => {
     return new Response(base.body, { status: 200, headers });
   }
 
-  it('accepts a complete body of the length the host declares, with a warning', async () => {
-    // A host that re-encodes the file (image optimisation, an injected
-    // snippet) sends a different file, but sends all of it.
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    try {
-      const guarded = guardBody(withHeaders([4, 4], { 'Content-Length': '8' }), {
-        expectedBytes: 12,
-        label: 'logo.png',
-      });
-      expect((await guarded.arrayBuffer()).byteLength).toBe(8);
-      expect(warn).toHaveBeenCalledOnce();
-      expect(String(warn.mock.calls[0]![0])).toMatch(
-        /logo\.png.*Content-Length 8.*build has 12/,
-      );
-    } finally {
-      warn.mockRestore();
-    }
+  it('errors a complete body whose declared length is not the build\'s', async () => {
+    // A CDN that ignores `?v=` serves the previous build's file, whole and
+    // with its own Content-Length. That is a different file, not a re-encoded
+    // one: it must not be stored as this build's.
+    const guarded = guardBody(withHeaders([4, 4], { 'Content-Length': '8' }), {
+      expectedBytes: 12,
+      label: 'main.dart.wasm',
+    });
+    await expect(guarded.arrayBuffer()).rejects.toThrow(
+      /main\.dart\.wasm.*expected 12 bytes.*received 8/,
+    );
   });
 
-  it('still errors a body cut short of the declared length', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    try {
-      const guarded = guardBody(withHeaders([4], { 'Content-Length': '8' }), {
-        expectedBytes: 12,
-        label: 'logo.png',
-      });
-      await expect(guarded.arrayBuffer()).rejects.toThrow(/received 4/);
-    } finally {
-      warn.mockRestore();
-    }
+  it('errors a body cut short of the declared length', async () => {
+    const guarded = guardBody(withHeaders([4], { 'Content-Length': '8' }), {
+      expectedBytes: 12,
+      label: 'logo.png',
+    });
+    await expect(guarded.arrayBuffer()).rejects.toThrow(/received 4/);
+  });
+
+  it('errors an empty body for a non-empty file, streamed or null', async () => {
+    const empty = new Response(new ReadableStream({ start: (c) => c.close() }));
+    await expect(
+      guardBody(empty, { expectedBytes: 12, label: 'a.js' }).arrayBuffer(),
+    ).rejects.toThrow(/expected 12 bytes.*received 0/);
+    expect(() =>
+      guardBody(new Response(null, { status: 204 }), { expectedBytes: 12, label: 'a.js' }),
+    ).toThrow(/received 0/);
   });
 
   it('ignores Content-Length on a compressed transfer', async () => {

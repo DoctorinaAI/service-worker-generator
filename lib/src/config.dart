@@ -1,6 +1,8 @@
 import 'dart:io' as io;
 
 import 'package:args/args.dart';
+import 'package:glob/glob.dart' as glob;
+import 'package:path/path.dart' as p;
 import 'package:yaml/yaml.dart' as yaml;
 
 /// Generator configuration with all settings.
@@ -125,37 +127,80 @@ class GeneratorConfig {
       },
     );
 
-    String resolve(String name, String envName, String defaultValue) {
+    // Where a value came from, for error messages: the CLI flag, the YAML
+    // key (and file) or the environment variable that supplied it.
+    _Source cli(String name) => _Source('--$name');
+    _Source fromYaml(String name) => _Source(name, ' (in ${yamlConfig.path})');
+    _Source env(String envName) => _Source(envName, ' (environment)');
+
+    // The raw value and its source. A YAML list is only accepted where
+    // [listSeparator] says how to join it into the CLI/env form.
+    (String, _Source)? lookup(
+      String name,
+      String envName, {
+      String? listSeparator,
+    }) {
       // `results[name]` returns the ArgParser default when the flag wasn't
       // explicitly passed, which would shadow YAML/env and break the
       // advertised precedence. Use `wasParsed` to tell them apart.
-      if (results.wasParsed(name)) return results[name] as String;
-      final yamlValue = yamlConfig[name]?.toString();
-      if (yamlValue != null) return yamlValue;
+      if (results.wasParsed(name)) {
+        return (results[name] as String, cli(name));
+      }
+      final node = yamlConfig.nodes[name];
+      if (node != null) {
+        final value = _yamlText(
+          node,
+          name,
+          yamlConfig.path,
+          listSeparator: listSeparator,
+        );
+        if (value != null) return (value, fromYaml(name));
+      }
       if (envName.isNotEmpty) {
         final envValue = io.Platform.environment[envName];
-        if (envValue != null) return envValue;
+        if (envValue != null) return (envValue, env(envName));
       }
-      return defaultValue;
+      return null;
     }
 
+    String resolve(String name, String envName, String defaultValue) =>
+        lookup(name, envName)?.$1 ?? defaultValue;
+
     Set<String> resolveGlobs(String name, String envName, String defaultValue) {
-      final raw = resolve(name, envName, defaultValue);
-      return raw.isEmpty
-          ? const {}
+      final (raw, source) =
+          lookup(name, envName, listSeparator: ';') ??
+          (defaultValue, cli(name));
+      final globs = raw.isEmpty
+          ? const <String>{}
           : raw
                 .split(';')
                 .map((e) => e.trim())
                 .where((e) => e.isNotEmpty)
                 .toSet();
+      // Compile them now: a malformed pattern would otherwise surface
+      // halfway through generate() as a crash with a stack trace.
+      for (final pattern in globs) {
+        try {
+          glob.Glob(pattern, context: p.url, recursive: true);
+        } on FormatException catch (e) {
+          throw FormatException(
+            '${source.option}${source.where} contains "$pattern", which is '
+            'not a valid glob pattern: ${e.message}',
+          );
+        }
+      }
+      return globs;
     }
 
     int parseIntOrFail(String name, String envName, int defaultValue) {
-      final raw = resolve(name, envName, defaultValue.toString());
-      final parsed = int.tryParse(raw);
+      final found = lookup(name, envName);
+      if (found == null) return defaultValue;
+      final (raw, source) = found;
+      final parsed = int.tryParse(raw.trim());
       if (parsed == null) {
-        io.stderr.writeln('Error: --$name="$raw" is not a valid integer.');
-        io.exit(64);
+        throw FormatException(
+          '${source.option}="$raw"${source.where} is not a valid integer.',
+        );
       }
       return parsed;
     }
@@ -165,38 +210,60 @@ class GeneratorConfig {
     // `no-cleanup: true` in sw.yaml was silently ignored.
     bool resolveFlag(String name, String envName) {
       if (results.wasParsed(name)) return results[name] as bool;
-      final yamlValue = yamlConfig[name];
-      final raw = yamlValue is bool
-          ? yamlValue.toString()
-          : yamlValue?.toString() ?? io.Platform.environment[envName];
-      if (raw == null) return false;
+      final found = lookup(name, envName);
+      if (found == null) return false;
+      final (raw, source) = found;
       switch (raw.trim().toLowerCase()) {
         case 'true' || '1' || 'yes':
           return true;
         case 'false' || '0' || 'no' || '':
           return false;
       }
-      io.stderr.writeln('Error: $name="$raw" is not a valid boolean.');
-      io.exit(64);
+      throw FormatException(
+        '${source.option}="$raw"${source.where} is not a valid boolean.',
+      );
+    }
+
+    String resolveChecked(
+      String name,
+      String envName,
+      String defaultValue,
+      void Function(String value, String option, [String where]) check,
+    ) {
+      final found = lookup(name, envName);
+      if (found == null) return defaultValue;
+      final (value, source) = found;
+      check(value, source.option, source.where);
+      return value;
     }
 
     final minProgress = parseIntOrFail('min-progress', 'SW_MIN_PROGRESS', 0);
     final maxProgress = parseIntOrFail('max-progress', 'SW_MAX_PROGRESS', 90);
     _checkProgressRange(minProgress, maxProgress);
 
+    final swOutput = resolveChecked(
+      'output',
+      'SW_OUTPUT',
+      'sw.js',
+      _checkOutputName,
+    );
+    final bootstrapOutput = resolveChecked(
+      'bootstrap-output',
+      'SW_BOOTSTRAP_OUTPUT',
+      'bootstrap.js',
+      _checkOutputName,
+    );
+    _checkDistinctOutputs(swOutput, bootstrapOutput);
+
     return GeneratorConfig(
       inputDir: resolve('input', 'SW_INPUT', 'build/web'),
-      swOutput: resolve('output', 'SW_OUTPUT', 'sw.js'),
-      bootstrapOutput: resolve(
-        'bootstrap-output',
-        'SW_BOOTSTRAP_OUTPUT',
-        'bootstrap.js',
-      ),
+      swOutput: swOutput,
+      bootstrapOutput: bootstrapOutput,
       cachePrefix: resolve('prefix', 'SW_PREFIX', 'app-cache'),
       // Empty version is a sentinel: the generator will derive it from
       // the manifest content hash after scanning files. Any CLI/YAML/env
       // override preempts that derivation.
-      version: resolve('version', 'SW_VERSION', ''),
+      version: resolveChecked('version', 'SW_VERSION', '', _checkVersion),
       includeGlobs: resolveGlobs('glob', 'SW_GLOB', '**'),
       excludeGlobs: resolveGlobs('no-glob', 'SW_EXCLUDE_GLOB', ''),
       coreGlobs: resolveGlobs('core', 'SW_CORE', ''),
@@ -213,6 +280,22 @@ class GeneratorConfig {
       minProgress: minProgress,
       maxProgress: maxProgress,
     );
+  }
+
+  /// Check the values that would make the generator write outside the
+  /// build directory or produce a worker that cannot work: the output file
+  /// names and the cache version.
+  ///
+  /// [parse] already runs these checks, naming the CLI flag, YAML key or
+  /// environment variable a bad value came from. `generate` calls this
+  /// again for configurations built directly in code.
+  ///
+  /// Throws a [FormatException] describing the first problem found.
+  void validate() {
+    _checkOutputName(swOutput, '--output');
+    _checkOutputName(bootstrapOutput, '--bootstrap-output');
+    _checkDistinctOutputs(swOutput, bootstrapOutput);
+    if (version.isNotEmpty) _checkVersion(version, '--version');
   }
 
   static ArgParser _buildArgParser() => ArgParser()
@@ -276,12 +359,13 @@ class GeneratorConfig {
     ..addOption('min-progress', help: 'Minimum progress value')
     ..addOption('max-progress', help: 'Maximum progress value');
 
-  static Map<String, dynamic> _loadYamlConfig(
+  static ({String path, Map<String, yaml.YamlNode> nodes}) _loadYamlConfig(
     String? path, {
     required bool explicit,
     required Set<String> knownKeys,
   }) {
     final file = io.File(path ?? 'sw.yaml');
+    final none = (path: file.path, nodes: const <String, yaml.YamlNode>{});
     if (!file.existsSync()) {
       if (explicit) {
         io.stderr.writeln(
@@ -289,36 +373,40 @@ class GeneratorConfig {
           'Continuing without it (CLI args, env and defaults only).',
         );
       }
-      return const {};
+      return none;
     }
-    final Map<String, dynamic> config;
+    final nodes = <String, yaml.YamlNode>{};
     try {
       final content = file.readAsStringSync();
-      final doc = yaml.loadYaml(content);
+      // Nodes, not values: a value such as `version: 1.10` must keep the
+      // text the user wrote rather than become the double 1.1.
+      final doc = yaml.loadYamlNode(content, sourceUrl: file.uri);
       // An empty file is a valid "no settings".
-      if (doc == null) return const {};
-      if (doc is! Map) {
+      if (doc is yaml.YamlScalar && doc.value == null) return none;
+      if (doc is! yaml.YamlMap) {
         io.stderr.writeln(
           'Warning: config file ${file.path} is not a mapping of option '
-          'names to values (found ${doc.runtimeType}); it is ignored.',
+          'names to values (found ${doc.value.runtimeType}); it is ignored.',
         );
-        return const {};
+        return none;
       }
-      config = Map<String, dynamic>.from(doc);
+      for (final MapEntry(:key, :value) in doc.nodes.entries) {
+        final name = key is yaml.YamlNode ? key.value : key;
+        nodes['$name'] = value;
+      }
     } on Object catch (e) {
       io.stderr.writeln('Warning: Failed to parse YAML config: $e');
-      return const {};
+      return none;
     }
     io.stdout.writeln('Using config file: ${file.path}');
-    for (final entry in config.entries) {
-      final key = entry.key;
+    for (final MapEntry(:key, :value) in nodes.entries) {
       if (!knownKeys.contains(key)) {
         final suggestion = _suggestOption(key, knownKeys);
         io.stderr.writeln(
           'Warning: unknown key "$key" in ${file.path} is ignored'
           '${suggestion == null ? '' : '; did you mean "$suggestion"?'}',
         );
-      } else if (entry.value == null) {
+      } else if (value is yaml.YamlScalar && value.value == null) {
         // `color: #fff` is the usual cause: the # starts a comment.
         final hint = key == 'color'
             ? 'An unquoted # starts a YAML comment; quote the value: '
@@ -330,8 +418,149 @@ class GeneratorConfig {
         );
       }
     }
-    return config;
+    return (path: file.path, nodes: nodes);
   }
+}
+
+/// Where a configuration value came from, for error messages.
+final class _Source {
+  const _Source(this.option, [this.where = '']);
+
+  /// The CLI flag (`--core`), YAML key (`core`) or environment variable
+  /// (`SW_CORE`) that supplied the value.
+  final String option;
+
+  /// Where [option] was found, such as ` (in sw.yaml)`; empty for the CLI.
+  final String where;
+}
+
+/// The text of YAML [node] for option [name], or `null` when it has no
+/// value.
+///
+/// A plain scalar keeps its source text, so `version: 1.10` stays `1.10`
+/// and `title: 0x1F` stays `0x1F` instead of passing through a number. A
+/// quoted or block scalar is already the string the user meant.
+///
+/// A list is joined with [listSeparator], the separator the option's CLI
+/// and environment forms use; options without one reject lists. Mappings
+/// are always rejected, with a [FormatException] naming [name] and [path].
+String? _yamlText(
+  yaml.YamlNode node,
+  String name,
+  String path, {
+  String? listSeparator,
+}) {
+  String scalar(yaml.YamlScalar node) =>
+      node.style == yaml.ScalarStyle.PLAIN ? node.span.text : '${node.value}';
+
+  switch (node) {
+    case yaml.YamlScalar(value: null):
+      return null;
+    case yaml.YamlScalar():
+      return scalar(node);
+    case yaml.YamlList() when listSeparator != null:
+      final items = <String>[];
+      for (final item in node.nodes) {
+        final found = switch (item) {
+          yaml.YamlScalar(value: null) => 'an empty item',
+          yaml.YamlScalar() => null,
+          yaml.YamlMap() => 'a nested mapping',
+          _ => 'a nested list',
+        };
+        if (found != null) {
+          throw FormatException(
+            'Every item of "$name" in $path must be a single value; found '
+            '$found at line ${item.span.start.line + 1}.',
+          );
+        }
+        items.add(scalar(item as yaml.YamlScalar));
+      }
+      return items.join(listSeparator);
+    case yaml.YamlList():
+      throw FormatException(
+        '"$name" in $path is a list, but it takes a single value.',
+      );
+    default:
+      final accepted = listSeparator == null
+          ? 'a single value'
+          : 'a string or a list of strings';
+      throw FormatException(
+        '"$name" in $path is a mapping, but it takes $accepted.',
+      );
+  }
+}
+
+/// Reject an output file name that is not a plain file name in the build
+/// directory. [option] and [where] name the source of the value.
+///
+/// A worker's default scope is the directory its script is served from, so
+/// `js/sw.js` registers a worker for `/js/` that never controls the page,
+/// and `../sw.js` or an absolute path writes outside the build entirely.
+void _checkOutputName(String name, String option, [String where = '']) {
+  final String problem;
+  if (name.trim().isEmpty) {
+    problem = 'is empty';
+  } else if (name.contains('/') || name.contains(r'\')) {
+    problem =
+        'contains a path separator. The outputs must sit next to '
+        'index.html: a service worker only controls pages under the '
+        'directory it is served from, so a worker in a subdirectory never '
+        'controls the app';
+  } else if (name == '.' || name == '..' || name.contains('..')) {
+    problem = 'contains "..", which would leave the build directory';
+  } else if (p.isAbsolute(name) ||
+      p.windows.isAbsolute(name) ||
+      name.contains(':')) {
+    problem = 'is an absolute path, which would leave the build directory';
+  } else {
+    return;
+  }
+  throw FormatException(
+    '$option="$name"$where $problem. Give a plain file name such as '
+    '"sw.js".',
+  );
+}
+
+/// Reject a service worker and a bootstrap written to the same file.
+void _checkDistinctOutputs(String swOutput, String bootstrapOutput) {
+  if (swOutput.toLowerCase() != bootstrapOutput.toLowerCase()) return;
+  throw FormatException(
+    'The service worker and the bootstrap would both be written to '
+    '"$swOutput"; give --output and --bootstrap-output different names.',
+  );
+}
+
+/// Reject a cache version that collides with the worker's own cache names.
+///
+/// The worker keeps `{prefix}-{version}`, `{prefix}-temp-{version}` and
+/// `{prefix}-manifest`: version `manifest` makes the content cache the
+/// manifest cache, a version starting with `temp-` names the temporary
+/// cache of another version, which activation deletes, and a version ending
+/// in `-manifest` gives the content cache a name the worker reads as the
+/// manifest cache of another app (prefix `{prefix}-…`), so it is never
+/// cleaned up.
+void _checkVersion(String version, String option, [String where = '']) {
+  final String problem;
+  if (version == 'manifest') {
+    problem =
+        'would name the content cache "{prefix}-manifest", the cache the '
+        'service worker keeps its manifest in';
+  } else if (version.startsWith('temp-')) {
+    problem =
+        'starts with "temp-", so its content cache "{prefix}-$version" '
+        'looks like the temporary install cache of version '
+        '"${version.substring(5)}" and can be deleted as one';
+  } else if (version.endsWith('-manifest')) {
+    problem =
+        'ends with "-manifest", so its content cache "{prefix}-$version" '
+        'looks like the manifest cache of another app on the origin, and '
+        'the service worker would never delete it as outdated';
+  } else {
+    return;
+  }
+  throw FormatException(
+    '$option="$version"$where $problem. Choose another version.',
+  );
 }
 
 /// Loading widget themes the bootstrap understands.

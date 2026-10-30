@@ -72,7 +72,10 @@ _flutter.buildConfig = {"engineRevision":"abc123","builds":[{"compileTarget":"da
       env: const {'SW_KEEP_MAPS': 'maybe'},
     );
     expect(result.exitCode, 64);
-    expect(result.stderr, contains('keep-maps="maybe" is not a valid boolean'));
+    expect(
+      result.stderr,
+      contains('SW_KEEP_MAPS="maybe" (environment) is not a valid boolean'),
+    );
     // Rejected before anything was generated.
     expect(exists('sw.js'), isFalse);
   });
@@ -157,14 +160,12 @@ _flutter.buildConfig = {"engineRevision":"abc123","builds":[{"compileTarget":"da
   });
 
   test('a file system error exits 1 without a stack trace', () async {
-    // The parent of the worker is a file, so it cannot be created.
-    final result = await run([
-      '--input=${dir.path}',
-      '--output=main.dart.js/sw.js',
-    ]);
+    // A directory already holds the worker's name, so it cannot be written.
+    io.Directory(p.join(dir.path, 'taken.js')).createSync();
+    final result = await run(['--input=${dir.path}', '--output=taken.js']);
     expect(result.exitCode, 1);
     expect(result.stderr, contains('Error: '));
-    expect(result.stderr, contains('main.dart.js'));
+    expect(result.stderr, contains('taken.js'));
     expect(result.stderr, isNot(contains('#0 ')));
   });
 
@@ -181,5 +182,108 @@ _flutter.buildConfig = {"engineRevision":"abc123","builds":[{"compileTarget":"da
     );
     expect(result.exitCode, 0, reason: '${result.stderr}');
     expect(result.stderr, isNot(contains('config file not found')));
+  });
+
+  group('usage errors exit 64 without a stack trace', () {
+    Future<void> expectUsageError(
+      List<String> args,
+      List<String> messages, {
+      Map<String, String> env = const {},
+    }) async {
+      final index = io.File(p.join(dir.path, 'index.html')).readAsBytesSync();
+      final result = await run(['--input=${dir.path}', ...args], env: env);
+      expect(result.exitCode, 64, reason: '${result.stderr}');
+      for (final message in messages) {
+        expect(result.stderr, contains(message));
+      }
+      expect(result.stderr, isNot(contains('#0 ')));
+      // Rejected before anything in the build was touched.
+      expect(exists('sw.js'), isFalse);
+      expect(exists('bootstrap.js'), isFalse);
+      expect(io.File(p.join(dir.path, 'index.html')).readAsBytesSync(), index);
+    }
+
+    test('an output name in a subdirectory', () async {
+      await expectUsageError(
+        ['--output=js/sw.js'],
+        ['--output="js/sw.js"', 'path separator'],
+      );
+      expect(io.Directory(p.join(dir.path, 'js')).existsSync(), isFalse);
+    });
+
+    test('a bootstrap name outside the build directory', () async {
+      await expectUsageError(
+        ['--bootstrap-output=..'],
+        ['--bootstrap-output=".."'],
+      );
+    });
+
+    test('an output name from the environment', () async {
+      await expectUsageError(
+        const [],
+        ['SW_OUTPUT="/tmp/sw.js" (environment)'],
+        env: const {'SW_OUTPUT': '/tmp/sw.js'},
+      );
+    });
+
+    test('an invalid glob, naming the option', () async {
+      await expectUsageError(
+        ['--core=['],
+        ['--core contains "["', 'not a valid glob'],
+      );
+    });
+
+    test('an invalid glob from the environment', () async {
+      await expectUsageError(
+        const [],
+        ['SW_IGNORE (environment) contains "{a"'],
+        env: const {'SW_IGNORE': 'ok/**; {a'},
+      );
+    });
+
+    test('an invalid integer names the environment variable', () async {
+      await expectUsageError(
+        const [],
+        ['SW_MIN_PROGRESS="ten" (environment) is not a valid integer'],
+        env: const {'SW_MIN_PROGRESS': 'ten'},
+      );
+    });
+
+    test('an invalid integer names the YAML key and file', () async {
+      final yaml = io.File(p.join(dir.path, 'sw.yaml'))
+        ..writeAsStringSync('max-progress: lots\n');
+      await expectUsageError(
+        ['--config=${yaml.path}'],
+        ['max-progress="lots" (in ${yaml.path}) is not a valid integer'],
+      );
+    });
+
+    test('a YAML mapping where a glob list belongs', () async {
+      final yaml = io.File(p.join(dir.path, 'sw.yaml'))
+        ..writeAsStringSync('glob:\n  a: b\n');
+      await expectUsageError(
+        ['--config=${yaml.path}'],
+        ['"glob" in ${yaml.path} is a mapping'],
+      );
+    });
+
+    test('a version that names the manifest cache', () async {
+      await expectUsageError(['--version=manifest'], ['"{prefix}-manifest"']);
+    });
+
+    test('a version that looks like another app\'s manifest cache', () async {
+      await expectUsageError(
+        ['--version=2.0-manifest'],
+        ['--version="2.0-manifest"', 'ends with "-manifest"'],
+      );
+    });
+
+    test('a version that looks like a temporary cache', () async {
+      await expectUsageError(
+        const [],
+        ['SW_VERSION="temp-1" (environment)', 'starts with "temp-"'],
+        env: const {'SW_VERSION': 'temp-1'},
+      );
+    });
   });
 }

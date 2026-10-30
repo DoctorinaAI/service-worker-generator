@@ -10,7 +10,6 @@ import 'categorizer.dart';
 import 'cleanup.dart';
 import 'config.dart';
 import 'diagnostics.dart';
-import 'files.dart';
 import 'flutter_build.dart';
 import 'injector.dart';
 import 'manifest.dart';
@@ -19,7 +18,12 @@ import 'manifest.dart';
 const String _shellKey = 'index.html';
 
 /// Run the full generation pipeline.
+///
+/// Every check that can fail runs before the first file in the build
+/// directory is written, so a failed run leaves the input as it found it
+/// and can simply be repeated.
 Future<void> generate(GeneratorConfig config) async {
+  config.validate();
   final buildDir = io.Directory(config.inputDir);
 
   // 1. Validate
@@ -39,14 +43,23 @@ Future<void> generate(GeneratorConfig config) async {
   io.stdout.writeln('\nParsing Flutter build config...');
   _rejectProcessedBuild(buildDir, config, 'flutter_bootstrap.js');
   final buildInfo = extractFlutterBuildInfo(buildDir);
-  if (buildInfo.engineRevision.isEmpty) {
-    throw StateError(
-      'Flutter buildConfig is missing engineRevision. '
-      'Re-run "flutter build web" to regenerate flutter_bootstrap.js.',
+  final revision = buildInfo.engineRevision;
+  if (revision.isEmpty) {
+    // The bootstrap compares this with the engine of the worker that
+    // controls the page to decide whether a deploy can keep running on the
+    // old worker until the next reload. Without it, every deploy counts as
+    // an engine change.
+    io.stderr.writeln(
+      'Warning: the Flutter buildConfig has no engineRevision. Every deploy '
+      'will take the slow update path: the page waits for the new service '
+      'worker to install and take over before the app starts. CanvasKit '
+      'will also load from the local canvaskit/ directory, never the CDN. '
+      'Re-run "flutter build web" with a released Flutter SDK to record it.',
     );
   }
-  final revision = buildInfo.engineRevision;
-  final shortRevision = revision.length > 10
+  final shortRevision = revision.isEmpty
+      ? '(unknown)'
+      : revision.length > 10
       ? '${revision.substring(0, 10)}...'
       : revision;
   io.stdout.writeln('  Engine: $shortRevision');
@@ -90,24 +103,36 @@ Future<void> generate(GeneratorConfig config) async {
       : _hashManifest(manifest);
   io.stdout.writeln('  Version: $effectiveVersion');
 
-  // Stamp the version into index.html *now*, then re-hash it. The shell is
-  // a manifest entry, so its recorded hash and size must describe the file
-  // that actually ships, and this is the last write to it. Substituting
-  // after the manifest was built — as `cleanup` used to — left the entry
-  // describing a file the origin never serves.
+  // Read flutter.js now: a build without it must fail before this run
+  // writes anything, or the shell would be stamped with a version that the
+  // re-run (with the shell hash changed) could no longer reproduce.
+  final bootstrapPrefix = _readFlutterJs(buildDir, config);
+
+  // Stamp the version into the shell *in memory*, and describe the stamped
+  // bytes in the manifest. The shell is a manifest entry, so its recorded
+  // hash and size must describe the file that actually ships. It is written
+  // after the artifacts, as the last change to the input files.
   //
   // Gated on `noCleanup` because rewriting the input tree is exactly what
   // that flag exists to prevent; skipping it leaves the placeholders in
   // place, which the manifest then describes accurately.
-  if (!config.noCleanup && applyIndexHtmlVersion(buildDir, effectiveVersion)) {
-    final shell = manifest[_shellKey];
-    if (shell != null) {
-      manifest[_shellKey] = ResourceEntry(
-        name: shell.name,
-        size: indexHtml.statSync().size,
-        hash: await md5(indexHtml),
-        category: shell.category,
-      );
+  List<int>? stampedShell;
+  if (!config.noCleanup) {
+    final stamped = stampIndexHtmlVersion(
+      indexHtml.readAsStringSync(),
+      effectiveVersion,
+    );
+    if (stamped != null) {
+      final bytes = stampedShell = utf8.encode(stamped);
+      final shell = manifest[_shellKey];
+      if (shell != null) {
+        manifest[_shellKey] = ResourceEntry(
+          name: shell.name,
+          size: bytes.length,
+          hash: crypto.md5.convert(bytes).toString(),
+          category: shell.category,
+        );
+      }
     }
   }
 
@@ -186,10 +211,54 @@ Future<void> generate(GeneratorConfig config) async {
     useLocalCanvasKit: buildInfo.useLocalCanvasKit,
   );
 
-  // Prepend Flutter's flutter.js so bootstrap.js is self-contained — no
-  // runtime dependency on flutter.js being served separately. Hosts with
-  // SPA rewrites (Firebase, etc.) otherwise serve index.html for a missing
-  // flutter.js, breaking the loader with "Unexpected token '<'".
+  final bootstrapContent = '$bootstrapPrefix$injectedBootstrap';
+
+  // 6. Write output files, then the stamped shell.
+  _writeOutput(buildDir, config.swOutput, swContent);
+  io.stdout.writeln('  ${config.swOutput} (${_formatBytes(swContent.length)})');
+
+  _writeOutput(buildDir, config.bootstrapOutput, bootstrapContent);
+  io.stdout.writeln(
+    '  ${config.bootstrapOutput} '
+    '(${_formatBytes(bootstrapContent.length)})',
+  );
+
+  if (stampedShell != null) {
+    indexHtml.writeAsBytesSync(stampedShell);
+    io.stdout.writeln('  Updated index.html with version $effectiveVersion');
+  }
+
+  // 7. Cleanup
+  if (!config.noCleanup) {
+    io.stdout.writeln('\nCleaning up...');
+    cleanup(
+      buildDir: buildDir,
+      swVersion: effectiveVersion,
+      canvaskitKeep: canvaskitFiles,
+      keepMaps: config.keepMaps,
+      bootstrapOutput: config.bootstrapOutput,
+    );
+  }
+
+  io.stdout.writeln('\nDone!');
+}
+
+/// Write [content] to [name] directly under [buildDir].
+///
+/// [GeneratorConfig.validate] has rejected names with a directory part, so
+/// this never creates directories: a worker served from a subdirectory
+/// would never control the app.
+void _writeOutput(io.Directory buildDir, String name, String content) {
+  io.File(p.join(buildDir.path, name)).writeAsStringSync(content);
+}
+
+/// Flutter's `flutter.js`, prepared to open `bootstrap.js`.
+///
+/// It is prepended so bootstrap.js is self-contained — no runtime
+/// dependency on flutter.js being served separately. Hosts with SPA
+/// rewrites (Firebase, etc.) otherwise serve index.html for a missing
+/// flutter.js, breaking the loader with "Unexpected token '<'".
+String _readFlutterJs(io.Directory buildDir, GeneratorConfig config) {
   final flutterJsFile = io.File(p.join(buildDir.path, 'flutter.js'));
   _rejectProcessedBuild(buildDir, config, 'flutter.js');
   if (!flutterJsFile.existsSync()) {
@@ -207,42 +276,7 @@ Future<void> generate(GeneratorConfig config) async {
     RegExp(r'^//# sourceMappingURL=.*$', multiLine: true),
     '',
   );
-  final bootstrapContent = '${flutterJs.trimRight()}\n;\n$injectedBootstrap';
-
-  // 6. Write output files. An output name such as `js/sw.js` names a
-  // directory that Flutter did not create.
-  _writeOutput(buildDir, config.swOutput, swContent);
-  io.stdout.writeln('  ${config.swOutput} (${_formatBytes(swContent.length)})');
-
-  _writeOutput(buildDir, config.bootstrapOutput, bootstrapContent);
-  io.stdout.writeln(
-    '  ${config.bootstrapOutput} '
-    '(${_formatBytes(bootstrapContent.length)})',
-  );
-
-  // 7. Cleanup
-  if (!config.noCleanup) {
-    io.stdout.writeln('\nCleaning up...');
-    cleanup(
-      buildDir: buildDir,
-      swVersion: effectiveVersion,
-      canvaskitKeep: canvaskitFiles,
-      keepMaps: config.keepMaps,
-    );
-  }
-
-  io.stdout.writeln('\nDone!');
-}
-
-/// Write [content] to [name] under [buildDir], creating the parent
-/// directories the name implies.
-void _writeOutput(io.Directory buildDir, String name, String content) {
-  final file = io.File(p.join(buildDir.path, name));
-  if (!file.parent.existsSync()) {
-    file.parent.createSync(recursive: true);
-    io.stdout.writeln('  Created directory ${file.parent.path}');
-  }
-  file.writeAsStringSync(content);
+  return '${flutterJs.trimRight()}\n;\n';
 }
 
 /// Throw when [flutterFile] is missing because an earlier run of the

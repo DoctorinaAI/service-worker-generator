@@ -358,4 +358,265 @@ max-progress: 80
       });
     });
   });
+
+  group('GeneratorConfig.parse YAML values', () {
+    late io.Directory tempDir;
+
+    setUp(() {
+      tempDir = io.Directory.systemTemp.createTempSync('sw-config-yaml-');
+    });
+
+    tearDown(() => tempDir.deleteSync(recursive: true));
+
+    GeneratorConfig parseYaml(String content, [List<String> args = const []]) {
+      final yaml = io.File(p.join(tempDir.path, 'sw.yaml'))
+        ..writeAsStringSync(content);
+      return GeneratorConfig.parse(['--config=${yaml.path}', ...args]);
+    }
+
+    Matcher formatError(String message) => throwsA(
+      isA<FormatException>().having(
+        (e) => e.message,
+        'message',
+        contains(message),
+      ),
+    );
+
+    test('accepts lists for every glob option', () {
+      final config = parseYaml('''
+glob: ["**.js", "assets/**"]
+no-glob:
+  - "**.map"
+  - assets/NOTICES
+core: [assets/critical/**]
+required: [a.json, b.json]
+optional: ["**.part.js"]
+ignore:
+  - assets/video/**
+''');
+      // Each used to be one glob, "[**.js, assets/**]": a character class.
+      expect(config.includeGlobs, {'**.js', 'assets/**'});
+      expect(config.excludeGlobs, {'**.map', 'assets/NOTICES'});
+      expect(config.coreGlobs, {'assets/critical/**'});
+      expect(config.requiredGlobs, {'a.json', 'b.json'});
+      expect(config.optionalGlobs, {'**.part.js'});
+      expect(config.ignoreGlobs, {'assets/video/**'});
+    });
+
+    test('splits list items that hold several patterns', () {
+      final config = parseYaml('glob: ["a/**; b/**", c/**]\n');
+      expect(config.includeGlobs, {'a/**', 'b/**', 'c/**'});
+    });
+
+    test('an empty list selects nothing extra', () {
+      expect(parseYaml('core: []\n').coreGlobs, isEmpty);
+    });
+
+    test('rejects a mapping for a glob option', () {
+      expect(
+        () => parseYaml('ignore:\n  video: assets/video/**\n'),
+        formatError(
+          '"ignore" in ${p.join(tempDir.path, 'sw.yaml')} is a '
+          'mapping, but it takes a string or a list of strings',
+        ),
+      );
+    });
+
+    test('rejects a nested list in a glob option', () {
+      expect(
+        () => parseYaml('glob:\n  - [a, b]\n'),
+        formatError('found a nested list at line 2'),
+      );
+    });
+
+    test('rejects an empty list item', () {
+      expect(
+        () => parseYaml('glob:\n  - a\n  -\n'),
+        formatError('found an empty item at line 3'),
+      );
+    });
+
+    test('rejects a list for a single-value option', () {
+      expect(() => parseYaml('title: [a, b]\n'), formatError('"title" in'));
+      expect(
+        () => parseYaml('keep-maps: [true]\n'),
+        formatError('"keep-maps" in'),
+      );
+    });
+
+    test('rejects a mapping for a single-value option', () {
+      expect(
+        () => parseYaml('prefix:\n  a: b\n'),
+        formatError('takes a single value'),
+      );
+    });
+
+    test('keeps the text of a plain scalar', () {
+      final config = parseYaml('''
+version: 1.10
+title: 0x1F
+prefix: 1e3
+logo: 010.png
+''');
+      // Read as numbers, these became "1.1", "31" and "1000.0".
+      expect(config.version, '1.10');
+      expect(config.title, '0x1F');
+      expect(config.cachePrefix, '1e3');
+      expect(config.logo, '010.png');
+    });
+
+    test('keeps the value of a quoted or block scalar', () {
+      final config = parseYaml('''
+version: "1.10"
+title: 'It''s mine'
+color: "#112233"
+logo: |-
+  icons/logo.png
+''');
+      expect(config.version, '1.10');
+      expect(config.title, "It's mine");
+      expect(config.color, '#112233');
+      expect(config.logo, 'icons/logo.png');
+    });
+
+    test('still reads numbers and booleans', () {
+      final config = parseYaml('''
+min-progress: 10
+max-progress: 80
+keep-maps: True
+no-cleanup: no
+''');
+      expect(config.minProgress, 10);
+      expect(config.maxProgress, 80);
+      expect(config.keepMaps, isTrue);
+      expect(config.noCleanup, isFalse);
+    });
+
+    test('an invalid integer names the YAML key and file', () {
+      expect(
+        () => parseYaml('min-progress: 1.5\n'),
+        formatError(
+          'min-progress="1.5" (in ${p.join(tempDir.path, 'sw.yaml')}) is not '
+          'a valid integer',
+        ),
+      );
+    });
+
+    test('an invalid glob names the YAML key', () {
+      expect(
+        () => parseYaml('core: ["ok/**", "["]\n'),
+        formatError(
+          'core (in ${p.join(tempDir.path, 'sw.yaml')}) contains "["',
+        ),
+      );
+    });
+
+    test('an output name with a directory names the YAML key', () {
+      expect(
+        () => parseYaml('output: js/sw.js\n'),
+        formatError('output="js/sw.js" (in'),
+      );
+    });
+  });
+
+  group('GeneratorConfig.parse validation', () {
+    Matcher formatError(String message) => throwsA(
+      isA<FormatException>().having(
+        (e) => e.message,
+        'message',
+        contains(message),
+      ),
+    );
+
+    test('rejects an invalid glob, naming the CLI flag', () {
+      for (final option in [
+        'glob',
+        'no-glob',
+        'core',
+        'required',
+        'optional',
+        'ignore',
+      ]) {
+        expect(
+          () => GeneratorConfig.parse(['--$option=a/**;{b']),
+          formatError('--$option contains "{b"'),
+          reason: option,
+        );
+      }
+    });
+
+    test('an invalid integer names the CLI flag', () {
+      expect(
+        () => GeneratorConfig.parse(const ['--min-progress=x']),
+        formatError('--min-progress="x" is not a valid integer'),
+      );
+    });
+
+    for (final name in [
+      'js/sw.js',
+      r'js\sw.js',
+      '../sw.js',
+      '..',
+      '.',
+      '/abs/sw.js',
+      r'C:\sw.js',
+      'C:sw.js',
+      '',
+    ]) {
+      test('rejects the output name "$name"', () {
+        expect(
+          () => GeneratorConfig.parse(['--output=$name']),
+          formatError('--output="$name"'),
+        );
+        expect(
+          () => GeneratorConfig.parse(['--bootstrap-output=$name']),
+          formatError('--bootstrap-output="$name"'),
+        );
+      });
+    }
+
+    test('rejects the same name for both outputs', () {
+      expect(
+        () => GeneratorConfig.parse(const ['--bootstrap-output=sw.js']),
+        formatError('both be written to "sw.js"'),
+      );
+    });
+
+    test('accepts plain output names', () {
+      final config = GeneratorConfig.parse(const [
+        '--output=service-worker.js',
+        '--bootstrap-output=boot.v2.js',
+      ]);
+      expect(config.swOutput, 'service-worker.js');
+      expect(config.bootstrapOutput, 'boot.v2.js');
+    });
+
+    test('rejects versions that collide with cache names', () {
+      expect(
+        () => GeneratorConfig.parse(const ['--version=manifest']),
+        formatError('--version="manifest"'),
+      );
+      expect(
+        () => GeneratorConfig.parse(const ['--version=temp-abc']),
+        formatError('starts with "temp-"'),
+      );
+      expect(
+        () => GeneratorConfig.parse(const ['--version=v1-manifest']),
+        formatError('ends with "-manifest"'),
+      );
+    });
+
+    test('accepts versions that only resemble a cache name', () {
+      for (final version in [
+        'manifests',
+        'v-temp-1',
+        'temp',
+        'Manifest',
+        'manifest-2',
+        'v1manifest',
+      ]) {
+        expect(GeneratorConfig.parse(['--version=$version']).version, version);
+      }
+    });
+  });
 }

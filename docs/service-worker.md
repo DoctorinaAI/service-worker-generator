@@ -39,6 +39,16 @@ interface ResourceEntry {
 | Temp | `{prefix}-temp-{version}` | Temporary cache during install (atomic swap) |
 | Manifest | `{prefix}-manifest` | Previous manifest storage (unversioned) |
 
+**Cache ownership.** Cleanup and the loading widget's reset button share one
+rule, `ownCacheNames` (`src/shared/cache-ownership.ts`): a cache is this app's
+when it starts with `{prefix}-`, except that every existing `X-manifest` where
+`X` starts with `{prefix}-` marks `X` as another app's prefix, and nothing
+under `X-` is touched. So prefix `app-cache` never deletes the caches of an
+app with prefix `app-cache-admin`, its in-flight temp cache included. Caches
+of earlier workers of the same app are still cleaned. An app on an older
+release is protected only from its first activate on, once its manifest cache
+exists.
+
 ### Per-Category Behavior
 
 | Category | On Install | On Fetch | Cache Busting |
@@ -98,6 +108,8 @@ rebuilt copy with the flag dropped, so a host that normalizes
 ## Event Handlers
 
 ### Install Event
+0. Open the manifest cache (`{prefix}-manifest`), which marks the prefix as
+   in use (see Cache ownership)
 1. Open temp cache (`{prefix}-temp-{version}`)
 2. Fetch all Core and Required resources with cache-busted URLs
 3. Store responses in temp cache
@@ -110,8 +122,10 @@ rebuilt copy with the flag dropped, so a host that normalizes
 3. Load previous manifest from manifest cache
 4. Compare hashes — remove outdated resources from content cache
 5. Save current manifest to manifest cache
-6. Delete old caches with matching prefix (keeping the temp caches of
-   workers still installing or waiting)
+6. Delete this app's old caches (see Cache ownership), keeping the temp
+   caches of workers still installing or waiting, or all temp caches when one
+   of their versions can't be read; the registration is read after the cache
+   listing
 7. Delete temp cache
 8. Call `self.clients.claim()`
 9. On error: see Activate Recovery below
@@ -128,7 +142,10 @@ rebuilt copy with the flag dropped, so a host that normalizes
 5. Look up resource key in manifest
 6. If not in manifest or Ignore category: pass-through to network
 7. Otherwise: cache-first with network fallback
-8. On successful network fetch for Optional resources: cache the response
+8. On successful network fetch (any category, so an evicted Core or Required
+   entry refills): cache the response
+   - The response goes to the page at once; the cache write (and the shell
+     refresh in step 4) runs in the background under `waitUntil`
 9. Notify clients of fetch progress (best-effort — a progress failure never
    fails the response)
 
@@ -161,7 +178,8 @@ Navigations keep the plain behaviour (thrown errors only).
 - Covers the response headers only — see the body watchdog below
 
 ### Body Stall Watchdog
-- A pre-cached body that produces no bytes for 30s is cancelled
+- A pre-cached body, a lazily cached body or a shell refresh that produces no
+  bytes for 30s is cancelled
 - Measured as idle time, not total duration: a slow connection that keeps
   delivering bytes is never cut off, however long a ~10 MB `main.dart.js` takes
 - Without it, `cache.put` reads a stalled stream forever. That hangs `install`,
@@ -172,21 +190,22 @@ Navigations keep the plain behaviour (thrown errors only).
   is retried on the next page load
 
 ### Body Size Check
-- Every pre-cached body and every lazily cached Optional body is counted
-  against the manifest's `size` while it streams into the cache; nothing is
-  buffered. `index.html` is exempt (hosts rewrite it).
+- Every pre-cached body and every lazily cached body (an Optional file, a
+  Core or Required refill) is counted against the manifest's `size` while it
+  streams into the cache; nothing is buffered. `index.html` is exempt (hosts rewrite it).
 - A body that does not match errors the stream, and the Cache API stores
   nothing. The log line names the key and both sizes.
-- A host that declares a `Content-Length` on an uncompressed response,
-  different from the manifest's size, re-encoded the file (image
-  optimisation, an injected snippet): the body is checked against the
-  declared length instead, with a warning. A transfer cut short still fails.
-- Precache without such a header fetches a mismatched entry once more
-  (`cache: 'reload'`). The same length twice, or a longer body (truncation
-  cannot cause it), is the host: stored as served, with a warning. A different
-  length each time, or a second copy short of its own `Content-Length`, is the
-  wire: the entry fails (a `Core` entry fails the install, retried on the next
-  load).
+- A declared `Content-Length` never replaces the manifest's size: a whole
+  body of another length is another file (for example a CDN that ignores
+  `?v=` and serves the previous build's copy).
+- Precache fetches a mismatched entry once more (`cache: 'reload'`); a `204`
+  counts as a mismatch. It stores the second copy when it has the build's
+  size, or when the host re-encodes the response (`Content-Encoding` other
+  than `identity`) and the length repeats (or both copies are longer), with a
+  warning. An uncompressed body of the wrong size, an empty body for a
+  non-empty file, a length that changes, or a second copy that does not match
+  its own `Content-Length` fails the entry (a `Core` entry fails the install,
+  retried on the next load). The lazy cache gets no second look.
 - Only a plain `200` is cached lazily (`206`, `203`, `204` are not).
 
 ### Range Requests
@@ -203,7 +222,8 @@ registration. A `QuotaExceededError` anywhere in caching is logged once per
 
 ### Activate Recovery
 - Swap, cleanup and navigation preload fail separately: a failed swap drops
-  only this version's own caches, so it starts over from the network
+  this version's content and temp caches and clears the stored manifest, but
+  keeps the manifest cache, so it starts over from the network
 - Always call `self.clients.claim()` even on error
 - Prevents stuck pages
 

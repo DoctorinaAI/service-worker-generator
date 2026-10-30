@@ -1,13 +1,13 @@
 import type { FlutterBuildEntry } from '../shared/types';
 import { CANVASKIT_CDN_BASE, CANVASKIT_LOCAL_PATH } from '../shared/constants';
-import { fetchWithRetry } from '../shared/utils';
+import { fetchWithRetry, fetchWithTimeout } from '../shared/utils';
 import { logPhase } from './console-logger';
 
 /**
  * sessionStorage key that pins this tab session to the local engine.
  *
- * Set when the CDN probe fails, or when the app failed to load while the
- * engine came from the CDN. While it is set, `loadCanvasKit` skips the
+ * Set when the CDN probe fails, or when the app failed to load because of
+ * the engine served from the CDN (see `isCdnEngineFailure`). While it is set, `loadCanvasKit` skips the
  * probe and uses the local `canvaskit/` directory. Per tab session by
  * design: a CDN that is blocked now may be reachable tomorrow.
  */
@@ -77,6 +77,114 @@ export function reloadWithLocalCanvasKit(reason: string): boolean {
   );
   window.location.reload();
   return true;
+}
+
+/** Budget for each probe `isCdnEngineFailure` makes after a failed load. */
+const FAILURE_PROBE_TIMEOUT_MS = 5000;
+
+/**
+ * Decide whether an app load that failed with the engine served from
+ * [cdnBase] failed *because of* the CDN engine, and whether a reload onto
+ * the local engine can work.
+ *
+ * Most failures are not the engine's: a `main.dart.js` 404 during a deploy
+ * race, a network blip, or an engine/app mismatch
+ * (`WebAssembly.instantiate(): Import #N`) fail the same way on the local
+ * engine. Reloading for those only hides the error screen and its reset
+ * button, and with the origin unreachable it reloads into a blank page,
+ * since `bootstrap.js` is never cached.
+ *
+ * The errors rarely say which file failed. A dynamic `import()` names its
+ * URL in Chromium and Firefox, a failed `<script>` rejects with its error
+ * event, but a failed engine `.wasm` fetch surfaces as an Emscripten abort
+ * with no URL at all. So:
+ *
+ *  - offline (`navigator.onLine === false`): never;
+ *  - the error names a URL under [cdnBase]: the CDN engine is implicated;
+ *  - it names any other URL: it is not;
+ *  - it names none: the CDN engine is implicated if its `.wasm` (the file
+ *    the load-time probe never checked) cannot be fetched now.
+ *
+ * An implicated CDN still only counts when the origin answers for the
+ * local engine, which the reload will load instead.
+ *
+ * Never throws; any doubt resolves `false`, which shows the error.
+ */
+export async function isCdnEngineFailure(
+  error: unknown,
+  cdnBase: string,
+  variant: { jsFile: string; wasmFile: string },
+): Promise<boolean> {
+  try {
+    if (navigator.onLine === false) {
+      logPhase('CanvasKit', 'App failed while offline; not retrying with the local engine');
+      return false;
+    }
+
+    const text = failureText(error);
+    let implicated: boolean;
+    if (text.includes(cdnBase)) {
+      implicated = true;
+    } else if (/\bhttps?:\/\//.test(text)) {
+      implicated = false;
+    } else {
+      implicated = !(await isReachable(`${cdnBase}/${variant.wasmFile}`));
+    }
+    if (!implicated) {
+      logPhase('CanvasKit', 'App failure does not involve the CDN engine; not retrying with the local engine');
+      return false;
+    }
+
+    const localUrl = new URL(
+      `${CANVASKIT_LOCAL_PATH}/${variant.wasmFile}`,
+      document.baseURI,
+    ).href;
+    if (!(await isReachable(localUrl))) {
+      logPhase('CanvasKit', 'Local engine is unreachable too; not reloading');
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * What a load failure says about its source: an error's message (and its
+ * cause's), or the URL of the element whose error event rejected it.
+ */
+function failureText(error: unknown): string {
+  if (error instanceof Error) {
+    const cause = error.cause instanceof Error ? ` ${error.cause.message}` : '';
+    return `${error.message}${cause}`;
+  }
+  if (typeof Event !== 'undefined' && error instanceof Event) {
+    const target = error.target as { src?: unknown; href?: unknown } | null;
+    const url = target?.src ?? target?.href;
+    return typeof url === 'string' ? url : '';
+  }
+  return String(error);
+}
+
+/**
+ * One-byte `no-store` GET of [url]: a Range request, so the service worker
+ * passes it to the network rather than answering from its cache.
+ */
+async function isReachable(url: string): Promise<boolean> {
+  try {
+    const response = await fetchWithTimeout(
+      new Request(url, {
+        method: 'GET',
+        headers: { Range: 'bytes=0-0' },
+        cache: 'no-store',
+      }),
+      FAILURE_PROBE_TIMEOUT_MS,
+    );
+    await response.arrayBuffer().catch(() => undefined);
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 /**

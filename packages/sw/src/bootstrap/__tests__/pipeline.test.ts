@@ -13,7 +13,7 @@ import {
 } from '../sw-registration';
 import { loadCanvasKit, reloadWithLocalCanvasKit } from '../canvaskit-loader';
 import { LoadingWidget } from '../loading-widget';
-import { CANVASKIT_LOCAL_PATH } from '../../shared/constants';
+import { CANVASKIT_CDN_BASE, CANVASKIT_LOCAL_PATH } from '../../shared/constants';
 import { FlutterLoaderMissingError, loadFlutterApp } from '../flutter-loader';
 import type { SWProgressMessage } from '../../shared/types';
 
@@ -25,7 +25,10 @@ vi.mock('../sw-registration', () => ({
   reloadIfForeignController: vi.fn(async () => false),
   settleUpdateAtBootstrap: vi.fn(async () => false),
 }));
-vi.mock('../canvaskit-loader', () => ({
+// `getCanvasKitVariant` and `isCdnEngineFailure` stay real: the fallback
+// tests drive the classification through `fetch` and `navigator.onLine`.
+vi.mock('../canvaskit-loader', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../canvaskit-loader')>()),
   detectBrowserCaps: vi.fn(() => ({
     hasImageCodecs: false,
     hasChromiumBreakIterators: false,
@@ -228,8 +231,32 @@ describe('runPipeline', () => {
     load.mockClear();
     runPipeline(resolved());
     for (let i = 0; i < 50; i++) await Promise.resolve();
-    expect(settleUpdateAtBootstrap).toHaveBeenCalledWith(registration, 'rev');
+    expect(settleUpdateAtBootstrap).toHaveBeenCalledWith(
+      registration,
+      'rev',
+      expect.any(Function),
+    );
     expect(load).not.toHaveBeenCalled();
+  });
+
+  it('keeps the update wait from reading as a stall', async () => {
+    // A large precache on a slow link reports nothing for longer than the
+    // widget's stall threshold; the wait's keep-alive is a progress beat.
+    const registration = {} as ServiceWorkerRegistration;
+    vi.mocked(registerServiceWorker).mockResolvedValueOnce(registration);
+    let onWait: (() => void) | undefined;
+    vi.mocked(settleUpdateAtBootstrap).mockImplementationOnce(
+      async (_r, _e, keepAlive) => {
+        onWait = keepAlive;
+        return true;
+      },
+    );
+    const updateSpy = vi.spyOn(LoadingWidget.prototype, 'updateProgress');
+    runPipeline(resolved());
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+    updateSpy.mockClear();
+    onWait?.();
+    expect(updateSpy).toHaveBeenCalledWith(expect.any(Number), 'Installing update');
   });
 
   it('stops before registering when the page reloads off a foreign controller', async () => {
@@ -300,6 +327,7 @@ describe('runPipeline', () => {
   it('shows a generic error when the loader rejects with a non-Error', async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     vi.mocked(loadFlutterApp).mockRejectedValueOnce('boom');
+    vi.mocked(loadCanvasKit).mockResolvedValueOnce(CANVASKIT_LOCAL_PATH);
     const api = runPipeline(resolved());
     const errSpy = vi.spyOn(api, 'error');
     for (let i = 0; i < 50; i++) await Promise.resolve();
@@ -376,9 +404,14 @@ describe('runPipeline', () => {
 });
 
 describe('runPipeline — CDN engine fallback', () => {
+  const CDN = `${CANVASKIT_CDN_BASE}/rev`;
   let logSpy: ReturnType<typeof vi.spyOn>;
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let listenerTracker: ReturnType<typeof trackWindowListeners>;
+  let originalFetch: typeof fetch;
+  /** Whether the probes `isCdnEngineFailure` makes reach their file. */
+  let reachable: { cdn: boolean; local: boolean };
+  let fetchSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     document.body.innerHTML = '';
@@ -388,9 +421,19 @@ describe('runPipeline — CDN engine fallback', () => {
     listenerTracker = trackWindowListeners();
     vi.mocked(reloadWithLocalCanvasKit).mockClear();
     vi.mocked(reloadWithLocalCanvasKit).mockReturnValue(false);
+    vi.mocked(loadCanvasKit).mockImplementation(async () => CDN);
+    originalFetch = globalThis.fetch;
+    reachable = { cdn: true, local: true };
+    fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const ok = url.startsWith(CANVASKIT_CDN_BASE) ? reachable.cdn : reachable.local;
+      return new Response('x', { status: ok ? 206 : 403 });
+    });
+    globalThis.fetch = fetchSpy as unknown as typeof fetch;
   });
 
   afterEach(() => {
+    globalThis.fetch = originalFetch;
     listenerTracker.restore();
     logSpy.mockRestore();
     errorSpy.mockRestore();
@@ -398,37 +441,133 @@ describe('runPipeline — CDN engine fallback', () => {
     vi.mocked(loadCanvasKit).mockImplementation(async () => '/cdn/base');
     vi.mocked(loadFlutterApp).mockReset();
     vi.mocked(loadFlutterApp).mockImplementation(async () => undefined);
+    delete (navigator as unknown as { onLine?: unknown }).onLine;
   });
 
+  /** Let the pipeline and the classification's probes run out. */
   async function settle(): Promise<void> {
-    for (let i = 0; i < 50; i++) await Promise.resolve();
+    for (let i = 0; i < 10; i++) await new Promise((r) => setTimeout(r, 0));
   }
 
-  it('reloads with the local engine when the app fails on a CDN engine', async () => {
+  /** What Emscripten throws when the engine `.wasm` cannot be fetched. */
+  const wasmAbort = (): Error =>
+    new Error('Aborted(both async and sync fetching of the wasm failed)');
+
+  it('reloads once with the local engine when the CDN engine cannot be fetched', async () => {
+    reachable.cdn = false;
     vi.mocked(reloadWithLocalCanvasKit).mockReturnValue(true);
-    vi.mocked(loadFlutterApp).mockRejectedValueOnce(new Error('wasm blocked'));
+    vi.mocked(loadFlutterApp).mockRejectedValueOnce(wasmAbort());
     const api = runPipeline(resolved());
     const errSpy = vi.spyOn(api, 'error');
     await settle();
     expect(reloadWithLocalCanvasKit).toHaveBeenCalledOnce();
     expect(String(vi.mocked(reloadWithLocalCanvasKit).mock.calls[0][0])).toContain(
-      'wasm blocked',
+      'fetching of the wasm failed',
+    );
+    // The probe checked the file the load-time probe never did.
+    expect(fetchSpy.mock.calls.map((c) => (c[0] as Request).url)).toContain(
+      `${CDN}/canvaskit.wasm`,
     );
     // The page is going away; no error flash on the way out.
     expect(errSpy).not.toHaveBeenCalled();
   });
 
+  it('reloads when the error names a file on the CDN', async () => {
+    // A CSP or blocker that stops the engine script: the CDN still answers
+    // a fetch, but the error says which file failed.
+    vi.mocked(reloadWithLocalCanvasKit).mockReturnValue(true);
+    vi.mocked(loadFlutterApp).mockRejectedValueOnce(
+      new TypeError(`Failed to fetch dynamically imported module: ${CDN}/skwasm.js`),
+    );
+    runPipeline(resolved());
+    await settle();
+    expect(reloadWithLocalCanvasKit).toHaveBeenCalledOnce();
+  });
+
+  it('shows the error when main.dart.js fails, without a fallback', async () => {
+    // flutter.js rejects with the script's error event: a 404 in a deploy
+    // race, which the local engine would fail on all the same.
+    vi.mocked(reloadWithLocalCanvasKit).mockReturnValue(true);
+    const script = document.createElement('script');
+    script.src = 'http://localhost:3000/main.dart.js';
+    const event = new Event('error');
+    script.dispatchEvent(event);
+    vi.mocked(loadFlutterApp).mockRejectedValueOnce(event);
+    const api = runPipeline(resolved());
+    const errSpy = vi.spyOn(api, 'error');
+    await settle();
+    expect(reloadWithLocalCanvasKit).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledWith('Failed to load application');
+  });
+
+  it('shows the error when the app module fails, without a fallback', async () => {
+    vi.mocked(reloadWithLocalCanvasKit).mockReturnValue(true);
+    vi.mocked(loadFlutterApp).mockRejectedValueOnce(
+      new TypeError(
+        'Failed to fetch dynamically imported module: http://localhost:3000/main.dart.mjs',
+      ),
+    );
+    const api = runPipeline(resolved());
+    const errSpy = vi.spyOn(api, 'error');
+    await settle();
+    expect(reloadWithLocalCanvasKit).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('main.dart.mjs'));
+  });
+
+  it('shows an engine/app mismatch while the CDN engine is fine', async () => {
+    vi.mocked(reloadWithLocalCanvasKit).mockReturnValue(true);
+    const mismatch =
+      'WebAssembly.instantiate(): Import #3 "dart2wasm": module is not an object or function';
+    vi.mocked(loadFlutterApp).mockRejectedValueOnce(new Error(mismatch));
+    const api = runPipeline(resolved());
+    const errSpy = vi.spyOn(api, 'error');
+    await settle();
+    expect(reloadWithLocalCanvasKit).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledWith(mismatch);
+  });
+
+  it('does not reload while offline: bootstrap.js is not cached', async () => {
+    Object.defineProperty(navigator, 'onLine', { configurable: true, get: () => false });
+    reachable = { cdn: false, local: false };
+    vi.mocked(reloadWithLocalCanvasKit).mockReturnValue(true);
+    vi.mocked(loadFlutterApp).mockRejectedValueOnce(
+      new TypeError(`Failed to fetch dynamically imported module: ${CDN}/skwasm.js`),
+    );
+    const api = runPipeline(resolved());
+    const errSpy = vi.spyOn(api, 'error');
+    await settle();
+    expect(reloadWithLocalCanvasKit).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    // The error screen, with its reset button, instead of a blank page.
+    expect(errSpy).toHaveBeenCalledOnce();
+  });
+
+  it('does not reload when the origin does not answer either', async () => {
+    // `onLine` is true behind a dead link too; a reload would then fetch
+    // bootstrap.js from nowhere.
+    reachable = { cdn: false, local: false };
+    vi.mocked(reloadWithLocalCanvasKit).mockReturnValue(true);
+    vi.mocked(loadFlutterApp).mockRejectedValueOnce(wasmAbort());
+    const api = runPipeline(resolved());
+    const errSpy = vi.spyOn(api, 'error');
+    await settle();
+    expect(reloadWithLocalCanvasKit).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledOnce();
+  });
+
   it('shows the error as before when the reload is declined', async () => {
+    reachable.cdn = false;
     vi.mocked(reloadWithLocalCanvasKit).mockReturnValue(false);
-    vi.mocked(loadFlutterApp).mockRejectedValueOnce(new Error('wasm blocked'));
+    vi.mocked(loadFlutterApp).mockRejectedValueOnce(wasmAbort());
     const api = runPipeline(resolved());
     const errSpy = vi.spyOn(api, 'error');
     await settle();
     expect(reloadWithLocalCanvasKit).toHaveBeenCalledOnce();
-    expect(errSpy).toHaveBeenCalledWith('wasm blocked');
+    expect(errSpy).toHaveBeenCalledWith(wasmAbort().message);
   });
 
   it('does not reload for a missing Flutter loader, which no engine fixes', async () => {
+    reachable.cdn = false;
     vi.mocked(reloadWithLocalCanvasKit).mockReturnValue(true);
     vi.mocked(loadFlutterApp).mockRejectedValueOnce(
       new FlutterLoaderMissingError(),
@@ -443,12 +582,14 @@ describe('runPipeline — CDN engine fallback', () => {
   });
 
   it('does not attempt the fallback when the engine was already local', async () => {
+    reachable.cdn = false;
     vi.mocked(loadCanvasKit).mockResolvedValueOnce(CANVASKIT_LOCAL_PATH);
     vi.mocked(loadFlutterApp).mockRejectedValueOnce(new Error('broken'));
     const api = runPipeline(resolved());
     const errSpy = vi.spyOn(api, 'error');
     await settle();
     expect(reloadWithLocalCanvasKit).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
     expect(errSpy).toHaveBeenCalledWith('broken');
   });
 
@@ -463,6 +604,7 @@ describe('runPipeline — CDN engine fallback', () => {
   it('handles an engine initialisation failure reported by the loader', async () => {
     // With the callback form of flutter.loader.load, initializeEngine runs
     // inside onEntrypointLoaded, whose rejection never reaches load().
+    reachable.cdn = false;
     vi.mocked(reloadWithLocalCanvasKit).mockReturnValue(false);
     vi.mocked(loadFlutterApp).mockImplementationOnce(
       async (_b, _r, _builds, _p, onEngineError) => {
@@ -477,6 +619,7 @@ describe('runPipeline — CDN engine fallback', () => {
   });
 
   it('handles one failure only once when both paths report it', async () => {
+    reachable.cdn = false;
     vi.mocked(loadFlutterApp).mockImplementationOnce(
       async (_b, _r, _builds, _p, onEngineError) => {
         const e = new Error('dup');

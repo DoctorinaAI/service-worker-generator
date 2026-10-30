@@ -7,6 +7,7 @@ import { createProgressReporter, type ProgressReporter } from '../progress';
 import { notifyClients } from '../notify';
 import type { ResourceManifest, SWProgressMessage } from '../../shared/types';
 import { ResourceCategory } from '../../shared/types';
+import { BODY_STALL_TIMEOUT_MS } from '../../shared/constants';
 import {
   installMockCaches,
   installMockFetch,
@@ -27,7 +28,10 @@ interface FakeFetchEvent {
   request: Request;
   preloadResponse: Promise<Response | undefined>;
   respondWith: ReturnType<typeof vi.fn>;
+  waitUntil: ReturnType<typeof vi.fn>;
   _responded?: Promise<Response>;
+  /** Resolves once the response and every `waitUntil` promise settle. */
+  _settled: () => Promise<void>;
 }
 
 function makeEvent(
@@ -52,12 +56,21 @@ function makeEvent(
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
+  const extended: Promise<unknown>[] = [];
   const event: FakeFetchEvent = {
     request: requestLike as Request,
     preloadResponse: Promise.resolve(options.preload),
     respondWith: vi.fn((promise: Response | Promise<Response>) => {
       event._responded = Promise.resolve(promise);
     }),
+    waitUntil: vi.fn((promise: Promise<unknown>) => {
+      extended.push(promise);
+    }),
+    _settled: async () => {
+      await event._responded;
+      // A write may be registered only once the response is ready.
+      for (let i = 0; i < extended.length; i++) await extended[i];
+    },
   };
   return event;
 }
@@ -241,7 +254,7 @@ describe('networkFirst (via handleFetch navigate)', () => {
     installMockFetch(async () => textResponse('<html>fresh-shell</html>'));
     const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
     handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
-    await event._responded!;
+    await event._settled();
 
     // Stored under the canonical shell key so a pre-cached `index.html`
     // and a cached navigation are the same entry.
@@ -606,6 +619,7 @@ describe('handleFetch — audit #30', () => {
       const event = makeEvent(`${ORIGIN}/logo.png`);
       handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
       const response = await event._responded!;
+      await event._settled();
       expect(response.status).toBe(200);
       expect((await response.arrayBuffer()).byteLength).toBe(7);
       expect(await cache.match(new Request('logo.png'))).toBeUndefined();
@@ -621,8 +635,70 @@ describe('handleFetch — audit #30', () => {
       const event = makeEvent(`${ORIGIN}/logo.png`);
       handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
       const response = await event._responded!;
+      await event._settled();
       expect((await response.arrayBuffer()).byteLength).toBe(30);
       expect(await cache.match(new Request('logo.png'))).toBeDefined();
+    });
+  });
+
+  describe('background cache write', () => {
+    /** A 200 that sends a few bytes and then nothing, ever. */
+    const stalled = (): Response =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(bytes(10));
+          },
+        }),
+      );
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('answers a Core refill without waiting for the cache write', async () => {
+      // An evicted main.dart.js refilled from a stream that stalls. Awaiting
+      // the write before answering held the request until the browser gave
+      // up; the page must get its response with the headers.
+      vi.useFakeTimers();
+      installMockFetch(async () => stalled());
+      consumeOnPut(await mockCaches.open('app-v1'));
+      const event = makeEvent(`${ORIGIN}/main.dart.js`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      let answered: Response | undefined;
+      void event._responded!.then((r) => {
+        answered = r;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(answered?.status).toBe(200);
+      expect(event.waitUntil).toHaveBeenCalledOnce();
+
+      // The write itself is cut off by the stall watchdog and stores nothing.
+      const settled = event._settled();
+      await vi.advanceTimersByTimeAsync(BODY_STALL_TIMEOUT_MS + 1);
+      await settled;
+      expect(await (await caches.open('app-v1')).match(new Request('main.dart.js'))).toBeUndefined();
+      expect(warnSpy.mock.calls.map((c: unknown[]) => c.map(String).join(' ')).join('\n')).toMatch(
+        /Cache write failed for main\.dart\.js.*stalled/,
+      );
+    });
+
+    it('answers a shell navigation without waiting for the cache write', async () => {
+      vi.useFakeTimers();
+      installMockFetch(async () => stalled());
+      consumeOnPut(await mockCaches.open('app-v1'));
+      const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      let answered: Response | undefined;
+      void event._responded!.then((r) => {
+        answered = r;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(answered?.status).toBe(200);
+
+      const settled = event._settled();
+      await vi.advanceTimersByTimeAsync(BODY_STALL_TIMEOUT_MS + 1);
+      await expect(settled).resolves.toBeUndefined();
     });
   });
 
@@ -634,6 +710,7 @@ describe('handleFetch — audit #30', () => {
       const event = makeEvent(`${ORIGIN}/logo.png`);
       handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
       const response = await event._responded!;
+      await event._settled();
       expect(response.status).toBe(200);
       expect(errorSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n')).toMatch(
         /quota exceeded.*logo\.png/i,
@@ -647,6 +724,7 @@ describe('handleFetch — audit #30', () => {
       const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
       handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
       const response = await event._responded!;
+      await event._settled();
       expect(await response.text()).toBe('<html></html>');
       expect(errorSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n')).toMatch(
         /quota exceeded.*index\.html/i,

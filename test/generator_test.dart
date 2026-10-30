@@ -168,26 +168,11 @@ void main() {
       );
     });
 
-    test('without an engine revision', () {
-      writeBuild();
-      io.File(
-        p.join(dir.path, 'flutter_bootstrap.js'),
-      ).writeAsStringSync('_flutter.buildConfig = {"builds":[]};');
-      expect(
-        generate(config()),
-        throwsA(
-          isA<StateError>().having(
-            (e) => e.message,
-            'message',
-            contains('missing engineRevision'),
-          ),
-        ),
-      );
-    });
-
     test('without flutter.js, before writing anything', () async {
       writeBuild();
       io.File(p.join(dir.path, 'flutter.js')).deleteSync();
+      final shell = io.File(p.join(dir.path, 'index.html'));
+      final before = shell.readAsBytesSync();
       await expectLater(
         generate(config()),
         throwsA(
@@ -204,7 +189,37 @@ void main() {
         io.File(p.join(dir.path, 'flutter_bootstrap.js')).existsSync(),
         isTrue,
       );
+      // The shell used to be stamped before this check, so the re-run
+      // hashed a different shell and derived a version it could not stamp.
+      expect(shell.readAsBytesSync(), before);
     });
+  });
+
+  test('a run that failed on flutter.js can simply be repeated', () async {
+    writeBuild();
+    final flutterJs = io.File(p.join(dir.path, 'flutter.js'));
+    final loader = flutterJs.readAsStringSync();
+    flutterJs.deleteSync();
+    await expectLater(generate(config()), throwsStateError);
+
+    flutterJs.writeAsStringSync(loader);
+    await generate(config());
+    final version = swVersion();
+    expect(
+      io.File(p.join(dir.path, 'index.html')).readAsStringSync(),
+      contains('content="$version"'),
+    );
+
+    // The same input, never touched by the failed run, gives the same
+    // version.
+    final fresh = io.Directory.systemTemp.createTempSync('sw_generator_fresh');
+    addTearDown(() => fresh.deleteSync(recursive: true));
+    final saved = dir;
+    dir = fresh;
+    writeBuild();
+    await generate(config());
+    expect(swVersion(), version);
+    dir = saved;
   });
 
   test('a second run over a cleaned directory fails loudly', () async {
@@ -521,20 +536,115 @@ _flutter.buildConfig = {"engineRevision":"abc123","builds":[{"compileTarget":"da
       expect(sw, isNot(contains('.part.js')));
     });
 
-    test('creates the parent directories of the outputs', () async {
+    group('rejects an output name that is not a plain file name', () {
+      for (final (sw, bootstrap) in [
+        ('js/sw.js', 'bootstrap.js'),
+        ('sw.js', 'js/boot/bootstrap.js'),
+        (r'js\sw.js', 'bootstrap.js'),
+        ('../sw.js', 'bootstrap.js'),
+        ('sw.js', '..'),
+        ('/tmp/sw.js', 'bootstrap.js'),
+        (r'C:\sw.js', 'bootstrap.js'),
+        ('', 'bootstrap.js'),
+        ('same.js', 'same.js'),
+      ]) {
+        test('$sw + $bootstrap', () async {
+          writeBuild();
+          final before = io.File(
+            p.join(dir.path, 'index.html'),
+          ).readAsBytesSync();
+          // A worker under js/ gets the default scope /js/ and never
+          // controls the page; ../ and absolute names leave the build.
+          await expectLater(
+            generate(
+              GeneratorConfig(
+                inputDir: dir.path,
+                version: 'v1',
+                swOutput: sw,
+                bootstrapOutput: bootstrap,
+              ),
+            ),
+            throwsFormatException,
+          );
+          expect(io.Directory(p.join(dir.path, 'js')).existsSync(), isFalse);
+          expect(
+            io.File(p.join(dir.path, 'index.html')).readAsBytesSync(),
+            before,
+          );
+        });
+      }
+    });
+
+    test('rejects a version that collides with a cache name', () async {
+      writeBuild();
+      for (final version in ['manifest', 'temp-v1', 'v1-manifest']) {
+        await expectLater(
+          generate(GeneratorConfig(inputDir: dir.path, version: version)),
+          throwsFormatException,
+          reason: version,
+        );
+      }
+      expect(io.File(p.join(dir.path, 'sw.js')).existsSync(), isFalse);
+    });
+
+    test('accepts versions that only resemble a cache name', () async {
       writeBuild();
       await generate(
         GeneratorConfig(
           inputDir: dir.path,
-          version: 'v1',
-          swOutput: 'js/sw.js',
-          bootstrapOutput: 'js/boot/bootstrap.js',
+          version: 'manifest-2',
+          noCleanup: true,
         ),
       );
-      expect(io.File(p.join(dir.path, 'js', 'sw.js')).existsSync(), isTrue);
+      expect(swVersion(), 'manifest-2');
+    });
+
+    test('warns, but generates, without an engine revision', () async {
+      writeBuild();
+      io.File(p.join(dir.path, 'flutter_bootstrap.js')).writeAsStringSync(
+        '_flutter.buildConfig = {"builds":[{"compileTarget":"dart2js", '
+        '"renderer":"canvaskit","mainJsPath":"main.dart.js"}]};',
+      );
+      final out = await captureOutput(() => generate(config()));
+      expect(out.stderr, contains('has no engineRevision'));
+      expect(out.stderr, contains('slow update path'));
+      expect(out.stdout, contains('Engine: (unknown)'));
+      final sw = io.File(p.join(dir.path, 'sw.js')).readAsStringSync();
+      expect(sw, isNot(contains('"engineRevision":')));
+    });
+
+    test('is silent about the engine revision when there is one', () async {
+      writeBuild();
+      final out = await captureOutput(() => generate(config()));
+      expect(out.stderr, isNot(contains('engineRevision')));
+    });
+
+    test('HTML-escapes a supplied version stamped into the shell', () async {
+      writeBuild();
+      const version = '1"><script>alert(1)</script>';
+      await generate(GeneratorConfig(inputDir: dir.path, version: version));
+      final shell = io.File(p.join(dir.path, 'index.html'));
+      final html = shell.readAsStringSync();
+      expect(html, isNot(contains('<script>alert')));
       expect(
-        io.File(p.join(dir.path, 'js', 'boot', 'bootstrap.js')).existsSync(),
-        isTrue,
+        html,
+        contains('content="1&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"'),
+      );
+      // The manifest still describes the bytes that ship.
+      final entry = shellEntry();
+      expect(
+        entry['hash'],
+        crypto.md5.convert(shell.readAsBytesSync()).toString(),
+      );
+    });
+
+    test('warns when the shell inlines Flutter\'s loader', () async {
+      writeBuild(indexHtml: _indexWithInlineLoader);
+      final out = await captureOutput(() => generate(config()));
+      expect(out.stderr, contains('{{flutter_bootstrap_js}}'));
+      expect(
+        out.stderr,
+        contains('<script src="bootstrap.js" data-sw-bootstrap defer>'),
       );
     });
 
@@ -593,6 +703,16 @@ _flutter.buildConfig = {"engineRevision":"abc123","builds":[{"compileTarget":"da
 const String _indexWithPlaceholder = '''
 <html><head><meta name="sw" content="{{sw_version}}"></head>
 <body><script defer data-sw-bootstrap src="bootstrap.js"></script></body></html>
+''';
+
+/// What `{{flutter_bootstrap_js}}` leaves in the shell after a build.
+const String _indexWithInlineLoader = '''
+<html><body><script>
+(()=>{var _flutter = window._flutter || {}; _flutter.loader = {};})();
+if (!window._flutter) { window._flutter = {}; }
+_flutter.buildConfig = {"engineRevision":"abc123","builds":[]};
+_flutter.loader.load();
+</script></body></html>
 ''';
 
 const String _goldenVersion = 'f10ed3a4f074';
