@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { Host } from './support/host';
 
 declare global {
   interface Window {
@@ -10,12 +10,6 @@ declare global {
 }
 
 const BASE_URL = 'http://localhost:8089';
-
-/** The directory `playwright.config.ts` serves on BASE_URL. */
-const WEB_ROOT = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../../../example/build/web',
-);
 
 test.describe('Bootstrap E2E', () => {
   test('page loads without errors', async ({ page }) => {
@@ -140,14 +134,19 @@ test.describe('Bootstrap E2E — wedged service worker job queue', () => {
   event.waitUntil(new Promise(() => {}));
 });
 `;
-  const stallSwPath = path.join(WEB_ROOT, 'stall-sw.js');
+  // A host of its own: test workers run side by side, and one removing this
+  // file from a shared directory would leave another's job queue free.
+  let host: Host;
 
-  test.beforeAll(() => {
-    fs.writeFileSync(stallSwPath, STALL_SW);
+  test.beforeEach(async () => {
+    host = new Host();
+    await host.start();
+    host.deploy('a');
+    fs.writeFileSync(path.join(host.root, 'stall-sw.js'), STALL_SW);
   });
 
-  test.afterAll(() => {
-    fs.rmSync(stallSwPath, { force: true });
+  test.afterEach(async () => {
+    await host.stop();
   });
 
   test('boots the app anyway, without the service worker', async ({ page }) => {
@@ -162,7 +161,7 @@ test.describe('Bootstrap E2E — wedged service worker job queue', () => {
       void navigator.serviceWorker?.register('stall-sw.js').catch(() => {});
     });
 
-    await page.goto(BASE_URL);
+    await page.goto(host.origin);
 
     // The app reaches its first frame despite the queue never freeing up.
     await expect(page.locator('flutter-view')).toBeAttached({
