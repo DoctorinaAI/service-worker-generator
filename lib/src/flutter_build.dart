@@ -48,7 +48,10 @@ FlutterBuildInfo extractFlutterBuildInfo(io.Directory buildDir) {
 
   if (configMatch == null) {
     throw StateError(
-      'Could not find _flutter.buildConfig in flutter_bootstrap.js',
+      'Could not find _flutter.buildConfig in ${bootstrapFile.path}. '
+      'The file may not come from "flutter build web", or this Flutter '
+      'release writes it in a form the generator does not know. '
+      'Re-run "flutter build web" and try again.',
     );
   }
 
@@ -71,7 +74,9 @@ FlutterBuildInfo extractFlutterBuildInfo(io.Directory buildDir) {
       useLocalCanvasKit: config['useLocalCanvasKit'] == true,
     );
   } catch (e) {
-    throw StateError('Failed to parse buildConfig JSON: $e');
+    throw StateError(
+      'Failed to parse buildConfig JSON in ${bootstrapFile.path}: $e',
+    );
   }
 }
 

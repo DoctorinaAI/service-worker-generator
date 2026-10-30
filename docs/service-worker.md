@@ -11,8 +11,9 @@ The SW receives its configuration via placeholder injection. The Dart CLI replac
 ```typescript
 interface SWConfig {
   cachePrefix: string;        // e.g., "my-app"
-  version: string;            // e.g., "1713200000000" (timestamp)
+  version: string;            // hash of the manifest unless --version is given
   manifest: ResourceManifest; // path → { name, size, hash, category }
+  engineRevision?: string;    // Flutter engine revision, reported by getVersion
 }
 ```
 
@@ -37,6 +38,16 @@ interface ResourceEntry {
 | Content | `{prefix}-{version}` | Main resource cache |
 | Temp | `{prefix}-temp-{version}` | Temporary cache during install (atomic swap) |
 | Manifest | `{prefix}-manifest` | Previous manifest storage (unversioned) |
+
+**Cache ownership.** Cleanup and the loading widget's reset button share one
+rule, `ownCacheNames` (`src/shared/cache-ownership.ts`): a cache is this app's
+when it starts with `{prefix}-`, except that every existing `X-manifest` where
+`X` starts with `{prefix}-` marks `X` as another app's prefix, and nothing
+under `X-` is touched. So prefix `app-cache` never deletes the caches of an
+app with prefix `app-cache-admin`, its in-flight temp cache included. Caches
+of earlier workers of the same app are still cleaned. An app on an older
+release is protected only from its first activate on, once its manifest cache
+exists.
 
 ### Per-Category Behavior
 
@@ -93,10 +104,21 @@ the shell, install-time pre-cache and the network-first refresh, store a
 rebuilt copy with the flag dropped, so a host that normalizes
 `/index.html` to `/` does not poison the offline path.
 
+### Firefox and a refused connection
+
+With navigation preload on, Firefox fails a navigation whose connection is
+refused, even though the worker catches the rejected `preloadResponse` and
+answers from cache: the user sees the browser's error page, not the cached
+shell. A minimal worker does the same and turning preload off avoids it, so the
+cause is in the engine. Seen on Playwright's Firefox; `docs/testing.md` lists it
+with the other engine differences.
+
 
 ## Event Handlers
 
 ### Install Event
+0. Open the manifest cache (`{prefix}-manifest`), which marks the prefix as
+   in use (see Cache ownership)
 1. Open temp cache (`{prefix}-temp-{version}`)
 2. Fetch all Core and Required resources with cache-busted URLs
 3. Store responses in temp cache
@@ -109,13 +131,16 @@ rebuilt copy with the flag dropped, so a host that normalizes
 3. Load previous manifest from manifest cache
 4. Compare hashes — remove outdated resources from content cache
 5. Save current manifest to manifest cache
-6. Delete all old caches with matching prefix
+6. Delete this app's old caches (see Cache ownership), keeping the temp
+   caches of workers still installing or waiting, or all temp caches when one
+   of their versions can't be read; the registration is read after the cache
+   listing
 7. Delete temp cache
 8. Call `self.clients.claim()`
-9. On error: clear all caches (clean slate recovery)
+9. On error: see Activate Recovery below
 
 ### Fetch Event
-1. Only handle GET requests
+1. Only handle GET requests without a `Range` header
 2. Normalize URL: strip query params, handle trailing slashes
 3. If the path is under a reserved prefix (`__/`): pass-through
 4. If the request is a navigation (or targets `index.html`): network-first,
@@ -126,7 +151,10 @@ rebuilt copy with the flag dropped, so a host that normalizes
 5. Look up resource key in manifest
 6. If not in manifest or Ignore category: pass-through to network
 7. Otherwise: cache-first with network fallback
-8. On successful network fetch for Optional resources: cache the response
+8. On successful network fetch (any category, so an evicted Core or Required
+   entry refills): cache the response
+   - The response goes to the page at once; the cache write (and the shell
+     refresh in step 4) runs in the background under `waitUntil`
 9. Notify clients of fetch progress (best-effort — a progress failure never
    fails the response)
 
@@ -135,7 +163,7 @@ rebuilt copy with the flag dropped, so a host that normalizes
 | Command | Action |
 |---------|--------|
 | `skipWaiting` | Call `self.skipWaiting()` to activate waiting SW |
-| `getVersion` | Respond with current SW version string |
+| `getVersion` | Respond with the SW version and, when the build has one, its Flutter `engineRevision` |
 
 ## Resilience
 
@@ -147,6 +175,11 @@ Attempt 3: wait 2s
 (fail after 3 attempts)
 ```
 
+Precache and the refill of a missing Core or Required entry also retry a
+`5xx` or `429` answer, waiting for a numeric `Retry-After` (capped at 5 s) or
+the backoff above; the last attempt's response is used as is. A `4xx` is final.
+Navigations keep the plain behaviour (thrown errors only).
+
 ### Fetch with Timeout
 - Default: 10 seconds per request
 - Uses `AbortController` for clean cancellation
@@ -154,7 +187,8 @@ Attempt 3: wait 2s
 - Covers the response headers only — see the body watchdog below
 
 ### Body Stall Watchdog
-- A pre-cached body that produces no bytes for 30s is cancelled
+- A pre-cached body, a lazily cached body or a shell refresh that produces no
+  bytes for 30s is cancelled
 - Measured as idle time, not total duration: a slow connection that keeps
   delivering bytes is never cut off, however long a ~10 MB `main.dart.js` takes
 - Without it, `cache.put` reads a stalled stream forever. That hangs `install`,
@@ -164,8 +198,41 @@ Attempt 3: wait 2s
 - A cancelled body fails that one entry; a `Core` entry fails the install, which
   is retried on the next page load
 
+### Body Size Check
+- Every pre-cached body and every lazily cached body (an Optional file, a
+  Core or Required refill) is counted against the manifest's `size` while it
+  streams into the cache; nothing is buffered. `index.html` is exempt (hosts rewrite it).
+- A body that does not match errors the stream, and the Cache API stores
+  nothing. The log line names the key and both sizes.
+- A declared `Content-Length` never replaces the manifest's size: a whole
+  body of another length is another file (for example a CDN that ignores
+  `?v=` and serves the previous build's copy).
+- Precache fetches a mismatched entry once more (`cache: 'reload'`); a `204`
+  counts as a mismatch. It stores the second copy when it has the build's
+  size, or when the host re-encodes the response (`Content-Encoding` other
+  than `identity`) and the length repeats (or both copies are longer), with a
+  warning. An uncompressed body of the wrong size, an empty body for a
+  non-empty file, a length that changes, or a second copy that does not match
+  its own `Content-Length` fails the entry (a `Core` entry fails the install,
+  retried on the next load). The lazy cache gets no second look.
+- Only a plain `200` is cached lazily (`206`, `203`, `204` are not).
+
+### Range Requests
+A request with a `Range` header (media seeking, resumable downloads) goes
+straight to the network: a slice must never be stored as the whole file, and
+a whole cached file must not answer a slice.
+
+### Orphaned Temp Caches
+An install that was abandoned (tab closed, browser killed) leaves
+`{prefix}-temp-{version}` behind. Each install deletes temp caches of this
+prefix that belong to no installing, waiting or active worker of the
+registration. A `QuotaExceededError` anywhere in caching is logged once per
+10 s with the storage estimate.
+
 ### Activate Recovery
-- On any error during activate: clear all caches
+- Swap, cleanup and navigation preload fail separately: a failed swap drops
+  this version's content and temp caches and clears the stored manifest, but
+  keeps the manifest cache, so it starts over from the network
 - Always call `self.clients.claim()` even on error
 - Prevents stuck pages
 
@@ -235,9 +302,9 @@ describes — which is how `Loaded 5 of 4 resources` happened.
 - Browser detects byte changes in SW script → triggers update
 
 ### Cache Version
-- Each generation produces a new cache version (timestamp by default)
+- Each build with different content gets a new cache version (a hash of the manifest by default)
 - New version → new cache name → old caches cleaned on activate
-- Manifest comparison ensures only changed resources are re-fetched
+- Every version starts with an empty content cache: install precaches the whole Core + Required set again, and Optional files are fetched again on first use. The manifest comparison only evicts stale entries
 
 ### Update Flow
 1. Browser detects new `sw.js` (byte comparison)

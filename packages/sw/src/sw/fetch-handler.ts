@@ -1,12 +1,25 @@
 import type { ResourceManifest, ResourceEntry } from '../shared/types';
 import { ResourceCategory } from '../shared/types';
-import { NEVER_CACHE_FILES, RESERVED_PATH_PREFIXES } from '../shared/constants';
 import {
+  BODY_STALL_TIMEOUT_MS,
+  FETCH_TIMEOUT_MS,
+  MAX_RETRY_ATTEMPTS,
+  NEVER_CACHE_FILES,
+  RESERVED_PATH_PREFIXES,
+} from '../shared/constants';
+import {
+  cacheBustUrl,
   getResourceKey,
   fetchWithRetry,
+  guardBody,
   replayableResponse,
 } from '../shared/utils';
-import { lazyCacheResponse, getContentCacheName } from './cache-manager';
+import {
+  expectedBodySize,
+  lazyCacheResponse,
+  getContentCacheName,
+} from './cache-manager';
+import { reportIfQuotaExceeded } from './quota';
 import type { ProgressReporter } from './progress';
 
 declare const self: ServiceWorkerGlobalScope;
@@ -22,6 +35,20 @@ declare const self: ServiceWorkerGlobalScope;
 const INDEX_KEY = 'index.html';
 
 /**
+ * Keep the worker alive for [work] without making the response wait for
+ * it. Called while the promise handed to `respondWith` is still pending,
+ * which is when `waitUntil` is allowed; should it throw anyway, the work
+ * still runs, only without the lifetime extension.
+ */
+function keepAlive(event: FetchEvent, work: Promise<unknown>): void {
+  try {
+    event.waitUntil(work);
+  } catch (error) {
+    console.warn('[SW] waitUntil refused; the cache write runs unextended:', error);
+  }
+}
+
+/**
  * Handle a fetch event based on manifest and caching strategy.
  */
 export function handleFetch(
@@ -34,6 +61,12 @@ export function handleFetch(
   const { request } = event;
 
   if (request.method !== 'GET') return;
+
+  // A Range request (media seeking, resumable downloads) wants a slice. The
+  // cache holds whole files and could only answer with a 200 the element
+  // may refuse, and a 206 must never be stored as the file. Straight to
+  // the network: no cache read, no cache write.
+  if (request.headers.has('range')) return;
 
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
@@ -72,7 +105,7 @@ export function handleFetch(
   if (!entry || entry.category === ResourceCategory.Ignore) return;
 
   event.respondWith(
-    cacheFirst(request, resourceKey, entry, cachePrefix, version, progress),
+    cacheFirst(event, resourceKey, entry, cachePrefix, version, progress),
   );
 }
 
@@ -152,31 +185,58 @@ async function networkFirst(
   }
 
   if (isShellRequest) {
-    let stored = false;
-    try {
-      const cache = await caches.open(cacheName);
-      // Store a replayable copy: a response carrying the `redirected` flag
-      // is rejected by the browser when it is later served for a
-      // navigation, which would break exactly the offline load the
-      // pre-cached shell exists for.
-      await cache.put(
-        new Request(INDEX_KEY),
-        await replayableResponse(response.clone()),
-      );
-      stored = true;
-    } catch (error) {
-      // Quota pressure is routine for a wasm-sized app. A cache we could
-      // not write is a worse offline story, not a reason to withhold a
-      // page the origin just served.
-      console.warn('[SW] App-shell cache write failed:', error);
-    }
-    // Report the refresh only when it happened. Announcing an update we
-    // failed to store would hide quota pressure from the one channel
-    // built to surface resource state.
-    if (stored) await notifyIndex('updated');
+    // Stored in the background: the navigation gets the response at once,
+    // and a shell body that stalls cannot hold the page — or, through
+    // `replayableResponse`, which reads a redirected copy whole — hang
+    // forever. The copy is cut after `BODY_STALL_TIMEOUT_MS` of silence.
+    keepAlive(event, storeShell(cacheName, response.clone(), notifyIndex));
   }
 
   return response;
+}
+
+/**
+ * Store a fresh copy of the app shell, then report the refresh.
+ *
+ * Never rejects. Quota pressure is routine for a wasm-sized app, and a
+ * cache we could not write is a worse offline story, not a reason to fail
+ * anything.
+ */
+async function storeShell(
+  cacheName: string,
+  copy: Response,
+  notifyIndex: (status: 'updated') => Promise<void>,
+): Promise<void> {
+  let stored = false;
+  try {
+    const cache = await caches.open(cacheName);
+    // Store a replayable copy: a response carrying the `redirected` flag
+    // is rejected by the browser when it is later served for a
+    // navigation, which would break exactly the offline load the
+    // pre-cached shell exists for. The guard's rebuilt response already
+    // drops the flag; `replayableResponse` stays as a backstop.
+    await cache.put(
+      new Request(INDEX_KEY),
+      await replayableResponse(
+        guardBody(copy, { idleMs: BODY_STALL_TIMEOUT_MS, label: INDEX_KEY }),
+      ),
+    );
+    stored = true;
+  } catch (error) {
+    if (!reportIfQuotaExceeded(`writing ${INDEX_KEY}`, error)) {
+      console.warn('[SW] App-shell cache write failed:', error);
+    }
+  }
+  // Report the refresh only when it happened. Announcing an update we
+  // failed to store would hide quota pressure from the one channel built
+  // to surface resource state.
+  if (stored) {
+    try {
+      await notifyIndex('updated');
+    } catch (error) {
+      console.warn('[SW] App-shell progress report failed:', error);
+    }
+  }
 }
 
 /**
@@ -185,15 +245,22 @@ async function networkFirst(
  * Looks up the response in the current versioned content cache only. Cache
  * misses populate the cache for any category except `Ignore` so evicted or
  * partially-precached Core/Required resources self-heal.
+ *
+ * The page gets the network response as soon as its headers arrive; the
+ * cache write runs beside it under `waitUntil`. Awaiting the write first
+ * made the page wait for the whole download plus the store — the tee
+ * buffering every byte the page had not read yet — and a body that stalled
+ * on the refill of an evicted `main.dart.wasm` held the request forever.
  */
 async function cacheFirst(
-  request: Request,
+  event: FetchEvent,
   resourceKey: string,
   entry: ResourceEntry,
   cachePrefix: string,
   version: string,
   progress: ProgressReporter,
 ): Promise<Response> {
+  const { request } = event;
   const cacheName = getContentCacheName(cachePrefix, version);
 
   // An unusable CacheStorage (evicted, blocked by a privacy mode) must
@@ -229,15 +296,27 @@ async function cacheFirst(
       status: 'loading',
     });
 
-    const response = await fetchWithRetry(request);
+    const response =
+      entry.category === ResourceCategory.Core ||
+      entry.category === ResourceCategory.Required
+        ? await fetchRefill(request, resourceKey, entry)
+        : await fetchWithRetry(request);
 
     if (response.ok) {
       if (cache) {
-        try {
-          await lazyCacheResponse(cacheName, new Request(resourceKey), response);
-        } catch (error) {
-          console.warn(`[SW] Cache write failed for ${resourceKey}:`, error);
-        }
+        keepAlive(
+          event,
+          lazyCacheResponse(
+            cacheName,
+            new Request(resourceKey),
+            response,
+            expectedBodySize(resourceKey, entry),
+          ).catch((error: unknown) => {
+            if (!reportIfQuotaExceeded(`caching ${resourceKey}`, error)) {
+              console.warn(`[SW] Cache write failed for ${resourceKey}:`, error);
+            }
+          }),
+        );
       }
 
       await progress.report({
@@ -279,4 +358,67 @@ async function cacheFirst(
       headers: { 'Content-Type': 'text/plain' },
     });
   }
+}
+
+/**
+ * Network copy of a missing Core/Required entry, fetched the way precache
+ * fetches it: `?v={hash}` and `cache: 'reload'`.
+ *
+ * The page asks for `main.dart.wasm` without a hash, so its own request can
+ * be answered by an intermediate or HTTP cache with another build's file,
+ * which would then be pinned in CacheStorage under this version. The
+ * hash-busted URL names exactly this build's bytes.
+ *
+ * Everything else the page sent is kept: its query string (the manifest
+ * key ignores the query, so it does not change what is cached, but a host
+ * may need it — a signed URL, say), headers and credentials. The mode is
+ * not: a same-origin `cors` request yields a readable `basic` response.
+ *
+ * If the busted request fails or is refused (a host or WAF that rejects
+ * unknown query parameters), the page's own request is tried once, so the
+ * page is never worse off than before; that copy is stored as it used to be.
+ */
+async function fetchRefill(
+  request: Request,
+  resourceKey: string,
+  entry: ResourceEntry,
+): Promise<Response> {
+  let busted: Request | null = null;
+  try {
+    const url = new URL(request.url);
+    url.hash = '';
+    busted = new Request(cacheBustUrl(url.href, entry.hash), {
+      cache: 'reload',
+      credentials: request.credentials,
+      headers: request.headers,
+    });
+  } catch (error) {
+    console.warn(`[SW] Could not build refill request for ${resourceKey}:`, error);
+  }
+  if (!busted) return fetchWithRetry(request);
+
+  try {
+    const response = await fetchWithRetry(
+      busted,
+      MAX_RETRY_ATTEMPTS,
+      FETCH_TIMEOUT_MS,
+      { retryOnStatus: true },
+    );
+    if (response.ok) return response;
+    console.warn(
+      `[SW] Refill of ${resourceKey} by hash answered HTTP ${response.status}; ` +
+        'retrying with the page request',
+    );
+    try {
+      response.body?.cancel().catch(() => undefined);
+    } catch {
+      // Nothing to release.
+    }
+  } catch (error) {
+    console.warn(
+      `[SW] Refill of ${resourceKey} by hash failed; retrying with the page request:`,
+      error,
+    );
+  }
+  return fetchWithRetry(request, 1);
 }

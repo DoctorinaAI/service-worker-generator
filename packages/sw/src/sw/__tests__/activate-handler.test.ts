@@ -128,11 +128,190 @@ describe('createActivateHandler', () => {
     expect(claimSpy).toHaveBeenCalledOnce();
   });
 
+  it('keeps the temp cache of a worker still installing beside it', async () => {
+    // v2 activates (bootstrap sent it skipWaiting) while v3 is installing:
+    // deleting v3's temp cache would leave v3 activating with nothing.
+    const temp = await mockCaches.open('app-temp-v2');
+    await temp.put(new Request('main.dart.js'), textResponse('v2-core'));
+    await mockCaches.open('app-temp-v3');
+    await mockCaches.open('app-temp-v0');
+    (self as unknown as { registration: unknown }).registration = {
+      installing: { scriptURL: 'https://example.com/sw.js?v=v3' },
+      waiting: null,
+    };
+
+    const handler = createActivateHandler('app', 'v2', {
+      'main.dart.js': { name: 'main.dart.js', size: 1, hash: 'h', category: ResourceCategory.Core },
+    });
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    const names = await mockCaches.keys();
+    expect(names).toContain('app-temp-v3');
+    expect(names).toContain('app-v2');
+    // An abandoned install's leftovers still go.
+    expect(names).not.toContain('app-temp-v0');
+  });
+
+  it('keeps the swapped content cache when navigation preload fails', async () => {
+    const temp = await mockCaches.open('app-temp-v1');
+    await temp.put(new Request('main.dart.js'), textResponse('core'));
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    (self as unknown as { registration: unknown }).registration = {
+      navigationPreload: { enable: vi.fn(async () => { throw new Error('nope'); }) },
+    };
+
+    const handler = createActivateHandler('app', 'v1', {
+      'main.dart.js': { name: 'main.dart.js', size: 1, hash: 'h', category: ResourceCategory.Core },
+    });
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    expect(await mockCaches.peek('app-v1')?.match('main.dart.js')).toBeDefined();
+    expect(claimSpy).toHaveBeenCalledOnce();
+  });
+
+  it('on a failed swap drops only its own caches, not a pending install\'s', async () => {
+    await mockCaches.open('app-temp-v4');
+    await mockCaches.open('other-app-v1');
+    (self as unknown as { registration: unknown }).registration = {
+      installing: { scriptURL: 'https://example.com/sw.js?v=v4' },
+    };
+    const origOpen = caches.open.bind(caches);
+    vi.spyOn(caches, 'open').mockImplementation(async (name: string) => {
+      if (name === 'app-temp-v3') throw new Error('swap fault');
+      return origOpen(name);
+    });
+
+    const handler = createActivateHandler('app', 'v3', {});
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    const names = await mockCaches.keys();
+    expect(names).toContain('app-temp-v4');
+    expect(names).toContain('other-app-v1');
+    expect(names).not.toContain('app-v3');
+  });
+
+  it('keeps the swapped content cache and still claims when cleanup fails', async () => {
+    const temp = await mockCaches.open('app-temp-v2');
+    await temp.put(new Request('main.dart.js'), textResponse('v2-core'));
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const enableSpy = vi.fn(async () => undefined);
+    (self as unknown as { registration: unknown }).registration = {
+      navigationPreload: { enable: enableSpy },
+    };
+    // swapCaches does not list caches; cleanupOldCaches does.
+    vi.spyOn(caches, 'keys').mockRejectedValue(new Error('storage fault'));
+
+    const handler = createActivateHandler('app', 'v2', {
+      'main.dart.js': { name: 'main.dart.js', size: 1, hash: 'h', category: ResourceCategory.Core },
+    });
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await expect(event._promise).resolves.toBeUndefined();
+
+    expect(await mockCaches.peek('app-v2')?.match('main.dart.js')).toBeDefined();
+    expect(enableSpy).toHaveBeenCalledOnce();
+    expect(claimSpy).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the temp cache of a waiting worker', async () => {
+    await mockCaches.open('app-temp-v3');
+    (self as unknown as { registration: unknown }).registration = {
+      installing: null,
+      waiting: { scriptURL: 'https://example.com/sw.js?v=v3' },
+    };
+
+    const handler = createActivateHandler('app', 'v2', {});
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    expect(await mockCaches.keys()).toContain('app-temp-v3');
+  });
+
+  it('keeps every temp cache while a pending worker\'s version cannot be read', async () => {
+    // Install applies the same guard: a temp cache that no readable version
+    // names may be that worker's, still being written.
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    for (const name of ['app-temp-v3', 'app-temp-v0', 'app-v1']) {
+      await mockCaches.open(name);
+    }
+    for (const unreadable of [
+      { installing: { scriptURL: 'not a url' } },
+      { waiting: { scriptURL: 'https://example.com/sw.js' } },
+    ]) {
+      (self as unknown as { registration: unknown }).registration = unreadable;
+      const handler = createActivateHandler('app', 'v2', {});
+      const event = makeEvent();
+      handler(event as unknown as ExtendableEvent);
+      await event._promise;
+
+      const names = await mockCaches.keys();
+      expect(names).toContain('app-temp-v3');
+      expect(names).toContain('app-temp-v0');
+      expect(names).not.toContain('app-v1');
+      expect(claimSpy).toHaveBeenCalled();
+      await mockCaches.open('app-v1');
+    }
+  });
+
+  it('reads the pending workers after listing the caches', async () => {
+    // v5 starts installing after cleanup listed the caches. Read before the
+    // listing, the registration names no v5, and the temp cache v5 created
+    // in between is in the listing and gets deleted mid-install.
+    (self as unknown as { registration: unknown }).registration = {};
+    await mockCaches.open('app-temp-v0');
+    const origKeys = caches.keys.bind(caches);
+    vi.spyOn(caches, 'keys').mockImplementationOnce(async () => {
+      await mockCaches.open('app-temp-v5');
+      (self as unknown as { registration: unknown }).registration = {
+        installing: { scriptURL: 'https://example.com/sw.js?v=v5' },
+      };
+      return origKeys();
+    });
+
+    const handler = createActivateHandler('app', 'v2', {});
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    const names = await mockCaches.keys();
+    expect(names).toContain('app-temp-v5');
+    expect(names).not.toContain('app-temp-v0');
+  });
+
+  it('leaves the caches of an app whose prefix extends ours alone', async () => {
+    (self as unknown as { registration: unknown }).registration = {};
+    for (const name of [
+      'app-admin-manifest',
+      'app-admin-v1',
+      'app-admin-temp-v2', // that app's install, in flight
+      'app-v1',
+    ]) {
+      await mockCaches.open(name);
+    }
+
+    const handler = createActivateHandler('app', 'v2', {});
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    expect((await mockCaches.keys()).sort()).toEqual(
+      ['app-admin-manifest', 'app-admin-temp-v2', 'app-admin-v1', 'app-manifest', 'app-v2'].sort(),
+    );
+  });
+
   it('wipes app-prefixed caches on error', async () => {
     (self as unknown as { registration: unknown }).registration = {};
     await mockCaches.open('app-v1');
     await mockCaches.open('app-v2');
     await mockCaches.open('other');
+    await (await mockCaches.open('app-manifest')).put(new Request('manifest'), textResponse('{}'));
 
     const origOpen = caches.open.bind(caches);
     vi.spyOn(caches, 'open').mockImplementation(async (name: string) => {
@@ -145,8 +324,31 @@ describe('createActivateHandler', () => {
     handler(event as unknown as ExtendableEvent);
     await event._promise;
 
+    // The manifest cache stays as the prefix's marker, but without the
+    // stored manifest: the next swap diffs against nothing.
     const remaining = await mockCaches.keys();
-    expect(remaining.some((n) => n.startsWith('app-'))).toBe(false);
+    expect(remaining.filter((n) => n.startsWith('app-'))).toEqual(['app-manifest']);
+    expect(await mockCaches.peek('app-manifest')!.match('manifest')).toBeUndefined();
     expect(remaining).toContain('other');
+  });
+
+  it('logs a quota failure of the swap distinctly, and recovers as before', async () => {
+    (self as unknown as { registration: unknown }).registration = {};
+    const temp = await mockCaches.open('app-temp-v2');
+    await temp.put(new Request('main.dart.js'), textResponse('x'));
+    const content = await mockCaches.open('app-v2');
+    vi.spyOn(content, 'put').mockRejectedValue(new DOMException('full', 'QuotaExceededError'));
+
+    const handler = createActivateHandler('app', 'v2', {});
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    const logged = errorSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n');
+    expect(logged).toMatch(/quota exceeded/i);
+    // Recovery unchanged: this version's caches are dropped.
+    expect(mockCaches.peek('app-v2')).toBeUndefined();
+    expect(mockCaches.peek('app-temp-v2')).toBeUndefined();
+    expect(claimSpy).toHaveBeenCalledOnce();
   });
 });

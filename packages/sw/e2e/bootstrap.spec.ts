@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { Host } from './support/host';
 
 declare global {
   interface Window {
@@ -11,12 +11,6 @@ declare global {
 
 const BASE_URL = 'http://localhost:8089';
 
-/** The directory `playwright.config.ts` serves on BASE_URL. */
-const WEB_ROOT = path.resolve(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../../../example/build/web',
-);
-
 test.describe('Bootstrap E2E', () => {
   test('page loads without errors', async ({ page }) => {
     const errors: string[] = [];
@@ -24,7 +18,7 @@ test.describe('Bootstrap E2E', () => {
 
     await page.goto(BASE_URL);
     // Wait for bootstrap.js to start executing
-    await page.waitForTimeout(1000);
+    await page.waitForFunction(() => window.Bootstrap !== undefined);
 
     // No critical JS errors (filter out Flutter-specific ones)
     const criticalErrors = errors.filter(
@@ -76,36 +70,39 @@ test.describe('Bootstrap E2E', () => {
     });
 
     await page.goto(BASE_URL);
-    await page.waitForTimeout(2000);
 
     // Bootstrap should log version info to console
-    const hasBootstrapLog = consoleLogs.some(
-      (log) =>
-        log.includes('Bootstrap') ||
-        log.includes('SW') ||
-        log.includes('Service Worker') ||
-        log.includes('engine'),
-    );
-    expect(hasBootstrapLog).toBe(true);
+    await expect
+      .poll(() =>
+        consoleLogs.some(
+          (log) =>
+            log.includes('Bootstrap') ||
+            log.includes('SW') ||
+            log.includes('Service Worker') ||
+            log.includes('engine'),
+        ),
+      )
+      .toBe(true);
   });
 
   test('window.Bootstrap API is exposed', async ({ page }) => {
     await page.goto(BASE_URL);
-    await page.waitForTimeout(2000);
 
-    const hasBootstrapAPI = await page.evaluate(() => {
-      return typeof window.Bootstrap === 'object' && window.Bootstrap !== null;
-    });
-    expect(hasBootstrapAPI).toBe(true);
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          return typeof window.Bootstrap === 'object' && window.Bootstrap !== null;
+        }),
+      )
+      .toBe(true);
   });
 
   test('window.Bootstrap.progress returns state', async ({ page }) => {
     await page.goto(BASE_URL);
-    await page.waitForTimeout(2000);
+    await page.waitForFunction(() => window.Bootstrap?.progress !== undefined);
 
     const progress = await page.evaluate(() => window.Bootstrap?.progress);
 
-    expect(progress).toBeDefined();
     expect(progress).toHaveProperty('phase');
     expect(progress).toHaveProperty('percent');
     expect(progress).toHaveProperty('message');
@@ -113,16 +110,17 @@ test.describe('Bootstrap E2E', () => {
 
   test('service worker registers', async ({ page }) => {
     await page.goto(BASE_URL);
-    await page.waitForTimeout(3000);
 
-    const swRegistered = await page.evaluate(async () => {
-      if (!('serviceWorker' in navigator)) return false;
-      const registrations =
-        await navigator.serviceWorker.getRegistrations();
-      return registrations.length > 0;
-    });
-
-    expect(swRegistered).toBe(true);
+    await expect
+      .poll(() =>
+        page.evaluate(async () => {
+          if (!('serviceWorker' in navigator)) return false;
+          const registrations =
+            await navigator.serviceWorker.getRegistrations();
+          return registrations.length > 0;
+        }),
+      )
+      .toBe(true);
   });
 });
 
@@ -136,14 +134,19 @@ test.describe('Bootstrap E2E — wedged service worker job queue', () => {
   event.waitUntil(new Promise(() => {}));
 });
 `;
-  const stallSwPath = path.join(WEB_ROOT, 'stall-sw.js');
+  // A host of its own: test workers run side by side, and one removing this
+  // file from a shared directory would leave another's job queue free.
+  let host: Host;
 
-  test.beforeAll(() => {
-    fs.writeFileSync(stallSwPath, STALL_SW);
+  test.beforeEach(async () => {
+    host = new Host();
+    await host.start();
+    host.deploy('a');
+    fs.writeFileSync(path.join(host.root, 'stall-sw.js'), STALL_SW);
   });
 
-  test.afterAll(() => {
-    fs.rmSync(stallSwPath, { force: true });
+  test.afterEach(async () => {
+    await host.stop();
   });
 
   test('boots the app anyway, without the service worker', async ({ page }) => {
@@ -158,7 +161,7 @@ test.describe('Bootstrap E2E — wedged service worker job queue', () => {
       void navigator.serviceWorker?.register('stall-sw.js').catch(() => {});
     });
 
-    await page.goto(BASE_URL);
+    await page.goto(host.origin);
 
     // The app reaches its first frame despite the queue never freeing up.
     await expect(page.locator('flutter-view')).toBeAttached({

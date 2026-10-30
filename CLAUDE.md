@@ -39,6 +39,7 @@ npm run build                  # Build sw.js + bootstrap.js via Vite
 npm run build:all              # Build TS + copy to Dart string constants
 npm -w packages/sw run test    # Run Vitest tests
 npm -w packages/sw run check   # TypeScript type check
+npm run lint                   # ESLint on src and e2e
 ```
 
 ### Dart (root)
@@ -72,14 +73,14 @@ dart run sw:generate --input=build/web
 ### Resource Categories
 - **Core**: main.dart.js/wasm/mjs, *.support.wasm
 - **Required**: index.html (app shell), AssetManifest*.json, FontManifest.json, manifest.json
-- **Optional**: canvaskit variant files (CDN-first with lazy local fallback; local only for `--no-web-resources-cdn` builds), fonts (.ttf, .otf, .woff, .woff2, .eot — any size), lightweight files (.json, .webp, .png, .jpeg, .svg, .gif, .ico < 512KB)
+- **Optional**: canvaskit variant files (CDN-first with lazy local fallback; local only for `--no-web-resources-cdn` builds), fonts (.ttf, .otf, .woff, .woff2, .eot — any size), lightweight files (.json, .webp, .png, .jpg, .jpeg, .svg, .gif, .ico ≤ 512 KB)
 - **Ignore**: *.map, *.symbols, NOTICES, sw.js, bootstrap.js
 
 ### Caching Strategy
 - Core + Required: pre-cached on SW install
 - Optional: cached lazily on first fetch
 - Ignore: not cached
-- index.html: pre-cached, but always served network-first (cache is the offline fallback)
+- index.html: pre-cached, but always served network-first (cache answers a failed navigation; offline boot is not supported because bootstrap.js is never cached)
 - bootstrap.js, sw.js: never intercepted by the SW (always fresh from the origin)
 
 ## Coding Conventions
@@ -103,6 +104,7 @@ dart run sw:generate --input=build/web
 - `docs/bootstrap-pipeline.md` — Pipeline stages, loading widget, global API, data-config options
 - `docs/service-worker.md` — Manifest format, cache strategies, events, retry logic, client notifications
 - `docs/configuration.md` — CLI args, YAML config, env vars, default categorization rules
+- `docs/testing.md` — Test levels, writing browser tests, known engine differences, device checklist
 
 ## Key Files Reference
 - `packages/sw/src/shared/types.ts` — Shared type definitions (ResourceCategory, ResourceManifest, etc.)

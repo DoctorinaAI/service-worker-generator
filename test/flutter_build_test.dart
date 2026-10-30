@@ -79,6 +79,62 @@ _flutter.buildConfig = {"engineRevision":"rev123","builds":[{"compileTarget":"da
       );
     });
 
+    test('names the parsed file and the fix when buildConfig is missing', () {
+      final file = io.File(p.join(tempDir.path, 'flutter_bootstrap.js'))
+        ..writeAsStringSync('// empty file');
+
+      expect(
+        () => extractFlutterBuildInfo(tempDir),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            allOf(contains(file.path), contains('flutter build web')),
+          ),
+        ),
+      );
+    });
+
+    test('throws on a buildConfig that is not valid JSON', () {
+      io.File(
+        p.join(tempDir.path, 'flutter_bootstrap.js'),
+      ).writeAsStringSync("_flutter.buildConfig = {engineRevision: 'abc'};");
+
+      expect(
+        () => extractFlutterBuildInfo(tempDir),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('Failed to parse buildConfig JSON'),
+          ),
+        ),
+      );
+    });
+
+    test('drops empty and non-object build entries', () {
+      io.File(p.join(tempDir.path, 'flutter_bootstrap.js')).writeAsStringSync(
+        '''
+_flutter.buildConfig = {"engineRevision":"r","builds":[{}, "x", {"renderer":"skwasm"}]};
+''',
+      );
+
+      final info = extractFlutterBuildInfo(tempDir);
+      expect(info.builds, [
+        {'renderer': 'skwasm'},
+      ]);
+    });
+
+    test('treats a non-boolean useLocalCanvasKit as false', () {
+      io.File(p.join(tempDir.path, 'flutter_bootstrap.js')).writeAsStringSync(
+        '''
+_flutter.buildConfig = {"engineRevision":"r","builds":[],"useLocalCanvasKit":"true"};
+''',
+      );
+
+      expect(extractFlutterBuildInfo(tempDir).useLocalCanvasKit, isFalse);
+    });
+
     test('handles missing engineRevision gracefully', () {
       io.File(p.join(tempDir.path, 'flutter_bootstrap.js')).writeAsStringSync(
         '''

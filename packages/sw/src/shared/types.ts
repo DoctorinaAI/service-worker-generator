@@ -41,6 +41,12 @@ export interface SWConfig {
   version: string;
   /** Resource manifest */
   manifest: ResourceManifest;
+  /**
+   * Flutter engine revision of the build this worker serves. Reported to
+   * `getVersion` so a newer bootstrap can tell whether the code this worker
+   * would serve runs on its engine. Omitted for builds without one.
+   */
+  engineRevision?: string;
 }
 
 /**
@@ -82,6 +88,13 @@ export interface BuildConfig {
    * first) otherwise.
    */
   useLocalCanvasKit?: boolean;
+  /**
+   * Cache name prefix of this build's service worker (`SWConfig.cachePrefix`).
+   * The loading widget's reset deletes only caches named `${cachePrefix}-…`
+   * so other apps, Workbox or Firebase on the same origin keep theirs.
+   * Omitted by older generators; the reset then deletes every cache.
+   */
+  cachePrefix?: string;
   /** UI defaults supplied by the Dart CLI; overridden by data-config */
   uiDefaults?: BootstrapConfig;
 }

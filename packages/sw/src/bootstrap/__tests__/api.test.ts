@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { BootstrapAPI, installGlobalAPI } from '../api';
 import type { LoadingWidget } from '../loading-widget';
+import { SW_BOOTSTRAP_TIMEOUT_MS } from '../../shared/constants';
 
 function makeWidgetStub() {
   return {
@@ -284,13 +285,16 @@ describe('installGlobalAPI', () => {
   it('window.Bootstrap.applyUpdate activates a waiting worker', async () => {
     installGlobalAPI(api);
     const postMessage = vi.fn();
-    const waiting = { postMessage };
+    const waiting = {
+      postMessage,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
     const getRegistration = vi.fn(async () => ({ waiting }));
     const addEventListener = vi.fn(
       (
         type: string,
         listener: EventListenerOrEventListenerObject,
-        options?: boolean | AddEventListenerOptions,
       ) => {
         if (type === 'controllerchange') {
           setTimeout(() => {
@@ -309,6 +313,7 @@ describe('installGlobalAPI', () => {
       value: {
         getRegistration,
         addEventListener,
+        removeEventListener: vi.fn(),
       },
     });
     const bootstrap = (window as unknown as Record<string, unknown>)[
@@ -323,5 +328,192 @@ describe('installGlobalAPI', () => {
     expect(postMessage).toHaveBeenCalledWith({ type: 'skipWaiting' });
 
     delete (navigator as unknown as { serviceWorker?: unknown }).serviceWorker;
+  });
+  type GlobalBootstrap = {
+    subscribe: (cb: (s: unknown) => void) => () => void;
+    onUpdateAvailable: (h: () => void) => () => void;
+    applyUpdate: (reload?: boolean) => Promise<boolean>;
+    dispose: () => void;
+  };
+  const globalBootstrap = (): GlobalBootstrap =>
+    (window as unknown as Record<string, unknown>)['Bootstrap'] as GlobalBootstrap;
+
+  it('window.Bootstrap.subscribe and onUpdateAvailable reach the api', () => {
+    installGlobalAPI(api);
+    const progress = vi.fn();
+    const update = vi.fn();
+    const unsubscribe = globalBootstrap().subscribe(progress);
+    globalBootstrap().onUpdateAvailable(update);
+
+    api.update('sw', 10, 'x');
+    api.notifyUpdateAvailable();
+    unsubscribe();
+    api.update('sw', 20, 'y');
+
+    expect(progress).toHaveBeenCalledOnce();
+    expect(update).toHaveBeenCalledOnce();
+  });
+
+  it('window.Bootstrap.dispose disposes the api', () => {
+    installGlobalAPI(api);
+    globalBootstrap().dispose();
+    expect(api.disposed).toBe(true);
+    expect(widget.dispose).toHaveBeenCalledOnce();
+  });
+
+  describe('applyUpdate', () => {
+    let originalLocation: Location;
+    let reloadSpy: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      originalLocation = window.location;
+      reloadSpy = vi.fn();
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: { ...originalLocation, reload: reloadSpy },
+      });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+      Object.defineProperty(window, 'location', {
+        configurable: true,
+        value: originalLocation,
+      });
+      delete (navigator as unknown as { serviceWorker?: unknown }).serviceWorker;
+    });
+
+    function installContainer(registration: unknown): {
+      fireControllerChange: () => void;
+      listenerCount: () => number;
+    } {
+      let listeners: Array<() => void> = [];
+      Object.defineProperty(navigator, 'serviceWorker', {
+        configurable: true,
+        value: {
+          getRegistration: vi.fn(async () => registration),
+          addEventListener: (type: string, cb: () => void) => {
+            if (type === 'controllerchange') listeners.push(cb);
+          },
+          removeEventListener: (type: string, cb: () => void) => {
+            if (type === 'controllerchange') {
+              listeners = listeners.filter((x) => x !== cb);
+            }
+          },
+        },
+      });
+      return {
+        fireControllerChange: () => [...listeners].forEach((cb) => cb()),
+        listenerCount: () => listeners.length,
+      };
+    }
+
+    /** A waiting worker whose state changes the test drives. */
+    function waitingWorker(): {
+      state: string;
+      postMessage: ReturnType<typeof vi.fn>;
+      addEventListener: (type: string, cb: () => void) => void;
+      removeEventListener: (type: string, cb: () => void) => void;
+      moveTo: (state: string) => void;
+      listenerCount: () => number;
+    } {
+      let listeners: Array<() => void> = [];
+      const worker = {
+        state: 'installed',
+        postMessage: vi.fn(),
+        addEventListener: (type: string, cb: () => void) => {
+          if (type === 'statechange') listeners.push(cb);
+        },
+        removeEventListener: (type: string, cb: () => void) => {
+          if (type === 'statechange') listeners = listeners.filter((x) => x !== cb);
+        },
+        moveTo: (state: string) => {
+          worker.state = state;
+          [...listeners].forEach((cb) => cb());
+        },
+        listenerCount: () => listeners.length,
+      };
+      return worker;
+    }
+
+    it('resolves false without service workers', async () => {
+      delete (navigator as unknown as { serviceWorker?: unknown }).serviceWorker;
+      installGlobalAPI(api);
+      await expect(globalBootstrap().applyUpdate()).resolves.toBe(false);
+      expect(reloadSpy).not.toHaveBeenCalled();
+    });
+
+    it('resolves false when the page has no registration', async () => {
+      installContainer(undefined);
+      installGlobalAPI(api);
+      await expect(globalBootstrap().applyUpdate()).resolves.toBe(false);
+      expect(reloadSpy).not.toHaveBeenCalled();
+    });
+
+    it('reloads by default once the new worker controls the page', async () => {
+      const waiting = waitingWorker();
+      const { fireControllerChange } = installContainer({ waiting });
+      installGlobalAPI(api);
+
+      const result = globalBootstrap().applyUpdate();
+      await vi.waitFor(() => expect(waiting.postMessage).toHaveBeenCalled());
+      expect(reloadSpy).not.toHaveBeenCalled();
+      fireControllerChange();
+
+      await expect(result).resolves.toBe(true);
+      expect(reloadSpy).toHaveBeenCalledOnce();
+    });
+
+    it('leaves the page alone when the handover never lands', async () => {
+      // The waiting worker went redundant: reloading would land on the old
+      // build anyway, and an update prompt must get an answer.
+      vi.useFakeTimers();
+      const waiting = waitingWorker();
+      const container = installContainer({ waiting });
+      installGlobalAPI(api);
+
+      const result = globalBootstrap().applyUpdate();
+      await vi.advanceTimersByTimeAsync(SW_BOOTSTRAP_TIMEOUT_MS + 1);
+
+      await expect(result).resolves.toBe(false);
+      expect(reloadSpy).not.toHaveBeenCalled();
+      // Nothing is left listening for a takeover that was given up on.
+      expect(container.listenerCount()).toBe(0);
+      expect(waiting.listenerCount()).toBe(0);
+    });
+
+    it('reloads once the waiting worker activates on a page it does not claim', async () => {
+      // After a hard reload the page has no controller, and `clients.claim`
+      // does not take it: no `controllerchange` ever comes, but the update
+      // has applied and a reload loads it.
+      const waiting = waitingWorker();
+      const container = installContainer({ waiting });
+      installGlobalAPI(api);
+
+      const result = globalBootstrap().applyUpdate();
+      await vi.waitFor(() => expect(waiting.postMessage).toHaveBeenCalled());
+      waiting.moveTo('activating');
+      expect(reloadSpy).not.toHaveBeenCalled();
+      waiting.moveTo('activated');
+
+      await expect(result).resolves.toBe(true);
+      expect(reloadSpy).toHaveBeenCalledOnce();
+      expect(container.listenerCount()).toBe(0);
+      expect(waiting.listenerCount()).toBe(0);
+    });
+
+    it('answers false at once when the waiting worker turns redundant', async () => {
+      vi.useFakeTimers();
+      const waiting = waitingWorker();
+      installContainer({ waiting });
+      installGlobalAPI(api);
+
+      const result = globalBootstrap().applyUpdate();
+      await vi.advanceTimersByTimeAsync(0);
+      waiting.moveTo('redundant');
+
+      await expect(result).resolves.toBe(false);
+      expect(reloadSpy).not.toHaveBeenCalled();
+    });
   });
 });

@@ -136,6 +136,72 @@ void main() {
     });
   });
 
+  group('generateManifest hashing', () {
+    late io.Directory tempDir;
+
+    setUp(() {
+      tempDir = io.Directory.systemTemp.createTempSync('sw_hash_test_');
+    });
+
+    tearDown(() {
+      // Restore permissions so the directory can be removed.
+      for (final f in tempDir.listSync(recursive: true).whereType<io.File>()) {
+        if (!io.Platform.isWindows) {
+          io.Process.runSync('chmod', ['644', f.path]);
+        }
+      }
+      tempDir.deleteSync(recursive: true);
+    });
+
+    test('never reads a file that categorises as ignore', () async {
+      io.File(p.join(tempDir.path, 'main.dart.js')).writeAsStringSync('main');
+      // An unreadable ignored file: the old pipeline read and hashed every
+      // file before dropping ignore entries, so this threw.
+      final secret = io.File(p.join(tempDir.path, 'main.dart.js.map'))
+        ..writeAsStringSync('map');
+      io.Process.runSync('chmod', ['000', secret.path]);
+
+      final manifest = await generateManifest(
+        directory: tempDir,
+        categorizer: FileCategorizer(),
+        includeGlobs: {'**'},
+        excludeGlobs: {},
+      );
+      expect(manifest.keys, ['main.dart.js']);
+    }, testOn: '!windows');
+
+    test('produces the same manifest as before hashing was skipped', () async {
+      writeHashFixture(tempDir);
+      final manifest = await generateManifest(
+        directory: tempDir,
+        categorizer: FileCategorizer(),
+        includeGlobs: {'**'},
+        excludeGlobs: {},
+      );
+      // Captured from the pipeline that hashed every file first.
+      expect(canonicalManifest(manifest), _goldenManifest);
+    });
+
+    test('reports each ignored file with its size', () async {
+      writeHashFixture(tempDir);
+      final ignored = <String, int>{};
+      await generateManifest(
+        directory: tempDir,
+        categorizer: FileCategorizer(),
+        includeGlobs: {'**'},
+        excludeGlobs: {},
+        onIgnored: (path, size) => ignored[path] = size,
+      );
+      expect(ignored, {
+        'assets/NOTICES': 7,
+        'assets/big.png': 600 * 1024,
+        'data.txt': 4,
+        'main.dart.js.map': 3,
+        'main.dart.js_1.part.js': 4,
+      });
+    });
+  });
+
   group('manifestToJson', () {
     test('serializes manifest to JSON string', () {
       final manifest = {
@@ -159,3 +225,73 @@ void main() {
     });
   });
 }
+
+/// A build with one file per category, including a multi-chunk font and
+/// files that are ignored for every reason the categoriser has.
+void writeHashFixture(io.Directory dir) {
+  void write(String path, List<int> bytes) => io.File(p.join(dir.path, path))
+    ..createSync(recursive: true)
+    ..writeAsBytesSync(bytes);
+  List<int> pattern(int length) => List<int>.generate(length, (i) => i % 251);
+
+  write('main.dart.js', utf8.encode('main code'));
+  write('index.html', utf8.encode('<html></html>'));
+  write('assets/FontManifest.json', utf8.encode('[]'));
+  write('assets/fonts/Icons.ttf', pattern(600 * 1024 + 17));
+  write('assets/icon.png', pattern(1000));
+  write('assets/big.png', pattern(600 * 1024));
+  write('assets/NOTICES', utf8.encode('notices'));
+  write('main.dart.js.map', utf8.encode('map'));
+  write('main.dart.js_1.part.js', utf8.encode('part'));
+  write('data.txt', utf8.encode('data'));
+}
+
+/// One line per entry, sorted, so directory listing order does not matter.
+String canonicalManifest(Map<String, ResourceEntry> manifest) {
+  final keys = manifest.keys.toList()..sort();
+  return [
+    for (final key in keys) '$key ${jsonEncode(manifest[key]!.toJson())}',
+  ].join('\n');
+}
+
+/// Captured from the pipeline that hashed every file before categorising.
+final String _goldenManifest = canonicalManifest({
+  for (final (path, size, hash, category) in const [
+    (
+      'assets/FontManifest.json',
+      2,
+      'd751713988987e9331980363e24189ce',
+      ResourceCategory.required,
+    ),
+    (
+      'assets/fonts/Icons.ttf',
+      614417,
+      '8b5c98bfb2794fed076a0edb477e926c',
+      ResourceCategory.optional,
+    ),
+    (
+      'assets/icon.png',
+      1000,
+      'a24f1e3ef66950e1327f210e3997ba2c',
+      ResourceCategory.optional,
+    ),
+    (
+      'index.html',
+      13,
+      'c83301425b2ad1d496473a5ff3d9ecca',
+      ResourceCategory.required,
+    ),
+    (
+      'main.dart.js',
+      9,
+      'bdd0027574a1e64ed76e4682b1d9dbc4',
+      ResourceCategory.core,
+    ),
+  ])
+    path: ResourceEntry(
+      name: p.url.basename(path),
+      size: size,
+      hash: hash,
+      category: category,
+    ),
+});

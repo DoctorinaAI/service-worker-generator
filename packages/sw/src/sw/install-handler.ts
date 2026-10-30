@@ -1,5 +1,11 @@
 import type { ResourceManifest } from '../shared/types';
-import { precacheResources, getTempCacheName } from './cache-manager';
+import {
+  cleanupOrphanedTempCaches,
+  getManifestCacheName,
+  precacheResources,
+  getTempCacheName,
+} from './cache-manager';
+import { readableVersions, workerVersion } from './registration';
 import { COUNTED_CATEGORIES, type ProgressReporter } from './progress';
 
 /**
@@ -28,6 +34,19 @@ async function handleInstall(
   progress: ProgressReporter,
 ): Promise<void> {
   const tempCacheName = getTempCacheName(cachePrefix, version);
+
+  // Claim the prefix before creating any other cache under it. The manifest
+  // cache marks the prefix as in use, so an app whose prefix is a shorter
+  // start of ours (`app` for our `app-admin`) leaves our temp cache alone
+  // even on our very first install (see `ownCacheNames`). Best-effort: the
+  // precache below opens caches the same way and reports its own failure.
+  try {
+    await caches.open(getManifestCacheName(cachePrefix));
+  } catch (error) {
+    console.warn('[SW] Could not open the manifest cache:', error);
+  }
+
+  await removeOrphanedTempCaches(cachePrefix, version);
 
   // Notify clients that install has started. Carries the totals only —
   // an empty key is not a resource, so it never counts towards progress.
@@ -67,5 +86,36 @@ async function handleInstall(
     // Clean up the half-populated temp cache so the next install starts fresh.
     await caches.delete(tempCacheName);
     throw error;
+  }
+}
+
+/**
+ * Drop temp caches left by versions that can no longer activate, before
+ * this install adds another one. Best-effort: a failure here is logged and
+ * never fails the install.
+ *
+ * Kept: this version's, and those of the registration's installing,
+ * waiting and active workers. The waiting worker's matters most — it can
+ * still activate via `skipWaiting` and would then swap in an empty cache —
+ * so when there is a waiting worker whose version cannot be read, nothing
+ * is removed at all.
+ */
+async function removeOrphanedTempCaches(
+  cachePrefix: string,
+  version: string,
+): Promise<void> {
+  try {
+    if (workerVersion('waiting') === null) {
+      console.warn(
+        '[SW] Waiting worker has no readable version; keeping all temp caches',
+      );
+      return;
+    }
+    await cleanupOrphanedTempCaches(cachePrefix, [
+      version,
+      ...readableVersions(['installing', 'waiting', 'active']),
+    ]);
+  } catch (error) {
+    console.warn('[SW] Orphaned temp cache cleanup failed:', error);
   }
 }

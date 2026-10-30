@@ -1,5 +1,6 @@
 import 'dart:io' as io;
 
+import 'package:crypto/crypto.dart' as crypto;
 import 'package:path/path.dart' as p;
 import 'package:sw/src/files.dart';
 import 'package:test/test.dart';
@@ -16,6 +17,22 @@ void main() {
   });
 
   group('md5', () {
+    test('matches a whole-buffer digest across many read chunks', () async {
+      final tempDir = await io.Directory.systemTemp.createTemp('sw-md5-');
+      try {
+        // Several times the 64 KB read chunk, and not a multiple of it.
+        final bytes = List<int>.generate(300 * 1024 + 5, (i) => i * 31 % 256);
+        final file = io.File(p.join(tempDir.path, 'big.bin'))
+          ..writeAsBytesSync(bytes);
+        expect(await md5(file), crypto.md5.convert(bytes).toString());
+        final empty = io.File(p.join(tempDir.path, 'empty'))
+          ..writeAsBytesSync(const []);
+        expect(await md5(empty), 'd41d8cd98f00b204e9800998ecf8427e');
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
     test('produces the known hex digest for fixed content', () async {
       final tempDir = await io.Directory.systemTemp.createTemp('sw-md5-');
       try {

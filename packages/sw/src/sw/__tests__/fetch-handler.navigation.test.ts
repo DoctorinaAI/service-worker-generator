@@ -34,7 +34,10 @@ interface FakeFetchEvent {
   request: Request;
   preloadResponse: Promise<Response | undefined>;
   respondWith: ReturnType<typeof vi.fn>;
+  waitUntil: ReturnType<typeof vi.fn>;
   _responded?: Promise<Response>;
+  /** Resolves once the response and every `waitUntil` promise settle. */
+  _settled: () => Promise<void>;
 }
 
 function makeEvent(
@@ -51,12 +54,21 @@ function makeEvent(
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
+  const extended: Promise<unknown>[] = [];
   const event: FakeFetchEvent = {
     request: requestLike as Request,
     preloadResponse: Promise.resolve(options.preload),
     respondWith: vi.fn((promise: Response | Promise<Response>) => {
       event._responded = Promise.resolve(promise);
     }),
+    waitUntil: vi.fn((promise: Promise<unknown>) => {
+      extended.push(promise);
+    }),
+    _settled: async () => {
+      await event._responded;
+      // A write may be registered only once the response is ready.
+      for (let i = 0; i < extended.length; i++) await extended[i];
+    },
   };
   return event;
 }
@@ -210,7 +222,7 @@ describe('navigation handling — app-shell integrity', () => {
 
     const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
     handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
-    await event._responded!;
+    await event._settled();
 
     const cached = await mockCaches.peek(CONTENT_CACHE)?.match(new Request('index.html'));
     expect(cached).toBeDefined();
@@ -313,10 +325,8 @@ describe('navigation handling — app-shell integrity', () => {
 });
 
 describe('precache ↔ fetch-handler cache keys', () => {
-  let mockCaches: MockCacheStorage;
-
   beforeEach(() => {
-    mockCaches = installMockCaches();
+    installMockCaches();
   });
 
   afterEach(() => {
@@ -395,7 +405,7 @@ describe('navigation handling — app served from a subpath', () => {
 
     const event = makeEvent(`${ORIGIN}/app/`, { mode: 'navigate' });
     handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
-    await event._responded!;
+    await event._settled();
 
     expect(await shellInCache(mockCaches)).toBe(SHELL);
   });

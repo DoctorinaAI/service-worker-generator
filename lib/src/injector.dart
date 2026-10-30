@@ -17,6 +17,7 @@ String injectSWConfig({
   required String cachePrefix,
   required String version,
   required Map<String, ResourceEntry> manifest,
+  String engineRevision = '',
 }) {
   final config = {
     'cachePrefix': cachePrefix,
@@ -24,6 +25,9 @@ String injectSWConfig({
     'manifest': {
       for (final entry in manifest.entries) entry.key: entry.value.toJson(),
     },
+    // Answers `getVersion`, so a later bootstrap can tell whether the code
+    // this worker serves runs on its engine. Omitted when unknown.
+    if (engineRevision.isNotEmpty) 'engineRevision': engineRevision,
   };
 
   final json = jsonEncode(config);
@@ -73,6 +77,9 @@ String injectBootstrapConfig({
     'swVersion': swVersion,
     'swFilename': swFilename,
     'builds': builds,
+    // Scopes the loading widget's "clear cache and reload" to this app's
+    // caches instead of every cache on the origin.
+    if (config.cachePrefix.isNotEmpty) 'cachePrefix': config.cachePrefix,
     // Omitted when false, like uiDefaults: the bootstrap defaults to CDN.
     if (useLocalCanvasKit) 'useLocalCanvasKit': true,
     if (uiDefaults.isNotEmpty) 'uiDefaults': uiDefaults,

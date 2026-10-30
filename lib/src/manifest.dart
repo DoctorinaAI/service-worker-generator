@@ -38,11 +38,18 @@ class ResourceEntry {
 /// Generate a resource manifest from files in a directory.
 ///
 /// Returns a map of relative path → [ResourceEntry].
+///
+/// Files are categorised from their path and size first, and only the ones
+/// that stay in the manifest are read and hashed: an `ignore` entry is
+/// dropped anyway, so hashing it (a large video under `assets/`, say) only
+/// cost time and memory. [onIgnored] is called with the path and size of
+/// every file that was left out as `ignore`.
 Future<Map<String, ResourceEntry>> generateManifest({
   required io.Directory directory,
   required FileCategorizer categorizer,
   required Set<String> includeGlobs,
   required Set<String> excludeGlobs,
+  void Function(String path, int size)? onIgnored,
 }) async {
   final files = filesInDirectory(
     directory,
@@ -55,18 +62,19 @@ Future<Map<String, ResourceEntry>> generateManifest({
   for (final entry in files.entries) {
     final path = entry.key;
     final file = entry.value;
-    final stat = file.statSync();
-    final size = stat.size;
-    final hash = await md5(file);
+    final size = file.statSync().size;
     final category = categorizer.categorize(path, size);
 
     // Skip ignore category from manifest entirely
-    if (category == ResourceCategory.ignore) continue;
+    if (category == ResourceCategory.ignore) {
+      onIgnored?.call(path, size);
+      continue;
+    }
 
     manifest[path] = ResourceEntry(
       name: file.uri.pathSegments.last,
       size: size,
-      hash: hash,
+      hash: await md5(file),
       category: category,
     );
   }

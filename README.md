@@ -41,7 +41,7 @@ Or add as a dev dependency:
 
 ```yaml
 dev_dependencies:
-  sw: 0.1.6-dev
+  sw: ^0.2.0
 ```
 
 Pin the exact version in CI. `sw.js` and `bootstrap.js` are the app's boot
@@ -49,12 +49,12 @@ path, so a template change should arrive through a reviewed bump rather than
 on the next unrelated build:
 
 ```shell
-dart pub global activate sw 0.1.6-dev
+dart pub global activate sw 0.2.0
 ```
 
-Note that a pre-release is not matched by a caret constraint — `0.1.6-dev`
-sorts *before* `0.1.6`, so it falls outside `^0.1.6`. Pin it exactly, or
-write `^0.1.6-dev` to accept the pre-release now and the release later.
+Note that a pre-release is not matched by a plain caret constraint — `0.3.0-dev`
+sorts *before* `0.3.0`, so it falls outside `^0.2.0`. Pin a pre-release
+exactly, or write `^0.3.0-dev` to accept it now and the release later.
 
 ## Quick Start
 
@@ -80,11 +80,11 @@ The generator produces two files in your build directory:
 
 And automatically:
 
-- Extracts `engineRevision` and build config from Flutter's output
+- Extracts `engineRevision` and build config from Flutter's output (a build without `engineRevision` still generates, with a warning: CanvasKit then always loads from the local `canvaskit/` directory, and every deploy waits for the new worker to install and take over before the app starts)
 - Categorizes all files (Core/Required/Optional/Ignore)
 - Removes Flutter's deprecated files (`flutter_bootstrap.js`, `flutter_service_worker.js`, `flutter.js` — its loader is inlined into `bootstrap.js`)
-- Removes `.js.map` and `.js.symbols` files (unless `--keep-maps`)
-- Replaces `{{sw_version}}` placeholders in `index.html`
+- Removes `.js.map`, `.js.symbols` and `.wasm.map` files (unless `--keep-maps`)
+- Replaces `{{sw_version}}` placeholders in `index.html` with the HTML-escaped version
 
 ## Server Configuration
 
@@ -103,40 +103,58 @@ The same applies to `index.html` (the entry point that loads `bootstrap.js`) and
 | `index.html`    | `no-cache`                            | Allows 304 via `ETag`/`Last-Modified` — fast but always revalidated |
 | `bootstrap.js`  | `no-cache`                            | Content changes every build (embedded config snapshot)              |
 | `sw.js`         | `no-cache`                            | Browser also enforces ≤ 24h SW freshness, but explicit is better    |
-| Everything else | `public, max-age=31536000, immutable` | Safe: the SW manifest handles invalidation via MD5 hashes           |
+| Everything else | `no-cache`                            | Flutter's file names carry no content hash (see below)              |
 
 Use `no-cache`, not `no-store` — `no-cache` lets the browser keep the file on disk but forces a conditional request on every load, so unchanged builds cost only a 304 response.
+
+Do not mark the rest of the build `immutable` or give it a long `max-age`. `main.dart.js`, `main.dart.wasm`, `assets/AssetManifest.json` and `canvaskit/*` keep the same names across deploys. The service worker is not affected — it precaches with `?v={hash}` and `cache: 'reload'` — but whenever it does not answer a request (the first visit, a private window, a worker that failed to install, a browser without service workers), the browser's HTTP cache would hand back last year's copy next to this deploy's `bootstrap.js`. Revalidating costs a 304 per file; serving a mix of two builds costs a broken app.
+
+### MIME types and cross-origin isolation
+
+- `.wasm` must be served as `application/wasm`; with any other type `WebAssembly.instantiateStreaming` fails and the engine falls back to a slower path or does not start. `.mjs` and `.js` need a JavaScript type (`text/javascript`).
+- The multithreaded `skwasm` renderer needs a cross-origin isolated page: `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp` (or `credentialless`) on `index.html`. Without them the engine runs single-threaded. With them, every cross-origin resource the page loads — the CanvasKit CDN included — must allow it (CORS or `Cross-Origin-Resource-Policy`); build with `--no-web-resources-cdn` if in doubt.
 
 ### Example server configurations
 
 **nginx**
 
 ```nginx
-location = /index.html   { add_header Cache-Control "no-cache"; }
-location = /bootstrap.js { add_header Cache-Control "no-cache"; }
-location = /sw.js        { add_header Cache-Control "no-cache"; }
-location / {
-  add_header Cache-Control "public, max-age=31536000, immutable";
-  try_files $uri $uri/ /index.html;
+http {
+  # The stock map. nginx 1.21+ maps .wasm to application/wasm there; on an
+  # older one add `application/wasm wasm;` to the block below as well.
+  include mime.types;
+  # Many stock maps lack .mjs, which the wasm build loads as a module
+  # (strict MIME check). A second `types {}` block at the SAME level as the include
+  # adds to the map; one inside `server` or `location` replaces it whole.
+  types {
+    text/javascript mjs;
+  }
+
+  server {
+    # ...
+    location / {
+      add_header Cache-Control "no-cache";
+      try_files $uri $uri/ /index.html;
+    }
+  }
 }
 ```
 
 **Apache (`.htaccess`)**
 
 ```apache
-<FilesMatch "^(index\.html|bootstrap\.js|sw\.js)$">
-  Header set Cache-Control "no-cache"
-</FilesMatch>
+# `Header` needs mod_headers (`a2enmod headers`). Without it this file makes
+# Apache answer 500; do not wrap it in <IfModule>, which would silently drop
+# the required Cache-Control header instead.
+AddType application/wasm .wasm
+AddType text/javascript .mjs
+Header set Cache-Control "no-cache"
 ```
 
 **Netlify (`_headers`)**
 
 ```
-/index.html
-  Cache-Control: no-cache
-/bootstrap.js
-  Cache-Control: no-cache
-/sw.js
+/*
   Cache-Control: no-cache
 ```
 
@@ -147,7 +165,7 @@ location / {
   "hosting": {
     "headers": [
       {
-        "source": "/(index.html|bootstrap.js|sw.js)",
+        "source": "**",
         "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
       }
     ]
@@ -161,7 +179,7 @@ location / {
 {
   "headers": [
     {
-      "source": "/(index.html|bootstrap.js|sw.js)",
+      "source": "/(.*)",
       "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
     }
   ]
@@ -203,6 +221,8 @@ Replace Flutter's default `index.html` content with a single script tag:
 The explicit `<base href="/" />` is intentional for the production template and should not be replaced with `$FLUTTER_BASE_HREF`. If you deploy under a subpath, keep the base href explicit there too, and make sure it still ends with `/`.
 
 The loading widget, progress tracking, service worker registration, and Flutter initialization are all handled by `bootstrap.js` automatically.
+
+Do not keep Flutter's `<script>{{flutter_bootstrap_js}}</script>`: `flutter build web` pastes its whole loader there, which boots the app without `bootstrap.js` or the service worker. The generator warns when it finds that inline loader (or a script that still loads `flutter_bootstrap.js`); replace it in `web/index.html` with `<script src="bootstrap.js" data-sw-bootstrap defer></script>` and rebuild.
 
 ### Bootstrap Configuration (data-config)
 
@@ -279,7 +299,7 @@ mv build/web/index.prod.html build/web/index.html
 # 3. Generate sw.js + bootstrap.js, inject {{sw_version}} into index.html,
 #    and auto-remove flutter_bootstrap.js / flutter_service_worker.js / flutter.js
 #    (flutter.js is inlined into bootstrap.js, so it's dropped from the output).
-dart pub global activate sw 0.1.6-dev
+dart pub global activate sw 0.2.0
 dart pub global run sw:generate --version="$(git rev-parse --short=8 HEAD)"
 ```
 
@@ -293,18 +313,19 @@ After this sequence, `build/web/` contains exactly the artifacts that should shi
 | -------------------- | ----- | ------------------------------------- | ----------------- |
 | `--help`             | `-h`  | Show help information                 | —                 |
 | `--input`            | `-i`  | Path to Flutter build directory       | `build/web`       |
-| `--output`           | `-o`  | Output service worker filename        | `sw.js`           |
-| `--bootstrap-output` |       | Output bootstrap filename             | `bootstrap.js`    |
-| `--prefix`           | `-p`  | Cache name prefix                     | `app-cache`       |
-| `--version`          | `-v`  | Cache version                         | current timestamp |
+| `--output`           | `-o`  | Output service worker file name (plain name, next to `index.html`) | `sw.js`           |
+| `--bootstrap-output` |       | Output bootstrap file name (plain name) | `bootstrap.js`    |
+| `--prefix`           | `-p`  | Cache name prefix (unique per app on an origin, see below) | `app-cache`       |
+| `--version`          | `-v`  | Cache version (not `manifest`, `temp-*` or `*-manifest`) | hash of the manifest |
 | `--glob`             | `-g`  | Include glob patterns (`;` separated) | `**`              |
 | `--no-glob`          | `-e`  | Exclude glob patterns (`;` separated) | —                 |
 | `--core`             |       | Core category glob overrides          | —                 |
 | `--required`         |       | Required category glob overrides      | —                 |
 | `--optional`         |       | Optional category glob overrides      | —                 |
 | `--ignore`           |       | Ignore category glob overrides        | —                 |
-| `--keep-maps`        |       | Keep `.js.map` files                  | `false`           |
+| `--keep-maps`        |       | Keep `.js.map`, `.js.symbols` and `.wasm.map` files | `false`           |
 | `--no-cleanup`       |       | Skip Flutter file cleanup             | `false`           |
+| `--comments`         | `-c`  | Reserved; has no effect yet           | `false`           |
 | `--config`           |       | Path to YAML config file              | `sw.yaml`         |
 | `--theme`            |       | Loading widget theme                  | `auto`            |
 | `--logo`             |       | Loading widget logo path              | —                 |
@@ -312,6 +333,15 @@ After this sequence, `build/web/` contains exactly the artifacts that should shi
 | `--color`            |       | Loading widget accent color           | `#25D366`         |
 | `--min-progress`     |       | Minimum progress value                | `0`               |
 | `--max-progress`     |       | Maximum progress value                | `90`              |
+
+**Several apps on one origin.** Caches belong to the origin, not to a path,
+so give each app its own `--prefix`. The default `app-cache` is shared by
+every app that keeps it: their workers then treat each other's caches as
+their own old versions and delete them. A prefix that is another one
+followed by `-` (`app` and `app-admin`) is told apart by its
+`{prefix}-manifest` cache, so `app`'s worker leaves `app-admin`'s caches alone;
+an `app-admin` built with an older release is exposed until its first
+activate, so distinct prefixes remain the safer choice.
 
 ### YAML Configuration
 
@@ -329,6 +359,8 @@ glob: "**.{html,js,wasm,json}; assets/**; canvaskit/**; icons/**"
 no-glob: "sw.js; bootstrap.js; **/*.map; assets/NOTICES"
 ```
 
+Glob options also take a YAML list (`glob: ["**.js", "assets/**"]`). Plain values are used as written, so `version: 1.10` stays `1.10`.
+
 Priority: CLI arguments > YAML config > environment variables > defaults.
 
 ### Environment Variables
@@ -343,6 +375,10 @@ Priority: CLI arguments > YAML config > environment variables > defaults.
 | `SW_LOGO`    | `--logo`    |
 | `SW_TITLE`   | `--title`   |
 | `SW_COLOR`   | `--color`   |
+
+Every option has one; [docs/configuration.md](docs/configuration.md#environment-variables) lists them all, including `SW_KEEP_MAPS` and `SW_NO_CLEANUP`.
+
+A configuration error (an unknown option, an invalid value, a bad glob, an output name with a directory) exits with status 64 and names its source: `--max-progress="lots"`, `SW_MIN_PROGRESS="ten" (environment)` or `max-progress="lots" (in sw.yaml)`.
 
 ## Bootstrap Pipeline
 
@@ -380,6 +416,8 @@ The bootstrap automatically determines the correct CanvasKit variant:
 4. Tries Google CDN: `https://www.gstatic.com/flutter-canvaskit/{engineRevision}/{variant}.js`
 5. Falls back to local `canvaskit/` directory on failure
 
+A build config without `engineRevision` has no CDN path, so the bootstrap loads the local `canvaskit/` directory; the generator warns about such a build.
+
 Build with `flutter build web --no-web-resources-cdn` to serve the engine from your own origin: Flutter records the choice in its build config, and the bootstrap then loads from `canvaskit/` without probing the CDN.
 
 ## Global API (window.Bootstrap)
@@ -403,7 +441,7 @@ external JSObject get bootstrapProgress;
 | `Bootstrap.progress`                   | Current state: `{ phase, percent, message }`                                                                                                                |
 | `Bootstrap.subscribe(callback)`        | Subscribe to progress changes, returns unsubscribe function                                                                                                 |
 | `Bootstrap.onUpdateAvailable(handler)` | Runs when a newer Service Worker has installed and is waiting; notifications stay active for the whole page session, even after the loading widget is gone. |
-| `Bootstrap.applyUpdate(reload = true)` | Activates the waiting Service Worker and reloads the page into the updated build.                                                                           |
+| `Bootstrap.applyUpdate(reload = true)` | Activates the waiting Service Worker and reloads the page into the updated build. Resolves `true` (and reloads, by default) once the page's controller changes or the waiting worker reaches `activated`, which covers a hard-reloaded page with no controller. Resolves `false`, without reloading, if no worker is waiting, at once if it turns `redundant`, or if neither lands within 10s. |
 
 Alternatively, the loading widget auto-disposes on the `flutter-first-frame` event.
 
@@ -413,9 +451,9 @@ Files are automatically categorized based on their path and size:
 
 | Category     | Pre-cached | On Fetch             | Description                                                                                                                                  |
 | ------------ | ---------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Core**     | Install    | Cache-first          | Essential: canvaskit variant, `main.dart.js`/`.wasm`/`.mjs`, `*.support.wasm`                                                                |
-| **Required** | Install    | Cache-first          | Early-needed: `AssetManifest*.json`, `FontManifest.json`                                                                                     |
-| **Optional** | —          | Cache on first fetch | Fonts (`.ttf`, `.otf`, `.woff`, `.woff2`, `.eot`) at any size; `.json`, `.webp`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.ico` under 512KB |
+| **Core**     | Install    | Cache-first          | Essential: `main.dart.js`/`.wasm`/`.mjs`, `*.support.wasm`                                                                                   |
+| **Required** | Install    | Cache-first          | Early-needed: `index.html`, `AssetManifest*.json`, `FontManifest.json`, `manifest.json`                                                      |
+| **Optional** | —          | Cache on first fetch | CanvasKit/skwasm files; fonts (`.ttf`, `.otf`, `.woff`, `.woff2`, `.eot`) at any size; `.json`, `.webp`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.ico` up to 512 KB |
 | **Ignore**   | —          | Pass-through         | Not cached: `*.map`, `*.symbols`, `NOTICES`, large assets                                                                                    |
 
 Override categorization with glob patterns via CLI or YAML config:
@@ -434,11 +472,18 @@ These files are always fetched fresh (never stored in the SW cache):
 - `bootstrap.js` — must reflect latest build config
 - `sw.js` — browser handles SW updates natively
 
-`index.html` is a special case: it is pre-cached as the app shell so an
-offline navigation has something to resolve to, but it is served
+`index.html` is a special case: it is pre-cached as the app shell so a
+navigation the network fails still gets an answer, but it is served
 network-first, so an online visitor always gets the copy the origin holds.
 It still requires `Cache-Control: no-cache` at the HTTP layer, alongside the
 two files above — see [Server Configuration](#server-configuration).
+
+**Offline is not supported.** The cached shell is a fallback for a failed
+navigation, but the app cannot start from it without a network: the page
+needs `bootstrap.js`, which is deliberately never cached so that the shell,
+the bootstrap and the worker always come from one deploy. Serving a cached
+`bootstrap.js` would make offline loads possible at the cost of a page that
+can start on a stale bootstrap, and this project chooses the consistent load.
 
 ## Service Worker
 
@@ -446,7 +491,7 @@ two files above — see [Server Configuration](#server-configuration).
 
 | Resource           | Strategy      | Details                                         |
 | ------------------ | ------------- | ----------------------------------------------- |
-| Navigations        | Network-first | Fresh from network, pre-cached shell for offline |
+| Navigations        | Network-first | Fresh from network, pre-cached shell if the network fails |
 | Core + Required    | Pre-cached    | Cached during SW install with cache-busted URLs |
 | Optional           | Lazy cache    | Cached on first fetch for repeat visits         |
 | Ignore             | Pass-through  | Not cached, always from network                 |
@@ -464,7 +509,11 @@ two files above — see [Server Configuration](#server-configuration).
 - **Body stall watchdog**: a pre-cached body idle for 30s is cancelled, so a dead
   stream cannot hang `install` — and with it every `register()` on the origin
 - **Fetch retry**: 3 attempts with exponential backoff (1s → 2s → 4s + jitter)
-- **SW activation timeout**: 4s, continues without SW on timeout
+- **SW activation timeout**: 4s on a first visit, continues without SW on timeout.
+  A page that already has a controller boots with it straight away
+- **Engine change after a deploy**: when the new build runs on a different Flutter
+  engine, the first load waits (up to 60s) for the new worker and switches to it,
+  so the previous build's cached Dart code never meets the new engine
 - **SW step budget**: 10s for the whole registration step; the app boots uncached
   rather than waiting on a blocked service worker job queue
 - **Error recovery**: Always calls `self.clients.claim()` even on errors
@@ -499,7 +548,7 @@ messages with `counted: true`, and only from your own `swVersion` — see
 | Message                  | Action                                        |
 | ------------------------ | --------------------------------------------- |
 | `'skipWaiting'`          | Immediately activate a waiting service worker |
-| `{ type: 'getVersion' }` | Respond with current SW version               |
+| `{ type: 'getVersion' }` | Respond with the SW version and engine revision |
 
 ## Architecture
 

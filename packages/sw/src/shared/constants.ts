@@ -37,6 +37,24 @@ export const BODY_STALL_TIMEOUT_MS = 30_000;
 export const SW_REGISTRATION_TIMEOUT_MS = 4_000;
 
 /**
+ * How long bootstrap waits for the current controller to answer
+ * `getVersion` with its engine revision. A live worker answers in
+ * milliseconds; a worker from a release that predates the field answers
+ * without it, which counts as unknown, exactly like no answer.
+ */
+export const SW_ENGINE_QUERY_TIMEOUT_MS = 500;
+
+/**
+ * How long the first load after a deploy that changed the Flutter engine
+ * waits for the new worker to finish installing. The old worker would
+ * serve the previous build's Dart code next to this build's engine, so
+ * the wait is the price of a load that works. The install bounds itself
+ * (fetch retries, the body stall watchdog) and ends `redundant` on
+ * failure; this is the outer limit for a slow but live precache.
+ */
+export const SW_UPDATE_INSTALL_TIMEOUT_MS = 60_000;
+
+/**
  * Hard cap on the whole service-worker step of the bootstrap pipeline.
  *
  * The service worker is a caching accelerator, never a prerequisite for the
@@ -69,6 +87,14 @@ export const MAX_RETRY_ATTEMPTS = 3;
 
 /** Base delay for exponential backoff in milliseconds */
 export const RETRY_BASE_DELAY_MS = 1_000;
+
+/**
+ * Upper bound on a server's `Retry-After` that a precache retry will wait.
+ * Install is on the clock (and blocks the scope's job queue while it runs),
+ * so a host asking for minutes gets a few seconds; the attempt budget is
+ * unchanged.
+ */
+export const RETRY_AFTER_MAX_MS = 5_000;
 
 /** Max parallel fetches during SW install precache. Keeps us under HTTP/2
  * multiplexing limits and spares memory on large manifests. */

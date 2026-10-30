@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:sw/src/categorizer.dart';
 import 'package:sw/src/config.dart';
 import 'package:sw/src/injector.dart';
@@ -6,6 +8,17 @@ import 'package:test/test.dart';
 
 void main() {
   group('injectSWConfig', () {
+    test('carries the engine revision when the build has one', () {
+      final result = injectSWConfig(
+        template: '"__INJECT_SW_CONFIG__"',
+        cachePrefix: 'app',
+        version: 'v1',
+        manifest: const {},
+        engineRevision: 'rev123',
+      );
+      expect(result, contains('"engineRevision":"rev123"'));
+    });
+
     test('replaces placeholder with config JSON', () {
       const template =
           '(function(){var config="__INJECT_SW_CONFIG__";start(config)})();';
@@ -32,6 +45,7 @@ void main() {
       expect(result, contains('"hash":"abc123"'));
       expect(result, contains('"category":"core"'));
       expect(result, isNot(contains('__INJECT_SW_CONFIG__')));
+      expect(result, isNot(contains('engineRevision')));
     });
 
     test('throws if placeholder not found', () {
@@ -158,6 +172,36 @@ void main() {
       expect(result, contains('"builds":[]'));
     });
 
+    test('carries the cache prefix so a reset can stay in this app', () {
+      const config = GeneratorConfig(
+        inputDir: 'build/web',
+        version: '1',
+        cachePrefix: 'shop-cache',
+      );
+      final result = injectBootstrapConfig(
+        template: 'c="__INJECT_BOOTSTRAP_CONFIG__"',
+        engineRevision: 'rev',
+        swVersion: '1',
+        swFilename: 'sw.js',
+        builds: const [],
+        config: config,
+      );
+      final json = jsonDecode(result.substring(2)) as Map<String, dynamic>;
+      expect(json['cachePrefix'], 'shop-cache');
+    });
+
+    test('carries the default cache prefix too', () {
+      final result = injectBootstrapConfig(
+        template: 'c="__INJECT_BOOTSTRAP_CONFIG__"',
+        engineRevision: 'rev',
+        swVersion: '1',
+        swFilename: 'sw.js',
+        builds: const [],
+        config: const GeneratorConfig(inputDir: 'build/web', version: '1'),
+      );
+      expect(result, contains('"cachePrefix":"app-cache"'));
+    });
+
     test('omits uiDefaults when nothing was customised', () {
       const template = 'c="__INJECT_BOOTSTRAP_CONFIG__"';
       const config = GeneratorConfig(inputDir: 'build/web', version: '1');
@@ -236,6 +280,35 @@ void main() {
       expect(result, contains('"color":"#ff0000"'));
       expect(result, contains('"minProgress":5'));
       expect(result, contains('"maxProgress":95'));
+    });
+
+    test('embeds config values as JSON that decodes back unchanged', () {
+      // Quotes, backslashes, `$` sequences and line separators must not
+      // break out of the literal or be read as replacement patterns.
+      const title = 'He said "hi" \\ </script> \$1 \$& \u2028 Привет';
+      const template = 'boot("__INJECT_BOOTSTRAP_CONFIG__");';
+      const config = GeneratorConfig(
+        inputDir: 'build/web',
+        version: '1',
+        title: title,
+      );
+
+      final result = injectBootstrapConfig(
+        template: template,
+        engineRevision: 'rev',
+        swVersion: r'v$1',
+        swFilename: 'sw.js',
+        builds: const [],
+        config: config,
+      );
+
+      expect(result, startsWith('boot({'));
+      expect(result, endsWith('});'));
+      final json =
+          jsonDecode(result.substring(5, result.length - 2))
+              as Map<String, dynamic>;
+      expect(json['swVersion'], r'v$1');
+      expect((json['uiDefaults'] as Map<String, dynamic>)['title'], title);
     });
   });
 }

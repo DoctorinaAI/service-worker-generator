@@ -8,9 +8,15 @@ on:
 
 jobs:
   verify:
-    name: "Verify assets"
+    # A tag publishes to pub.dev, so it must not get there without the same
+    # checks a pull request passes: the type check and the unit tests of
+    # both halves, the committed assets matching the TypeScript build, and
+    # the published file set being free of credentials and build output.
+    name: "Verify before publishing"
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - name: 📦 Checkout repository
         uses: actions/checkout@v4
@@ -24,8 +30,54 @@ jobs:
       - name: 📥 Install dependencies
         run: npm ci
 
+      - name: 🔍 Type check
+        run: npm -w packages/sw run check
+
+      - name: 🧪 Run TypeScript tests
+        run: npm -w packages/sw run test
+
       - name: 🏗️ Build and verify
         run: npm run check:assets
+
+      - name: 🎯 Setup Dart
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: 📥 Install Dart dependencies
+        run: dart pub get
+
+      - name: 📈 Check analyzer
+        run: dart analyze --fatal-warnings lib/ bin/ test/
+
+      - name: 🧪 Run Dart unit tests
+        run: dart test --exclude-tags=integration
+
+      - name: 🔍 Check what would be published
+        timeout-minutes: 3
+        # The same leak check as checkout.yml: a .pubignore replaces the
+        # .gitignore of its own directory for `pub publish`, so a rule
+        # forgotten there uploads credentials or build output to pub.dev.
+        # It runs last, on the tree the publish job will see plus everything
+        # the steps above created (node_modules/, dist/, .dart_tool/). This
+        # job does a full checkout on the runner as the checkout's owner, so
+        # it needs neither `git sparse-checkout disable` nor safe.directory.
+        run: |
+          if ! dart pub publish --dry-run > /tmp/publish-set.txt 2>&1; then
+            cat /tmp/publish-set.txt
+            echo "::error::dart pub publish --dry-run failed"
+            exit 1
+          fi
+          sed -E 's/.*[├└]── //; s/ \([^)]*\)$//' /tmp/publish-set.txt |
+            grep -iE '^([^ ]+\.(key|pem|p12|jks|keystore)|[^ ]+\.vm\.json|credentials\.json|service-account[^ ]*\.json|build|coverage|reports|node_modules)$' \
+            > /tmp/leaked.txt || true
+          if [ -s /tmp/leaked.txt ]; then
+            echo "::error::Files that must never reach pub.dev are in the published set:"
+            cat /tmp/leaked.txt
+            echo "Add them to .pubignore - it replaces .gitignore for pub."
+            exit 1
+          fi
+          echo "The published file set is clean."
 
   deploy:
     name: "Deploy to Pub.dev"

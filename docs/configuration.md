@@ -20,10 +20,10 @@ dart run sw:generate [options]
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
 | `--input` | `-i` | `build/web` | Path to Flutter build directory |
-| `--output` | `-o` | `sw.js` | Output service worker filename |
-| `--bootstrap-output` | — | `bootstrap.js` | Output bootstrap filename |
-| `--prefix` | `-p` | `app-cache` | Cache name prefix |
-| `--version` | `-v` | timestamp | Cache version string |
+| `--output` | `-o` | `sw.js` | Output service worker file name. A plain file name in the build directory (no `/`, `\`, `..` or absolute path): a worker only controls pages under the directory it is served from, so it must sit next to `index.html` |
+| `--bootstrap-output` | — | `bootstrap.js` | Output bootstrap file name. A plain file name, like `--output`, and different from it |
+| `--prefix` | `-p` | `app-cache` | Cache name prefix. Give every app on one origin its own: caches are per origin, and the default `app-cache` is shared by every app that keeps it, so their workers delete each other's caches as old versions. A prefix that is another followed by `-` (`app` and `app-admin`) is told apart by its `{prefix}-manifest` cache, but an `app-admin` on an older release is exposed until its first activate, so prefer prefixes that don't extend each other |
+| `--version` | `-v` | manifest content hash | Cache version string. `manifest`, `temp-*` and `*-manifest` are rejected: they collide with the worker's own cache names |
 
 ### File Filtering
 
@@ -31,6 +31,11 @@ dart run sw:generate [options]
 |--------|-------|---------|-------------|
 | `--glob` | `-g` | `**` | Include glob patterns (`;` separated) |
 | `--no-glob` | `-e` | — | Exclude glob patterns (`;` separated) |
+
+In `sw.yaml`, `glob`, `no-glob` and the four category overrides below take
+either a `;`-separated string or a YAML list (`glob: ["**.js", "assets/**"]`).
+Patterns are compiled while the configuration is read: an invalid one exits
+with status 64 and names the option and the pattern.
 
 ### Category Overrides
 
@@ -48,7 +53,7 @@ Patterns are matched in a fixed order: **core → required → ignore →
 optional**, and the first match wins. A pattern that already matches a
 built-in higher-priority default therefore cannot demote a file:
 `--ignore="index.html"` is silently ineffective, because `index.html` is a
-built-in Required pattern. Use `--exclude` to keep a file out of the
+built-in Required pattern. Use `--no-glob` to keep a file out of the
 manifest entirely.
 
 ### Loading Widget
@@ -66,9 +71,9 @@ manifest entirely.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--keep-maps` | `false` | Keep `.js.map` and `.js.symbols` files |
-| `--no-cleanup` | `false` | Leave the input tree alone: keep Flutter's files and leave `{{sw_version}}` unsubstituted |
-| `--comments` | `false` | Include comments in output |
+| `--keep-maps` | `false` | Keep `.js.map`, `.js.symbols` and `.wasm.map` files (removed by default) |
+| `--no-cleanup` | `false` | Leave the input tree alone: keep Flutter's files and leave `{{sw_version}}` unsubstituted (otherwise it is replaced with the HTML-escaped version) |
+| `--comments` | `false` | Reserved: accepted, but has no effect on the output yet |
 | `--config` | `sw.yaml` | Path to YAML config file |
 
 ## YAML Config File
@@ -103,6 +108,19 @@ keep-maps: false
 no-cleanup: false
 ```
 
+Glob options also accept a YAML list, joined with `;` like the CLI form:
+
+```yaml
+glob:
+  - "**.{html,js,wasm,json}"
+  - "assets/**"
+```
+
+A mapping, a nested list or an empty item there exits with status 64, as
+does a list for an option that takes a single value. Plain scalars are taken
+as written, so `version: 1.10` stays `1.10` (not `1.1`) and `title: 0x1F`
+stays `0x1F` (not `31`).
+
 Specify a custom config path:
 
 ```shell
@@ -122,6 +140,21 @@ dart run sw:generate --config=config/sw-production.yaml
 | `SW_LOGO` | `--logo` |
 | `SW_TITLE` | `--title` |
 | `SW_COLOR` | `--color` |
+| `SW_GLOB` | `--glob` |
+| `SW_EXCLUDE_GLOB` | `--no-glob` |
+| `SW_CORE` | `--core` |
+| `SW_REQUIRED` | `--required` |
+| `SW_OPTIONAL` | `--optional` |
+| `SW_IGNORE` | `--ignore` |
+| `SW_MIN_PROGRESS` | `--min-progress` |
+| `SW_MAX_PROGRESS` | `--max-progress` |
+| `SW_KEEP_MAPS` | `--keep-maps` (`true`/`false`) |
+| `SW_NO_CLEANUP` | `--no-cleanup` (`true`/`false`) |
+| `SW_COMMENTS` | `--comments` (`true`/`false`) |
+
+An invalid value exits with status 64 and names where it came from:
+`--max-progress="lots"`, `SW_MIN_PROGRESS="ten" (environment)` or
+`max-progress="lots" (in sw.yaml)`.
 
 ## Default Categorization Rules
 
@@ -132,9 +165,11 @@ main.dart.js
 main.dart.wasm
 main.dart.mjs
 *.support.wasm
-canvaskit/{variant}.js     # Only the variant matching the renderer
-canvaskit/{variant}.wasm   # Only the variant matching the renderer
 ```
+
+CanvasKit and skwasm files are Optional, not Core: the bootstrap loads them
+from the CDN first and falls back to the local copy, which is then cached on
+first fetch (`--no-web-resources-cdn` builds load them locally from the start).
 
 ### Required (pre-cached on install)
 
@@ -145,8 +180,10 @@ assets/FontManifest.json
 manifest.json
 ```
 
-`index.html` is the app shell: pre-caching it is what lets a navigation
-resolve offline, and it puts the shell inside the progress-counted set.
+`index.html` is the app shell: pre-caching it gives a navigation a fallback
+when the network fails (the app still cannot start offline, since
+`bootstrap.js` is never cached), and it puts the shell inside the
+progress-counted set.
 The fetch handler still serves it network-first, so a deploy is picked up
 as soon as the origin is reachable.
 
@@ -155,7 +192,7 @@ as soon as the origin is reachable.
 **Fonts — any size** (declared in `FontManifest.json`, required for correct rendering):
 `.ttf`, `.otf`, `.woff`, `.woff2`, `.eot`
 
-**Other media — only when file < 512 KB** (larger files fall through to `ignore`
+**Other media — only when file ≤ 512 KB** (larger files fall through to `ignore`
 and rely on the browser's HTTP cache):
 `.json`, `.webp`, `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif`, `.ico`
 

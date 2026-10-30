@@ -7,6 +7,8 @@ import 'package:sw/src/config.dart';
 import 'package:sw/src/generator.dart';
 import 'package:test/test.dart';
 
+import 'support/capture.dart';
+
 /// End-to-end `generate()` tests over a synthetic build directory.
 ///
 /// The suites under `test/integration/` need a real `flutter build web`, so
@@ -54,6 +56,20 @@ void main() {
     expect(match, isNotNull, reason: 'sw.js should carry a shell entry');
     return jsonDecode(match!.group(1)!) as Map<String, dynamic>;
   }
+
+  test('embeds flutter.js without its dangling source-map comment', () async {
+    writeBuild();
+    // Flutter's loader ends in an IIFE and a map that cleanup deletes.
+    io.File(p.join(dir.path, 'flutter.js')).writeAsStringSync(
+      '(function(){window.loader=1})()\n//# sourceMappingURL=flutter.js.map\n',
+    );
+    await generate(config());
+    final bootstrap = io.File(
+      p.join(dir.path, 'bootstrap.js'),
+    ).readAsStringSync();
+    expect(bootstrap, startsWith('(function(){window.loader=1})()\n;\n'));
+    expect(bootstrap, isNot(contains('sourceMappingURL=flutter.js.map')));
+  });
 
   test(
     'records the shell hash and size of the bytes actually shipped',
@@ -122,6 +138,256 @@ void main() {
     expect(swVersion(), isNot(second));
   });
 
+  group('rejects an incomplete build', () {
+    test('without the build directory', () {
+      dir.deleteSync(recursive: true);
+      expect(
+        generate(config()),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('Build directory not found'),
+          ),
+        ),
+      );
+    });
+
+    test('without index.html', () {
+      writeBuild();
+      io.File(p.join(dir.path, 'index.html')).deleteSync();
+      expect(
+        generate(config()),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('index.html not found'),
+          ),
+        ),
+      );
+    });
+
+    test('without flutter.js, before writing anything', () async {
+      writeBuild();
+      io.File(p.join(dir.path, 'flutter.js')).deleteSync();
+      final shell = io.File(p.join(dir.path, 'index.html'));
+      final before = shell.readAsBytesSync();
+      await expectLater(
+        generate(config()),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('flutter.js not found'),
+          ),
+        ),
+      );
+      expect(io.File(p.join(dir.path, 'sw.js')).existsSync(), isFalse);
+      expect(io.File(p.join(dir.path, 'bootstrap.js')).existsSync(), isFalse);
+      expect(
+        io.File(p.join(dir.path, 'flutter_bootstrap.js')).existsSync(),
+        isTrue,
+      );
+      // The shell used to be stamped before this check, so the re-run
+      // hashed a different shell and derived a version it could not stamp.
+      expect(shell.readAsBytesSync(), before);
+    });
+  });
+
+  test('a run that failed on flutter.js can simply be repeated', () async {
+    writeBuild();
+    final flutterJs = io.File(p.join(dir.path, 'flutter.js'));
+    final loader = flutterJs.readAsStringSync();
+    flutterJs.deleteSync();
+    await expectLater(generate(config()), throwsStateError);
+
+    flutterJs.writeAsStringSync(loader);
+    await generate(config());
+    final version = swVersion();
+    expect(
+      io.File(p.join(dir.path, 'index.html')).readAsStringSync(),
+      contains('content="$version"'),
+    );
+
+    // The same input, never touched by the failed run, gives the same
+    // version.
+    final fresh = io.Directory.systemTemp.createTempSync('sw_generator_fresh');
+    addTearDown(() => fresh.deleteSync(recursive: true));
+    final saved = dir;
+    dir = fresh;
+    writeBuild();
+    await generate(config());
+    expect(swVersion(), version);
+    dir = saved;
+  });
+
+  test('a second run over a cleaned directory fails loudly', () async {
+    writeBuild();
+    await generate(config());
+    // Cleanup removed Flutter's files, so a re-run cannot silently derive a
+    // version from a shell it already stamped.
+    expect(generate(config()), throwsStateError);
+  });
+
+  test('a trailing line comment in flutter.js cannot swallow the ;', () async {
+    writeBuild();
+    io.File(
+      p.join(dir.path, 'flutter.js'),
+    ).writeAsStringSync('(function(){window.loader=1})()\n// trailing comment');
+    await generate(config());
+    final bootstrap = io.File(
+      p.join(dir.path, 'bootstrap.js'),
+    ).readAsStringSync();
+    expect(bootstrap, contains('// trailing comment\n;\n'));
+  });
+
+  test('strips a CRLF source-map comment from flutter.js', () async {
+    writeBuild();
+    io.File(p.join(dir.path, 'flutter.js')).writeAsStringSync(
+      '(function(){window.loader=1})()\r\n'
+      '//# sourceMappingURL=flutter.js.map\r\n',
+    );
+    await generate(config());
+    final bootstrap = io.File(
+      p.join(dir.path, 'bootstrap.js'),
+    ).readAsStringSync();
+    expect(bootstrap, startsWith('(function(){window.loader=1})()\n;\n'));
+    expect(bootstrap, isNot(contains('sourceMappingURL')));
+  });
+
+  test('uses a supplied version verbatim, in sw.js and the shell', () async {
+    writeBuild();
+    await generate(GeneratorConfig(inputDir: dir.path, version: '2026.10.29'));
+    expect(swVersion(), '2026.10.29');
+    expect(
+      io.File(p.join(dir.path, 'index.html')).readAsStringSync(),
+      contains('content="2026.10.29"'),
+    );
+  });
+
+  test(
+    'carries engine revision and local CanvasKit into the artifacts',
+    () async {
+      writeBuild();
+      io.File(p.join(dir.path, 'flutter_bootstrap.js')).writeAsStringSync('''
+_flutter.buildConfig = {"engineRevision":"0123456789abcdef","useLocalCanvasKit":true,"builds":[{"compileTarget":"dart2js","renderer":"canvaskit","mainJsPath":"main.dart.js"}]};
+''');
+      await generate(config());
+      final sw = io.File(p.join(dir.path, 'sw.js')).readAsStringSync();
+      final bootstrap = io.File(
+        p.join(dir.path, 'bootstrap.js'),
+      ).readAsStringSync();
+      expect(sw, contains('"engineRevision":"0123456789abcdef"'));
+      expect(bootstrap, contains('"engineRevision":"0123456789abcdef"'));
+      expect(bootstrap, contains('"useLocalCanvasKit":true'));
+    },
+  );
+
+  test('writes the artifacts under the configured names', () async {
+    writeBuild();
+    await generate(
+      GeneratorConfig(
+        inputDir: dir.path,
+        version: 'v1',
+        swOutput: 'service-worker.js',
+        bootstrapOutput: 'boot.js',
+      ),
+    );
+    expect(io.File(p.join(dir.path, 'service-worker.js')).existsSync(), isTrue);
+    final bootstrap = io.File(p.join(dir.path, 'boot.js')).readAsStringSync();
+    // The bootstrap registers the worker by the name it was written under.
+    expect(bootstrap, contains('"swFilename":"service-worker.js"'));
+    expect(io.File(p.join(dir.path, 'sw.js')).existsSync(), isFalse);
+  });
+
+  test('keeps source maps only with keepMaps', () async {
+    writeBuild();
+    final map = io.File(p.join(dir.path, 'main.dart.js.map'))
+      ..writeAsStringSync('{}');
+    await generate(
+      GeneratorConfig(inputDir: dir.path, version: 'v1', keepMaps: true),
+    );
+    expect(map.existsSync(), isTrue);
+    // Kept on disk, but never part of the manifest.
+    final sw = io.File(p.join(dir.path, 'sw.js')).readAsStringSync();
+    expect(sw, isNot(contains('main.dart.js.map')));
+  });
+
+  test('keeps flutter_bootstrap.js when the shell was never swapped', () async {
+    writeBuild(
+      indexHtml:
+          '<html><body><script src="flutter_bootstrap.js" async></script>'
+          ' </body></html>',
+    );
+    await generate(config());
+    expect(
+      io.File(p.join(dir.path, 'flutter_bootstrap.js')).existsSync(),
+      isTrue,
+    );
+    expect(io.File(p.join(dir.path, 'flutter.js')).existsSync(), isFalse);
+  });
+
+  test(
+    'keeps every skwasm variant and prunes CanvasKit for a skwasm build',
+    () async {
+      writeBuild();
+      io.File(p.join(dir.path, 'flutter_bootstrap.js')).writeAsStringSync('''
+_flutter.buildConfig = {"engineRevision":"abc123","builds":[{"compileTarget":"dart2wasm","renderer":"skwasm","mainWasmPath":"main.dart.wasm","jsSupportRuntimePath":"main.dart.mjs"}]};
+''');
+      const kept = [
+        'canvaskit/skwasm.js',
+        'canvaskit/skwasm.wasm',
+        'canvaskit/skwasm_heavy.js',
+        'canvaskit/skwasm_heavy.wasm',
+        'canvaskit/wimp.js',
+        'canvaskit/wimp.wasm',
+      ];
+      const pruned = [
+        'canvaskit/canvaskit.js',
+        'canvaskit/canvaskit.wasm',
+        'canvaskit/chromium/canvaskit.js',
+        'canvaskit/chromium/canvaskit.wasm',
+      ];
+      for (final path in [...kept, ...pruned]) {
+        io.File(p.join(dir.path, path))
+          ..createSync(recursive: true)
+          ..writeAsStringSync('// $path');
+      }
+
+      await generate(config());
+
+      for (final path in kept) {
+        expect(
+          io.File(p.join(dir.path, path)).existsSync(),
+          isTrue,
+          reason: path,
+        );
+      }
+      for (final path in pruned) {
+        expect(
+          io.File(p.join(dir.path, path)).existsSync(),
+          isFalse,
+          reason: path,
+        );
+      }
+      expect(
+        io.Directory(p.join(dir.path, 'canvaskit/chromium')).existsSync(),
+        isFalse,
+      );
+      // The variants are lazily cached, never pre-cached.
+      final sw = io.File(p.join(dir.path, 'sw.js')).readAsStringSync();
+      final entry = RegExp(
+        r'"canvaskit/skwasm\.wasm":(\{[^}]*\})',
+      ).firstMatch(sw);
+      expect(entry, isNotNull);
+      expect(
+        (jsonDecode(entry!.group(1)!) as Map<String, dynamic>)['category'],
+        'optional',
+      );
+    },
+  );
+
   test(
     'keeps both files of every CanvasKit variant the bootstrap loads',
     () async {
@@ -157,6 +423,277 @@ void main() {
       );
     },
   );
+
+  group('audit #30', () {
+    void touch(String path, [String content = 'x']) =>
+        io.File(p.join(dir.path, path))
+          ..createSync(recursive: true)
+          ..writeAsStringSync(content);
+
+    test(
+      'derives the same version as before ignored files were skipped',
+      () async {
+        writeBuild();
+        touch('assets/NOTICES', 'notices');
+        touch('main.dart.js.map', '{}');
+        touch('main.dart.js_1.part.js', 'part');
+        touch('assets/data.txt', 'data');
+        touch('assets/icon.png', 'png');
+        io.File(
+          p.join(dir.path, 'assets/big.png'),
+        ).writeAsBytesSync(List<int>.filled(600 * 1024, 7));
+        await generate(config(noCleanup: true));
+        // Captured before ignored files stopped being hashed.
+        expect(swVersion(), _goldenVersion);
+      },
+    );
+
+    group('a re-run over a processed build', () {
+      test('says the build was already processed', () async {
+        writeBuild();
+        await generate(config());
+        await expectLater(
+          generate(config()),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              allOf(
+                contains('already processed'),
+                contains('flutter build web'),
+              ),
+            ),
+          ),
+        );
+      });
+
+      test('says so under custom output names too', () async {
+        writeBuild();
+        GeneratorConfig named() => GeneratorConfig(
+          inputDir: dir.path,
+          version: '',
+          swOutput: 'worker.js',
+          bootstrapOutput: 'boot.js',
+        );
+        await generate(named());
+        await expectLater(
+          generate(named()),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('already processed'),
+            ),
+          ),
+        );
+      });
+
+      test('says so when only flutter.js is gone', () async {
+        // The shell still loads flutter_bootstrap.js, so cleanup kept it.
+        writeBuild(
+          indexHtml:
+              '<html><script src="flutter_bootstrap.js" async></script></html>',
+        );
+        await generate(config());
+        expect(
+          io.File(p.join(dir.path, 'flutter_bootstrap.js')).existsSync(),
+          isTrue,
+        );
+        await expectLater(
+          generate(config()),
+          throwsA(
+            isA<StateError>().having(
+              (e) => e.message,
+              'message',
+              contains('already processed'),
+            ),
+          ),
+        );
+      });
+    });
+
+    test('the summary reports the ignore category', () async {
+      writeBuild();
+      touch('assets/NOTICES', 'notices');
+      touch('assets/data.txt', 'data');
+      final out = await captureOutput(() => generate(config()));
+      // flutter_bootstrap.js, flutter.js, NOTICES and data.txt.
+      expect(out.stdout, contains('ignore: 4 files ('));
+    });
+
+    test('warns about deferred parts left out of the manifest', () async {
+      writeBuild();
+      for (var i = 1; i <= 12; i++) {
+        touch('main.dart.js_$i.part.js', 'part $i');
+      }
+      final out = await captureOutput(() => generate(config()));
+      expect(out.stderr, contains('Warning: 12 deferred-import part file(s)'));
+      expect(out.stderr, contains('main.dart.js_1.part.js'));
+      expect(out.stderr, contains('and 2 more'));
+      expect(out.stderr, contains('--optional="**.part.js"'));
+      // Categorisation is unchanged: still not in the manifest.
+      final sw = io.File(p.join(dir.path, 'sw.js')).readAsStringSync();
+      expect(sw, isNot(contains('.part.js')));
+    });
+
+    group('rejects an output name that is not a plain file name', () {
+      for (final (sw, bootstrap) in [
+        ('js/sw.js', 'bootstrap.js'),
+        ('sw.js', 'js/boot/bootstrap.js'),
+        (r'js\sw.js', 'bootstrap.js'),
+        ('../sw.js', 'bootstrap.js'),
+        ('sw.js', '..'),
+        ('/tmp/sw.js', 'bootstrap.js'),
+        (r'C:\sw.js', 'bootstrap.js'),
+        ('', 'bootstrap.js'),
+        ('same.js', 'same.js'),
+      ]) {
+        test('$sw + $bootstrap', () async {
+          writeBuild();
+          final before = io.File(
+            p.join(dir.path, 'index.html'),
+          ).readAsBytesSync();
+          // A worker under js/ gets the default scope /js/ and never
+          // controls the page; ../ and absolute names leave the build.
+          await expectLater(
+            generate(
+              GeneratorConfig(
+                inputDir: dir.path,
+                version: 'v1',
+                swOutput: sw,
+                bootstrapOutput: bootstrap,
+              ),
+            ),
+            throwsFormatException,
+          );
+          expect(io.Directory(p.join(dir.path, 'js')).existsSync(), isFalse);
+          expect(
+            io.File(p.join(dir.path, 'index.html')).readAsBytesSync(),
+            before,
+          );
+        });
+      }
+    });
+
+    test('rejects a version that collides with a cache name', () async {
+      writeBuild();
+      for (final version in ['manifest', 'temp-v1', 'v1-manifest']) {
+        await expectLater(
+          generate(GeneratorConfig(inputDir: dir.path, version: version)),
+          throwsFormatException,
+          reason: version,
+        );
+      }
+      expect(io.File(p.join(dir.path, 'sw.js')).existsSync(), isFalse);
+    });
+
+    test('accepts versions that only resemble a cache name', () async {
+      writeBuild();
+      await generate(
+        GeneratorConfig(
+          inputDir: dir.path,
+          version: 'manifest-2',
+          noCleanup: true,
+        ),
+      );
+      expect(swVersion(), 'manifest-2');
+    });
+
+    test('warns, but generates, without an engine revision', () async {
+      writeBuild();
+      io.File(p.join(dir.path, 'flutter_bootstrap.js')).writeAsStringSync(
+        '_flutter.buildConfig = {"builds":[{"compileTarget":"dart2js", '
+        '"renderer":"canvaskit","mainJsPath":"main.dart.js"}]};',
+      );
+      final out = await captureOutput(() => generate(config()));
+      expect(out.stderr, contains('has no engineRevision'));
+      expect(out.stderr, contains('slow update path'));
+      expect(out.stdout, contains('Engine: (unknown)'));
+      final sw = io.File(p.join(dir.path, 'sw.js')).readAsStringSync();
+      expect(sw, isNot(contains('"engineRevision":')));
+    });
+
+    test('is silent about the engine revision when there is one', () async {
+      writeBuild();
+      final out = await captureOutput(() => generate(config()));
+      expect(out.stderr, isNot(contains('engineRevision')));
+    });
+
+    test('HTML-escapes a supplied version stamped into the shell', () async {
+      writeBuild();
+      const version = '1"><script>alert(1)</script>';
+      await generate(GeneratorConfig(inputDir: dir.path, version: version));
+      final shell = io.File(p.join(dir.path, 'index.html'));
+      final html = shell.readAsStringSync();
+      expect(html, isNot(contains('<script>alert')));
+      expect(
+        html,
+        contains('content="1&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;"'),
+      );
+      // The manifest still describes the bytes that ship.
+      final entry = shellEntry();
+      expect(
+        entry['hash'],
+        crypto.md5.convert(shell.readAsBytesSync()).toString(),
+      );
+    });
+
+    test('warns when the shell inlines Flutter\'s loader', () async {
+      writeBuild(indexHtml: _indexWithInlineLoader);
+      final out = await captureOutput(() => generate(config()));
+      expect(out.stderr, contains('{{flutter_bootstrap_js}}'));
+      expect(
+        out.stderr,
+        contains('<script src="bootstrap.js" data-sw-bootstrap defer>'),
+      );
+    });
+
+    test('pruning CanvasKit does not delete through a symlink', () async {
+      writeBuild();
+      touch('canvaskit/canvaskit.js');
+      touch('canvaskit/canvaskit.wasm');
+      final outside = io.Directory.systemTemp.createTempSync('sw_outside');
+      addTearDown(() => outside.deleteSync(recursive: true));
+      final precious = io.File(p.join(outside.path, 'precious.wasm'))
+        ..writeAsStringSync('keep me');
+      io.Link(p.join(dir.path, 'canvaskit', 'linked')).createSync(outside.path);
+
+      final out = await captureOutput(() => generate(config()));
+      expect(precious.existsSync(), isTrue);
+      expect(out.stderr, contains('canvaskit/linked'));
+    }, testOn: '!windows');
+
+    test('the scan warns about a skipped symlink', () async {
+      writeBuild();
+      final target = io.File(p.join(dir.path, 'real.json'))
+        ..writeAsStringSync('{}');
+      io.Link(p.join(dir.path, 'alias.json')).createSync(target.path);
+      final out = await captureOutput(() => generate(config()));
+      expect(out.stderr, contains('symlink'));
+      expect(out.stderr, contains('alias.json'));
+    }, testOn: '!windows');
+
+    test('warns about a renderer it does not know', () async {
+      writeBuild();
+      io.File(p.join(dir.path, 'flutter_bootstrap.js')).writeAsStringSync(
+        '_flutter.buildConfig = '
+        '{"engineRevision":"abc123","builds":[$_skwasm2]};',
+      );
+      final out = await captureOutput(() => generate(config()));
+      expect(out.stderr, contains('Warning: unknown renderer "skwasm2"'));
+    });
+
+    test('injects the cache prefix into the bootstrap', () async {
+      writeBuild();
+      await generate(
+        GeneratorConfig(inputDir: dir.path, version: 'v1', cachePrefix: 'my'),
+      );
+      final bootstrap = io.File(
+        p.join(dir.path, 'bootstrap.js'),
+      ).readAsStringSync();
+      expect(bootstrap, contains('"cachePrefix":"my"'));
+    });
+  });
 }
 
 const String _flutterBootstrap = '''
@@ -167,3 +704,17 @@ const String _indexWithPlaceholder = '''
 <html><head><meta name="sw" content="{{sw_version}}"></head>
 <body><script defer data-sw-bootstrap src="bootstrap.js"></script></body></html>
 ''';
+
+/// What `{{flutter_bootstrap_js}}` leaves in the shell after a build.
+const String _indexWithInlineLoader = '''
+<html><body><script>
+(()=>{var _flutter = window._flutter || {}; _flutter.loader = {};})();
+if (!window._flutter) { window._flutter = {}; }
+_flutter.buildConfig = {"engineRevision":"abc123","builds":[]};
+_flutter.loader.load();
+</script></body></html>
+''';
+
+const String _goldenVersion = 'f10ed3a4f074';
+
+const String _skwasm2 = '{"compileTarget":"dart2wasm","renderer":"skwasm2"}';

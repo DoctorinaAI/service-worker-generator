@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { expectShellIntact, settle } from './support/host';
 
 const BASE_URL = 'http://localhost:8089';
 
@@ -15,14 +16,6 @@ const BASE_URL = 'http://localhost:8089';
  */
 const FOREIGN_PAGE = `${BASE_URL}/offline.html`;
 
-async function waitForController(page: Page): Promise<void> {
-  await page.waitForFunction(
-    () => navigator.serviceWorker.controller !== null,
-    undefined,
-    { timeout: 15_000 },
-  );
-}
-
 async function clearSiteData(page: Page): Promise<void> {
   await page.goto(BASE_URL);
   await page.evaluate(async () => {
@@ -32,35 +25,18 @@ async function clearSiteData(page: Page): Promise<void> {
   });
 }
 
-/** Whatever is currently stored under the canonical shell key. */
-async function cachedShell(page: Page): Promise<string | null> {
-  return page.evaluate(async () => {
-    for (const name of await caches.keys()) {
-      const hit = await (await caches.open(name)).match(new Request('index.html'));
-      if (hit) return await hit.text();
-    }
-    return null;
-  });
-}
-
 test.describe('app-shell integrity', () => {
   test.beforeEach(async ({ page }) => {
     await clearSiteData(page);
-    await page.goto(BASE_URL);
-    await waitForController(page);
-    await page.waitForTimeout(2000);
+    await settle(page, BASE_URL);
   });
 
   test('a same-origin page outside the SPA does not replace the shell', async ({
     page,
   }) => {
-    expect(await cachedShell(page)).toContain('data-sw-bootstrap');
-
     await page.goto(FOREIGN_PAGE);
-    await page.waitForTimeout(500);
 
-    const shell = await cachedShell(page);
-    expect(shell).toContain('data-sw-bootstrap');
+    await expectShellIntact(page);
   });
 
   test('a deep route still gets the app after such a page was visited', async ({
@@ -70,7 +46,7 @@ test.describe('app-shell integrity', () => {
     // SW answers it from cache — which is exactly the path that turns a
     // poisoned shell into a page that never boots.
     await page.goto(FOREIGN_PAGE);
-    await page.waitForTimeout(500);
+    await expectShellIntact(page);
 
     const response = await page.goto(`${BASE_URL}/deep/route`);
 
