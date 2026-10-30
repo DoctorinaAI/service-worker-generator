@@ -103,6 +103,7 @@ dart run sw:generate --input=build/web
 - `docs/bootstrap-pipeline.md` — Pipeline stages, loading widget, global API, data-config options
 - `docs/service-worker.md` — Manifest format, cache strategies, events, retry logic, client notifications
 - `docs/configuration.md` — CLI args, YAML config, env vars, default categorization rules
+- `docs/testing.md` — Test levels, writing browser tests, known engine differences, device checklist
 
 ## Key Files Reference
 - `packages/sw/src/shared/types.ts` — Shared type definitions (ResourceCategory, ResourceManifest, etc.)

@@ -1,18 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
+import { settle } from './support/host';
 
 const BASE_URL = 'http://localhost:8089';
-
-/**
- * Wait until our worker controls the page, so the next navigation is served
- * by the SW rather than going straight to the origin.
- */
-async function waitForController(page: Page): Promise<void> {
-  await page.waitForFunction(
-    () => navigator.serviceWorker.controller !== null,
-    undefined,
-    { timeout: 15_000 },
-  );
-}
 
 async function clearSiteData(page: Page): Promise<void> {
   await page.goto(BASE_URL);
@@ -26,9 +15,7 @@ async function clearSiteData(page: Page): Promise<void> {
 test.describe('app shell', () => {
   test.beforeEach(async ({ page }) => {
     await clearSiteData(page);
-    await page.goto(BASE_URL);
-    await waitForController(page);
-    await page.waitForTimeout(2000);
+    await settle(page, BASE_URL);
   });
 
   test('is pre-cached under its manifest key', async ({ page }) => {
@@ -44,7 +31,11 @@ test.describe('app shell', () => {
     expect(cached).toContain('data-sw-bootstrap');
   });
 
-  test('answers a navigation while offline', async ({ page, context }) => {
+  test('answers a navigation while offline', async ({ page, context, browserName }) => {
+    // Playwright's WebKit fails the navigation under `setOffline` with an
+    // internal error. Taking the origin down really works there; see
+    // origin-faults.spec.ts.
+    test.skip(browserName === 'webkit', 'setOffline breaks navigation in WebKit');
     await context.setOffline(true);
     const response = await page.goto(BASE_URL);
     await context.setOffline(false);

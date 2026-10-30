@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { settle } from './support/host';
 
 const BASE_URL = 'http://localhost:8089';
 
@@ -14,14 +15,6 @@ const BASE_URL = 'http://localhost:8089';
  * /index.html` rewrite.
  */
 const FOREIGN_PAGE = `${BASE_URL}/offline.html`;
-
-async function waitForController(page: Page): Promise<void> {
-  await page.waitForFunction(
-    () => navigator.serviceWorker.controller !== null,
-    undefined,
-    { timeout: 15_000 },
-  );
-}
 
 async function clearSiteData(page: Page): Promise<void> {
   await page.goto(BASE_URL);
@@ -46,9 +39,7 @@ async function cachedShell(page: Page): Promise<string | null> {
 test.describe('app-shell integrity', () => {
   test.beforeEach(async ({ page }) => {
     await clearSiteData(page);
-    await page.goto(BASE_URL);
-    await waitForController(page);
-    await page.waitForTimeout(2000);
+    await settle(page, BASE_URL);
   });
 
   test('a same-origin page outside the SPA does not replace the shell', async ({

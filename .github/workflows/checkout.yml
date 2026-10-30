@@ -94,6 +94,7 @@ jobs:
         run: npm test
 
       - name: 🏗️ Build artifacts
+        timeout-minutes: 2
         run: npm run build
 
       - name: ✅ Verify committed assets match build output
@@ -209,6 +210,7 @@ jobs:
         run: npm ci
 
       - name: 🧱 Build TS artifacts and copy into Dart assets
+        timeout-minutes: 2
         run: npm run build:all
 
       - name: 🐦 Install Flutter example dependencies
@@ -228,12 +230,16 @@ jobs:
       - name: 🧰 Run Dart CLI on example build
         run: dart run sw:generate --input=example/build/web
 
-      - name: 🎭 Install Playwright Chromium
+      - name: 🎭 Install Playwright browsers
         working-directory: packages/sw
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 5
+        run: npx playwright install --with-deps chromium firefox webkit
 
       - name: 🧪 Run Playwright E2E
         working-directory: packages/sw
+        timeout-minutes: 10
+        env:
+          SW_E2E_BROWSERS: all
         run: npx playwright test
 
       - name: 📤 Upload Playwright report on failure

@@ -1,8 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
-// Opt into Firefox/WebKit by passing SW_E2E_BROWSERS=all (or a comma list)
-// at invocation time. In CI we run only Chromium by default to keep the
-// job fast; the full matrix still runs on demand and before releases.
+// Chromium by default, to keep local runs fast. Pass SW_E2E_BROWSERS=all (or
+// a comma list) for the other engines; CI runs all of them.
 const requested = (process.env.SW_E2E_BROWSERS ?? 'chromium')
   .split(',')
   .map((s) => s.trim().toLowerCase())
@@ -16,6 +15,7 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
   retries: 0,
+  reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'list',
   use: {
     headless: true,
     viewport: { width: 1280, height: 720 },

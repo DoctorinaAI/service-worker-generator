@@ -1143,6 +1143,16 @@ describe('lazyCacheResponse — audit #30', () => {
     }
   });
 
+  it('stores the file when the page reads its copy before the write gets going', async () => {
+    // `cacheFirst` hands the response to the page without waiting for this
+    // write, so the page can start reading while `caches.open` is pending.
+    const response = new Response(body(4));
+    const write = lazyCacheResponse('content-v1', new Request('logo.png'), response);
+    expect((await response.arrayBuffer()).byteLength).toBe(4);
+    await write;
+    expect(await mockCaches.peek('content-v1')!.match('logo.png')).toBeDefined();
+  });
+
   it('does not store a body whose size differs from the manifest', async () => {
     const cache = await caches.open('content-v1');
     consumeOnPut(cache);

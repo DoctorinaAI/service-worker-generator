@@ -313,12 +313,23 @@ export async function lazyCacheResponse(
     console.warn(`[SW] Not caching ${request.url}: served as HTML`);
     return;
   }
-  const cache = await caches.open(cacheName);
+  // Cloned before the first await: the caller hands [response] to the page
+  // without waiting for this write, and a body the page has started reading
+  // can no longer be cloned.
+  const copy = response.clone();
+  let cache: Cache;
+  try {
+    cache = await caches.open(cacheName);
+  } catch (error) {
+    // An unread clone would buffer the whole body the page is reading.
+    copy.body?.cancel().catch(() => undefined);
+    throw error;
+  }
   let mismatch: BodySizeMismatchError | undefined;
   try {
     await cache.put(
       request,
-      guardBody(response.clone(), {
+      guardBody(copy, {
         idleMs: BODY_STALL_TIMEOUT_MS,
         expectedBytes,
         label: key,
