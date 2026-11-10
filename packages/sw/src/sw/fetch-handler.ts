@@ -202,18 +202,20 @@ async function networkFirst(
     });
   };
 
-  // Read up front, because it decides how long the origin is given: with a
-  // copy in hand a navigation waits `NAVIGATION_TIMEOUT_MS` and then boots
-  // from it, and without one it waits for the network however long that
-  // takes. The body is not read here, so this costs a cache lookup.
-  let cached: Response | undefined;
-  try {
-    cached = await (await caches.open(cacheName)).match(new Request(INDEX_KEY));
-  } catch (error) {
-    log.warn('[SW] App-shell cache lookup failed:', error);
-  }
+  // Started, not awaited: whether there is a cached shell decides how long
+  // the origin is given, but waiting for a cache lookup before the request
+  // goes out would delay every navigation by it. Never rejects.
+  const cachedShell = (async (): Promise<Response | undefined> => {
+    try {
+      return await (await caches.open(cacheName)).match(new Request(INDEX_KEY));
+    } catch (error) {
+      log.warn('[SW] App-shell cache lookup failed:', error);
+      return undefined;
+    }
+  })();
 
   const fallbackToCache = async (): Promise<Response> => {
+    const cached = await cachedShell;
     if (cached) {
       // Not awaited: this is a navigation, and the document waits for it.
       keepAlive(event, notifyIndex('cached'));
@@ -232,8 +234,10 @@ async function networkFirst(
     if (preload) {
       response = preload;
     } else {
+      // The request goes out first; the lookup above has settled by the
+      // time its result is needed.
       const network = fetch(request);
-      const answered = cached
+      const answered = (await cachedShell)
         ? await withTimeout(network, NAVIGATION_TIMEOUT_MS, TOO_SLOW)
         : await network;
       if (answered === TOO_SLOW) {
