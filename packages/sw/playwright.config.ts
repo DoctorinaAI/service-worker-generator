@@ -25,7 +25,11 @@ export default defineConfig({
     use: { browserName: name },
   })),
   webServer: {
-    command: 'python3 -m http.server 8089 --directory ../../example/build/web',
+    // Node, not `python3 -m http.server`: that one serves a single request
+    // at a time, so three browser projects loading a multi-megabyte build
+    // while the worker pre-caches it queue behind each other until the
+    // specs' own 30 s budget runs out. It is also absent on Windows.
+    command: 'node e2e/support/serve.mjs 8089',
     port: 8089,
     reuseExistingServer: true,
     timeout: 10_000,

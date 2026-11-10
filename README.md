@@ -51,7 +51,7 @@ path, so a template change should arrive through a reviewed bump rather than
 on the next unrelated build:
 
 ```shell
-dart pub global activate sw 0.3.0
+dart pub global activate sw 0.3.1
 ```
 
 Note that a pre-release is not matched by a plain caret constraint — `0.4.0-dev`
@@ -301,7 +301,7 @@ mv build/web/index.prod.html build/web/index.html
 # 3. Generate sw.js + bootstrap.js, inject {{sw_version}} into index.html,
 #    and auto-remove flutter_bootstrap.js / flutter_service_worker.js / flutter.js
 #    (flutter.js is inlined into bootstrap.js, so it's dropped from the output).
-dart pub global activate sw 0.3.0
+dart pub global activate sw 0.3.1
 dart pub global run sw:generate --version="$(git rev-parse --short=8 HEAD)"
 ```
 
