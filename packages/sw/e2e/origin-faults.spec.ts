@@ -1,6 +1,9 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import {
   cachedText,
+  controllerUrl,
   expectShellIntact,
   Host,
   markerOf,
@@ -108,6 +111,69 @@ test.describe('origin faults', () => {
     expect(waited).toBeLessThan(12_000);
     await expect(page).toHaveTitle('Service Worker');
     for (const timer of held) clearTimeout(timer);
+  });
+
+  test('a navigation answered from the shell does not hold the next build back', async ({
+    context,
+  }) => {
+    // After the deadline the worker waits, under `waitUntil`, for the
+    // origin's late answer to store as the next shell. WebKit never
+    // settles `preloadResponse` for a navigation the worker already
+    // answered, so that wait never ended: the worker stayed busy, a newer
+    // build sat in `waiting` with every tab closed, and Safari eventually
+    // failed a navigation with "Service Worker context closed".
+    test.setTimeout(150_000);
+    const page = await context.newPage();
+    await settle(page, host.origin);
+
+    const held: NodeJS.Timeout[] = [];
+    host.fault = ({ pathname }, res) => {
+      if (pathname !== '/' && pathname !== '/index.html') return false;
+      held.push(
+        setTimeout(() => {
+          res
+            .writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' })
+            .end(fs.readFileSync(path.join(host.root, 'index.html')));
+        }, 5_000),
+      );
+      return true;
+    };
+    // From another document: WebKit treats a load of the URL already shown
+    // differently, and that one may never reach the worker's deadline.
+    await page.goto('about:blank');
+    await page.goto(host.origin, { waitUntil: 'commit' });
+    await expect(page).toHaveTitle('Service Worker');
+    host.fault = undefined;
+
+    host.deploy('b', { suffix: '-b' });
+    await page.reload();
+    await expect.poll(() => markerOf(page), { timeout: 60_000 }).toBe('b');
+    await expect
+      .poll(
+        () =>
+          page
+            .evaluate(async () => !!(await navigator.serviceWorker.getRegistration())?.waiting)
+            .catch(() => false),
+        { timeout: 60_000 },
+      )
+      .toBe(true);
+
+    // Nothing is controlled by the old worker any more. The bound on the
+    // late-shell wait is `LATE_SHELL_TIMEOUT_MS` (30 s); the new worker
+    // has to be in charge well within the minute after it.
+    const next = await context.newPage();
+    await page.close();
+    const deadline = Date.now() + 90_000;
+    let controller: string | null = null;
+    while (Date.now() < deadline && !controller?.includes('-b')) {
+      await next.goto('about:blank');
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
+      await next.goto(host.origin);
+      await expect.poll(() => markerOf(next), { timeout: 30_000 }).toBe('b');
+      controller = await controllerUrl(next);
+    }
+    for (const timer of held) clearTimeout(timer);
+    expect(controller).toContain('-b');
   });
 
   test('a 500 from the origin does not replace the cached shell', async ({ page }) => {

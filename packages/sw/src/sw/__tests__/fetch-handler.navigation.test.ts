@@ -735,6 +735,33 @@ describe('navigation handling — the origin takes its time', () => {
     expect(await (await cache.match(new Request('index.html')))!.text()).toBe(SHELL);
   });
 
+  it('stops waiting for a late shell the browser never delivers', async () => {
+    // WebKit never settles `preloadResponse` for a navigation the worker
+    // already answered. The wait for it runs under `waitUntil`, and a
+    // worker with an extended lifetime pending is busy: a newer build that
+    // has installed cannot activate, with every tab closed, until WebKit
+    // kills this worker — failing a navigation it is handling then.
+    const cache = await mockCaches.open(CONTENT_CACHE);
+    await cache.put(new Request('index.html'), textResponse(SHELL));
+    hangingFetch();
+    instantTimers();
+
+    const event = makeEvent(`${ORIGIN}/`, {
+      mode: 'navigate',
+      preload: new Promise<Response | undefined>(() => undefined),
+    });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    expect(await (await event._responded!).text()).toBe(SHELL);
+
+    const STILL_PENDING = Symbol('still pending');
+    const outcome = await Promise.race([
+      event._settled().then(() => 'settled'),
+      new Promise((resolve) => setTimeout(() => resolve(STILL_PENDING), 50)),
+    ]);
+    expect(outcome).toBe('settled');
+    expect(await (await cache.match(new Request('index.html')))!.text()).toBe(SHELL);
+  });
+
   it('still prefers the navigation preload response', async () => {
     const cache = await mockCaches.open(CONTENT_CACHE);
     await cache.put(new Request('index.html'), textResponse(SHELL));

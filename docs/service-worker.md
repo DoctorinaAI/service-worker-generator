@@ -119,7 +119,12 @@ into the old cache failed the body size check (#36).
   connection reliably slower than it does not keep booting from a copy that
   is never updated — unless a newer build has become pending in the
   meantime, in which case that late shell is dropped rather than paired
-  with this build's code
+  with this build's code. That wait runs under `waitUntil`, so it is
+  bounded by `LATE_SHELL_TIMEOUT_MS` (30 s): a worker with an extended
+  lifetime pending is busy, and a newer build cannot activate past it.
+  WebKit never settles the preload of a navigation the worker already
+  answered, so there the late shell is never stored, and without the bound
+  the update stayed `waiting` until Safari killed the worker
 - The deadline applies to `index.html` and to paths that look like routes.
   A path whose last segment looks like a file (`/legal/privacy.html`,
   `/report.pdf`) is a document the origin serves itself, so it waits for

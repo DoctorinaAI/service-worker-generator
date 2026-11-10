@@ -3,6 +3,7 @@ import { ResourceCategory } from '../shared/types';
 import {
   BODY_STALL_TIMEOUT_MS,
   FETCH_TIMEOUT_MS,
+  LATE_SHELL_TIMEOUT_MS,
   MAX_RETRY_ATTEMPTS,
   NAVIGATION_TIMEOUT_MS,
   NEVER_CACHE_FILES,
@@ -392,7 +393,21 @@ async function storeLateShell(
 ): Promise<void> {
   let response: Response;
   try {
-    response = await network;
+    // Bounded, because this runs under `waitUntil`: see
+    // `LATE_SHELL_TIMEOUT_MS`. WebKit never settles the preload of a
+    // navigation that was answered from the cache, and an unbounded wait
+    // kept this worker busy for good — which is what holds a newer build
+    // in `waiting` with every tab closed.
+    const answered = await withTimeout(network, LATE_SHELL_TIMEOUT_MS, TOO_SLOW);
+    if (answered === TOO_SLOW) {
+      log.warn(
+        `[SW] The origin did not answer within ${LATE_SHELL_TIMEOUT_MS}ms ` +
+          'of the deadline; the cached shell stays as it is',
+      );
+      release(network);
+      return;
+    }
+    response = answered;
   } catch {
     // The origin never answered. Nothing to store, nothing to report.
     return;

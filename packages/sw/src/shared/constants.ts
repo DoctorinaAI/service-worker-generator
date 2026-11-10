@@ -66,6 +66,22 @@ export const BODY_STALL_TIMEOUT_MS = 30_000;
  */
 export const NAVIGATION_TIMEOUT_MS = 3_000;
 
+/**
+ * How long, after a navigation was answered from the cache, the worker
+ * keeps itself alive waiting for the origin's late answer to store as the
+ * next shell.
+ *
+ * The wait is an extended lifetime (`waitUntil`), and a worker with one
+ * pending is a worker that is still busy: a newer build that has installed
+ * cannot activate until it ends, even with every tab closed. WebKit never
+ * settles `preloadResponse` for a navigation the worker already answered,
+ * so without a bound that wait never ended — the update stayed `waiting`
+ * until WebKit killed the worker, and a navigation it was handling then
+ * failed with "Service Worker context closed". An origin slower than this
+ * leaves the shell as it is, which the next navigation refreshes anyway.
+ */
+export const LATE_SHELL_TIMEOUT_MS = 30_000;
+
 /** Default SW registration timeout in milliseconds */
 export const SW_REGISTRATION_TIMEOUT_MS = 4_000;
 
