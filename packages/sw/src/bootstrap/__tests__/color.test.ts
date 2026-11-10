@@ -82,6 +82,16 @@ describe('ensureContrast', () => {
     expect(ensureContrast('#25D366', 'var(--bg)')).toBe('#25D366');
   });
 
+  it('returns a value that is not a colour at all unchanged', () => {
+    // Never reached through the config layer, which substitutes the
+    // default for a non-string. Pinned because a throw from here is a
+    // stylesheet that never renders: no loading screen, no error screen.
+    const notAColour = 16711680 as unknown as string;
+    expect(() => ensureContrast(notAColour, LIGHT)).not.toThrow();
+    expect(ensureContrast(notAColour, LIGHT)).toBe(notAColour);
+    expect(contrastRatio(notAColour, LIGHT)).toBeNull();
+  });
+
   it('keeps the hue recognisable', () => {
     // Darkened, not replaced: green stays the strongest channel.
     const fixed = ensureContrast('#25D366', LIGHT);

@@ -88,10 +88,13 @@ const String _backslash = r'\';
 /// writes `Object.freeze({...})` or appends a statement on the same line,
 /// and extraction silently returns the wrong text.
 ///
-/// Any wrapper the assignment is written with (`Object.freeze(`,
-/// `JSON.parse(`) is skipped: only whitespace, identifier characters, dots
-/// and an opening parenthesis may stand between the `=` and the literal.
-/// Braces inside strings are ignored, escapes included.
+/// A wrapper the assignment is written with (`Object.freeze({…})`) is
+/// skipped: only whitespace, identifier characters, dots and an opening
+/// parenthesis may stand between the `=` and the literal. A wrapper whose
+/// argument is a *string* rather than a literal (`JSON.parse('{…}')`) is
+/// not read — the scan stops at the quote and yields nothing, which
+/// `parseFlutterBuild` reports as a missing `buildConfig` rather than
+/// guessing. Braces inside strings are ignored, escapes included.
 String? extractBuildConfigLiteral(String content) {
   final marker = RegExp(r'_flutter\.buildConfig\s*=\s*').firstMatch(content);
   if (marker == null) return null;

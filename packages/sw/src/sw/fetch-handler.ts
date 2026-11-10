@@ -43,6 +43,29 @@ const INDEX_KEY = 'index.html';
 const TOO_SLOW = Symbol('navigation-timeout');
 
 /**
+ * Whether this worker has already answered one of the files that decide
+ * which build runs from the network, because a newer build was pending.
+ *
+ * From then on it keeps doing so, and it stops falling back to its own
+ * cached copies: half of one build and half of another is the one
+ * combination that cannot boot — `WebAssembly.instantiate(): Import #N`
+ * out of the engine, with nothing to retry. A page that cannot get a file
+ * at all gets a failure it can show instead.
+ *
+ * Per worker, not per client: a worker alive across two loads keeps going
+ * to the network for code until the browser retires it, which is the safe
+ * direction, and the flag only ever turns on when the network has in fact
+ * answered — a fully offline load never sets it, so the stale-copy
+ * fallback still works where it was meant to.
+ */
+let servedNetworkCode = false;
+
+/** Test-only: forget that this worker has served the new build's code. */
+export function resetCodeSourceLatch(): void {
+  servedNetworkCode = false;
+}
+
+/**
  * Whether [entry] is one of the files that decide which build of the app
  * runs: the pre-cached set — the Dart code, the engine's support files and
  * the manifests the engine reads before its first frame.
@@ -69,6 +92,62 @@ function keepAlive(event: FetchEvent, work: Promise<unknown>): void {
     event.waitUntil(work);
   } catch (error) {
     log.warn('[SW] waitUntil refused; the cache write runs unextended:', error);
+  }
+}
+
+/**
+ * Let go of a response nothing is going to read.
+ *
+ * A body left unread keeps its connection open until the stream is garbage
+ * collected, and a promise left without a handler surfaces as an unhandled
+ * rejection in the worker — both for a response that lost a race the page
+ * has already moved on from.
+ */
+function release(pending: Promise<Response>): void {
+  void pending.then(
+    (response) => {
+      try {
+        response.body?.cancel().catch(() => undefined);
+      } catch {
+        // A locked or already-consumed body: nothing to release.
+      }
+    },
+    () => undefined,
+  );
+}
+
+/**
+ * Whether a navigation for [request] may be answered with the cached app
+ * shell once the origin runs out of time.
+ *
+ * A Flutter route (`/chat/42`) has no file of its own and is rewritten to
+ * the shell by the host, so the shell is the right answer for it. A path
+ * whose last segment looks like a file (`/legal/privacy.html`,
+ * `/report.pdf`) is a document the origin serves itself, and handing the
+ * app shell to it would replace a page that was merely slow with the wrong
+ * page entirely. `index.html` itself is the shell, and its caller passes
+ * `isShellRequest` for it.
+ */
+function deadlineApplies(request: Request): boolean {
+  const last = new URL(request.url).pathname.split('/').pop() ?? '';
+  return !last.includes('.');
+}
+
+/**
+ * [request] with the browser's HTTP cache told to revalidate.
+ *
+ * Only the `cache` mode changes; everything else — the URL, the headers,
+ * the credentials, the mode — is the page's own request, which is the
+ * point of using it. A request the environment refuses to rebuild (an
+ * exotic mode, a consumed body) is returned untouched rather than failing
+ * the fetch it was meant to improve.
+ */
+function revalidating(request: Request): Request {
+  try {
+    return new Request(request, { cache: 'no-cache' });
+  } catch (error) {
+    log.warn('[SW] Could not rebuild the request to revalidate:', error);
+    return request;
   }
 }
 
@@ -229,33 +308,41 @@ async function networkFirst(
 
   let response: Response;
   try {
-    // Prefer navigationPreload if enabled.
-    const preload = (await event.preloadResponse) as Response | undefined;
-    if (preload) {
-      response = preload;
-    } else {
-      // The request goes out first; the lookup above has settled by the
-      // time its result is needed.
-      const network = fetch(request);
-      const answered = (await cachedShell)
+    // The navigation preload is raced against the deadline rather than
+    // awaited. The browser starts it before this worker even wakes, and it
+    // stays pending for exactly as long as the origin takes to answer — so
+    // awaiting it made the deadline below dead code in every browser that
+    // has preload, which `activate` enables on every activation. It
+    // resolves with `undefined` when preload is off or unsupported, and
+    // the request then goes out here; the cache lookup above has settled
+    // by the time its result is needed.
+    const network = (async (): Promise<Response> => {
+      const preload = (await event.preloadResponse) as Response | undefined;
+      return preload ?? (await fetch(request));
+    })();
+    const answered =
+      (await cachedShell) && (isShellRequest || deadlineApplies(request))
         ? await withTimeout(network, NAVIGATION_TIMEOUT_MS, TOO_SLOW)
         : await network;
-      if (answered === TOO_SLOW) {
-        log.warn(
-          `[SW] The origin did not answer the navigation within ` +
-            `${NAVIGATION_TIMEOUT_MS}ms; booting from the cached shell`,
-        );
-        // The page boots from the copy it has, and the fresh one still
-        // lands in the cache when it arrives: without this, a connection
-        // that is reliably slower than the deadline would never refresh
-        // the shell at all.
-        if (isShellRequest && !hasPendingWorker()) {
-          keepAlive(event, storeLateShell(network, cacheName, notifyIndex));
-        }
-        return fallbackToCache();
+    if (answered === TOO_SLOW) {
+      log.warn(
+        `[SW] The origin did not answer the navigation within ` +
+          `${NAVIGATION_TIMEOUT_MS}ms; booting from the cached shell`,
+      );
+      // The page boots from the copy it has, and the fresh one still
+      // lands in the cache when it arrives: without this, a connection
+      // that is reliably slower than the deadline would never refresh
+      // the shell at all.
+      if (isShellRequest && !hasPendingWorker()) {
+        keepAlive(event, storeLateShell(network, cacheName, notifyIndex));
+      } else {
+        // Nobody will read it: let go of the connection instead of
+        // streaming a document into a response no one holds.
+        release(network);
       }
-      response = answered;
+      return fallbackToCache();
     }
+    response = answered;
   } catch {
     return fallbackToCache();
   }
@@ -270,6 +357,9 @@ async function networkFirst(
   }
 
   if (!response.ok) {
+    // The error page is not what the navigation gets, so let its
+    // connection go rather than leaving it to the collector.
+    release(Promise.resolve(response));
     return fallbackToCache();
   }
 
@@ -307,12 +397,17 @@ async function storeLateShell(
     // The origin never answered. Nothing to store, nothing to report.
     return;
   }
+  // Checked again here, not only when this was armed: minutes can pass
+  // between the deadline and a slow origin's answer, and the page that
+  // booted from the shell has had time to register a newer build in
+  // between. Storing now would pair that build's shell with this one's
+  // code in one cache — the mix `networkFirst` and `cacheFirst` refuse.
+  if (hasPendingWorker()) {
+    release(Promise.resolve(response));
+    return;
+  }
   if (!response.ok || response.type === 'opaqueredirect' || response.status === 0) {
-    try {
-      response.body?.cancel().catch(() => undefined);
-    } catch {
-      // Nothing to release.
-    }
+    release(Promise.resolve(response));
     return;
   }
   await storeShell(cacheName, response, notifyIndex);
@@ -398,7 +493,13 @@ async function cacheFirst(
   // version's cache is left exactly as it is. Only those: a tab that has
   // been open since before the deploy keeps its lazily cached fonts and
   // images, which are not what makes it the build it is.
-  const retired = isCodeEntry(entry) && hasPendingWorker();
+  // `servedNetworkCode` keeps the decision monotonic. Without it the
+  // bypass was re-decided per request, so a pending worker that went
+  // `redundant` mid-load — its own install failed on a 404, which is
+  // final — flipped the page back to this cache between two Core files,
+  // and the page ran the new `main.dart.mjs` against the old
+  // `main.dart.wasm`. One build per load, whichever it turns out to be.
+  const retired = isCodeEntry(entry) && (hasPendingWorker() || servedNetworkCode);
 
   // An unusable CacheStorage (evicted, blocked by a privacy mode) must
   // degrade to a plain network fetch. Rejecting here would fail the
@@ -437,6 +538,17 @@ async function cacheFirst(
    * still beats one that does not boot. `undefined` when there is none.
    */
   const lastResort = async (reason: string): Promise<Response | undefined> => {
+    // Not once the page is already running the new build's code: the old
+    // copy of this one file would be the half that cannot be linked to the
+    // other half. "Old code beats no code" holds for a whole build, not
+    // for one file out of two.
+    if (servedNetworkCode) {
+      log.warn(
+        `[SW] ${resourceKey}: ${reason}, and this load is already running ` +
+          'the newer build; failing it rather than mixing the two',
+      );
+      return undefined;
+    }
     const stale = await cache
       ?.match(new Request(resourceKey))
       .catch(() => undefined);
@@ -475,17 +587,31 @@ async function cacheFirst(
     // for `?v={hash}` of the build *this* worker was generated for, and a
     // CDN that keys on the whole URL answers that with the file the hash
     // names — the very copy being replaced.
+    //
+    // `cache: 'no-cache'` on that request, because the URL carries no hash
+    // to make it unique: on a host that sends no `Cache-Control` for
+    // `main.dart.js`, the browser's own HTTP cache is free to answer it
+    // from a heuristically fresh copy — the previous build's — and the
+    // whole bypass would quietly serve exactly what it exists to avoid.
+    // Revalidating costs a 304 when the file really is unchanged.
     const response =
       !retired && isCodeEntry(entry)
         ? await fetchRefill(request, resourceKey, entry)
-        : await fetchWithRetry(request);
+        : await fetchWithRetry(retired ? revalidating(request) : request);
 
     if (retired && !response.ok) {
       const stale = await lastResort(`HTTP ${response.status}`);
-      if (stale) return stale;
+      if (stale) {
+        release(Promise.resolve(response));
+        return stale;
+      }
     }
 
     if (response.ok) {
+      // This load is now running the newer build's code. See
+      // `servedNetworkCode`: from here on this worker neither reads its
+      // own copies of these files nor answers with them.
+      if (retired) servedNetworkCode = true;
       if (cache && !retired) {
         keepAlive(
           event,

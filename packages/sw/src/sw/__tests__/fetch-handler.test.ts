@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { handleFetch } from '../fetch-handler';
+import { handleFetch, resetCodeSourceLatch } from '../fetch-handler';
 import { createProgressReporter, type ProgressReporter } from '../progress';
 import { notifyClients } from '../notify';
 import type { ResourceManifest, SWProgressMessage } from '../../shared/types';
@@ -49,13 +49,19 @@ function makeEvent(
   if (options.method) baseInit.method = options.method;
   if (options.headers) baseInit.headers = options.headers;
   const baseRequest = new Request(url, baseInit);
-  const requestLike = new Proxy(baseRequest, {
-    get(target, prop) {
-      if (prop === 'mode' && options.mode) return options.mode;
-      const value = Reflect.get(target, prop);
-      return typeof value === 'function' ? value.bind(target) : value;
-    },
-  });
+  // Only when a mode has to be faked: a `Proxy` is not a `Request` as far
+  // as the platform is concerned (rebuilding one throws on its private
+  // state), and code under test is allowed to rebuild the request it is
+  // given, as a real worker's `event.request` can be.
+  const requestLike = options.mode
+    ? new Proxy(baseRequest, {
+        get(target, prop) {
+          if (prop === 'mode') return options.mode;
+          const value = Reflect.get(target, prop);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      })
+    : baseRequest;
   const extended: Promise<unknown>[] = [];
   const event: FakeFetchEvent = {
     request: requestLike as Request,
@@ -867,6 +873,9 @@ describe('handleFetch — a newer build is pending', () => {
 
   beforeEach(() => {
     mockCaches = installMockCaches();
+    // Each test is its own worker: the latch that keeps one load on one
+    // build is module state in the worker, and it outlives a test.
+    resetCodeSourceLatch();
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
 
@@ -935,6 +944,35 @@ describe('handleFetch — a newer build is pending', () => {
 
     expect(spy).toHaveBeenCalledOnce();
     expect((spy.mock.calls[0]![0] as Request).url).not.toContain('v=h-main');
+  });
+
+  it('revalidates that request, so the HTTP cache cannot answer it', async () => {
+    // The URL carries no hash to make it unique. On a host that sends no
+    // `Cache-Control` for `main.dart.js` the browser's own cache is free
+    // to answer it from a heuristically fresh copy — the build being
+    // replaced — and the bypass would serve exactly what it avoids.
+    const spy = installMockFetch(async () => textResponse('build-b'));
+    await mockCaches.open('app-v1');
+    withPendingWorker('installing');
+
+    const event = makeEvent(`${ORIGIN}/main.dart.js`);
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    await event._settled();
+
+    expect((spy.mock.calls[0]![0] as Request).cache).toBe('no-cache');
+  });
+
+  it('leaves a non-retired refill on the page’s own cache mode', async () => {
+    const spy = installMockFetch(async () => textResponse('fresh'));
+    await mockCaches.open('app-v1');
+
+    const event = makeEvent(`${ORIGIN}/main.dart.js`);
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    await event._settled();
+
+    // `fetchRefill` asks by hash instead, which is unique by construction.
+    expect((spy.mock.calls[0]![0] as Request).url).toContain('v=h-main');
+    expect((spy.mock.calls[0]![0] as Request).cache).not.toBe('no-cache');
   });
 
   it('serves a Required file from the network as well', async () => {
@@ -1041,5 +1079,81 @@ describe('handleFetch — a newer build is pending', () => {
 
     expect(await (await event._responded!).text()).toBe('build-a');
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Half of one build and half of another is the one combination that
+   * cannot boot: the engine refuses it with
+   * `WebAssembly.instantiate(): Import #N`, and there is nothing to retry.
+   * Each of these used to produce exactly that mix.
+   */
+  describe('one build per load', () => {
+    /** Serve one code entry from the network, as a retired worker does. */
+    async function serveNewBuild(): Promise<void> {
+      installMockFetch(async () => textResponse('build-b'));
+      withPendingWorker('installing');
+      const first = makeEvent(`${ORIGIN}/main.dart.js`);
+      handleFetch(first as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await first._settled();
+      expect(await (await first._responded!).text()).toBe('build-b');
+    }
+
+    it('fails a file rather than answering it from the older build', async () => {
+      instantTimers();
+      const cache = await mockCaches.open('app-v1');
+      await cache.put(new Request('main.dart.js'), textResponse('build-a'));
+      await cache.put(new Request('AssetManifest.json'), textResponse('old'));
+      await serveNewBuild();
+
+      // The link drops before the next code file.
+      installMockFetch(async () => {
+        throw new TypeError('Failed to fetch');
+      });
+      const second = makeEvent(`${ORIGIN}/AssetManifest.json`);
+      handleFetch(second as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await second._settled();
+
+      const response = await second._responded!;
+      expect(response.status).toBe(503);
+      expect(await response.text()).not.toBe('old');
+    });
+
+    it('keeps going to the network when the newer worker disappears', async () => {
+      // A failed install (a 404 is final) makes the pending worker
+      // `redundant`, and the bypass used to be re-decided per request.
+      const cache = await mockCaches.open('app-v1');
+      await cache.put(new Request('main.dart.js'), textResponse('build-a'));
+      await cache.put(new Request('AssetManifest.json'), textResponse('old'));
+      await serveNewBuild();
+
+      restoreRegistration?.();
+      restoreRegistration = undefined;
+      const spy = installMockFetch(async () => textResponse('new-manifest'));
+
+      const second = makeEvent(`${ORIGIN}/AssetManifest.json`);
+      handleFetch(second as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await second._settled();
+
+      expect(await (await second._responded!).text()).toBe('new-manifest');
+      expect(spy).toHaveBeenCalled();
+    });
+
+    it('still answers from the cache when the network answered nothing', async () => {
+      // A fully offline load never sets the latch, so the stale copy is
+      // still what a page that cannot reach the origin gets.
+      instantTimers();
+      const cache = await mockCaches.open('app-v1');
+      await cache.put(new Request('main.dart.js'), textResponse('build-a'));
+      installMockFetch(async () => {
+        throw new TypeError('Failed to fetch');
+      });
+      withPendingWorker('installing');
+
+      const event = makeEvent(`${ORIGIN}/main.dart.js`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await event._settled();
+
+      expect(await (await event._responded!).text()).toBe('build-a');
+    });
   });
 });

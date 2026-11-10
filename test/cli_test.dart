@@ -41,8 +41,10 @@ _flutter.buildConfig = {"engineRevision":"abc123","builds":[{"compileTarget":"da
       io.Platform.resolvedExecutable,
       [
         'bin/generate.dart',
-        // Never pick up an sw.yaml from the working directory.
-        '--config=${p.join(dir.path, 'absent.yaml')}',
+        // Never pick up an sw.yaml from the working directory. An *empty*
+        // file, not an absent one: a `--config` the caller names has to
+        // exist, or the run exits 64.
+        '--config=${_emptyConfig(dir).path}',
         ...args,
       ],
       environment: environment,
@@ -286,4 +288,15 @@ _flutter.buildConfig = {"engineRevision":"abc123","builds":[{"compileTarget":"da
       );
     });
   });
+}
+
+/// An empty YAML config inside [dir], created on first use.
+///
+/// The CLI tests must not read an `sw.yaml` from the working directory, and
+/// a `--config` that names a file which does not exist is a usage error —
+/// so the isolation is a file that exists and says nothing.
+io.File _emptyConfig(io.Directory dir) {
+  final file = io.File(p.join(dir.path, 'empty.yaml'));
+  if (!file.existsSync()) file.writeAsStringSync('');
+  return file;
 }

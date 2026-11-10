@@ -351,6 +351,11 @@ async function runPipelineWork(
     const onAppFailure = (error: unknown): void => {
       if (appFailureHandled) return;
       appFailureHandled = true;
+      // Nothing is loading any more, so nothing should narrate it. The
+      // error state is terminal in the API too; this also releases the
+      // listener, which otherwise lived until a first frame that is not
+      // coming.
+      stopListening();
       void handleAppFailure(error);
     };
 

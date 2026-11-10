@@ -82,15 +82,36 @@ color: "#112233"
       }
     });
 
-    test('corrupt YAML falls through to defaults without throwing', () async {
+    test('corrupt YAML in a named config fails the run', () async {
+      // A file the caller named by hand is a requirement: deploying with
+      // every default because of a syntax error is worse than stopping.
       final tempDir = await io.Directory.systemTemp.createTemp('sw-config-');
       try {
         final yaml = io.File(p.join(tempDir.path, 'sw.yaml'))
           ..writeAsStringSync(': : not valid yaml : :\n');
-        final config = GeneratorConfig.parse(['--config=${yaml.path}']);
-        // Falls back to defaults.
+        expect(
+          () => GeneratorConfig.parse(['--config=${yaml.path}']),
+          throwsA(isA<FormatException>()),
+        );
+      } finally {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    test('corrupt YAML in the default sw.yaml only warns', () async {
+      // Nobody asked for this file by name; it is a convenience, and the
+      // run continues on CLI args, env and defaults as it always did.
+      final tempDir = await io.Directory.systemTemp.createTemp('sw-config-');
+      final cwd = io.Directory.current;
+      try {
+        io.File(p.join(tempDir.path, 'sw.yaml'))
+          ..createSync()
+          ..writeAsStringSync(': : not valid yaml : :\n');
+        io.Directory.current = tempDir;
+        final config = GeneratorConfig.parse(const <String>[]);
         expect(config.cachePrefix, 'app-cache');
       } finally {
+        io.Directory.current = cwd;
         tempDir.deleteSync(recursive: true);
       }
     });
@@ -267,19 +288,28 @@ max-progress: 80
       expect(out.result.color, '#25D366');
     });
 
-    test('warns when the YAML is not a mapping', () async {
-      final out = await parseWith('- prefix\n- shop\n');
-      expect(out.stderr, contains('is not a mapping'));
-      expect(out.result.cachePrefix, 'app-cache');
+    test('fails when a named YAML is not a mapping', () async {
+      expect(
+        () => parseWith('- prefix\n- shop\n'),
+        throwsA(isA<FormatException>()),
+      );
     });
 
-    test('warns when an explicit --config does not exist', () async {
+    test('fails when an explicit --config does not exist', () async {
+      // `--config=sw-prod.yaml` with a typo in it used to warn and then
+      // deploy with the prefix, the categories and the branding of an app
+      // nobody configured.
       final missing = p.join(tempDir.path, 'ci', 'sw.yaml');
-      final out = await captureOutput(
+      expect(
         () => GeneratorConfig.parse(['--config=$missing']),
+        throwsA(
+          isA<FormatException>().having(
+            (e) => e.message,
+            'message',
+            contains('does not exist'),
+          ),
+        ),
       );
-      expect(out.stderr, contains('Warning: config file not found: $missing'));
-      expect(out.result.cachePrefix, 'app-cache');
     });
 
     group('theme', () {
@@ -715,6 +745,50 @@ no-cleanup: no
       expect(
         () => GeneratorConfig.parse(const ['--bootstrap-output=sw.js']),
         formatError('both be written to "sw.js"'),
+      );
+    });
+
+    // Writing the worker as `flutter_service_worker.js` — the name the
+    // browsers already have registered, so a natural migration choice —
+    // used to succeed, print "Done!", and leave nothing behind: cleanup
+    // deletes Flutter's loader files after the outputs are written.
+    for (final name in [
+      'flutter_service_worker.js',
+      'flutter_bootstrap.js',
+      'flutter.js',
+      'Flutter.js',
+      'main.dart.js',
+      'index.html',
+    ]) {
+      test('rejects the output name "$name", which the run would delete', () {
+        expect(
+          () => GeneratorConfig.parse(['--output=$name']),
+          formatError('--output="$name"'),
+        );
+        expect(
+          () => GeneratorConfig.parse(['--bootstrap-output=$name']),
+          formatError('--bootstrap-output="$name"'),
+        );
+      });
+    }
+
+    // The prefix names every cache the worker keeps and scopes the
+    // loading screen's "clear the cache and reload". An empty one made
+    // that button delete every cache on the origin, another app's
+    // included.
+    for (final prefix in ['', '   ', 'app/cache', r'app\cache', 'app ']) {
+      test('rejects the cache prefix "$prefix"', () {
+        expect(
+          () => GeneratorConfig.parse(['--prefix=$prefix']),
+          formatError('--prefix="$prefix"'),
+        );
+      });
+    }
+
+    test('accepts a plain cache prefix', () {
+      expect(
+        GeneratorConfig.parse(const ['--prefix=shop-admin']).cachePrefix,
+        'shop-admin',
       );
     });
 

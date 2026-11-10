@@ -82,7 +82,7 @@ export function resolveConfig(
       logo: userConfig.logo ?? d.logo ?? '',
       title: userConfig.title ?? d.title ?? '',
       theme: userConfig.theme ?? d.theme ?? 'auto',
-      color: userConfig.color ?? d.color ?? '#25D366',
+      color: userConfig.color ?? d.color ?? DEFAULT_COLOR,
       showPercentage:
         userConfig.showPercentage ?? d.showPercentage ?? true,
       minProgress:
@@ -94,6 +94,15 @@ export function resolveConfig(
 }
 
 const THEMES: ReadonlySet<string> = new Set(['light', 'dark', 'auto']);
+/** The brand green the widget falls back to. */
+const DEFAULT_COLOR = '#25D366';
+/**
+ * Characters that would end the CSS declaration a colour is written into,
+ * or start a comment inside it. Parentheses are allowed: `rgb()`, `hsl()`
+ * and `var()` are colours a page may legitimately pass, and on their own
+ * they cannot escape a declaration.
+ */
+const CSS_UNSAFE = /[;{}]|\/\*|<|>/;
 const HEX_SHORT = /^#([0-9a-f])([0-9a-f])([0-9a-f])([0-9a-f])?$/i;
 const HEX_6 = /^#[0-9a-f]{6}$/i;
 const HEX_8 = /^#[0-9a-f]{8}$/i;
@@ -165,10 +174,27 @@ function normalizeUi(ui: ResolvedUi): ResolvedUi {
   let color = ui.color;
   if (typeof raw.color === 'string' && HEX_SHORT.test(raw.color)) {
     color = expandShortHex(raw.color);
-  } else if (
-    typeof raw.color !== 'string' ||
-    !(HEX_6.test(raw.color) || HEX_8.test(raw.color))
-  ) {
+  } else if (typeof raw.color !== 'string') {
+    // Not a string at all — `{"color": 16711680}` is a common mistake in
+    // `data-config`, which is untyped JSON. Everything downstream treats
+    // it as one: the contrast correction calls `.trim()` on it and throws,
+    // and a stylesheet that throws leaves the page with no loading screen
+    // and no error screen either.
+    color = DEFAULT_COLOR;
+    warnConfig(
+      `color ${JSON.stringify(raw.color)} is not a string, using ${DEFAULT_COLOR}`,
+    );
+  } else if (CSS_UNSAFE.test(raw.color)) {
+    // The value is interpolated into the widget's stylesheet. One
+    // carrying `;` or `}` closes the declaration and corrupts every rule
+    // after it — a loading screen that renders as unstyled text, from a
+    // single stray character.
+    color = DEFAULT_COLOR;
+    warnConfig(
+      `color ${JSON.stringify(raw.color)} is not a usable CSS colour, ` +
+        `using ${DEFAULT_COLOR}`,
+    );
+  } else if (!(HEX_6.test(raw.color) || HEX_8.test(raw.color))) {
     warnConfig(
       `color ${JSON.stringify(raw.color)} is not #rgb, #rrggbb or #rrggbbaa; ` +
         'glow and pulse effects may not render',

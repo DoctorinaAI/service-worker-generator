@@ -57,6 +57,14 @@ export class BootstrapAPI {
    */
   update(phase: BootstrapPhase, percent: number, message: string): void {
     if (this._disposed) return;
+    // A failure is the end of this load. The service worker keeps
+    // narrating its own install long after the page has given up — it
+    // reports to every client, controlled or not — and so does a Dart app
+    // that called `updateLoadingProgress` before it died. Letting any of
+    // that through replaced the sentence the user was given with a
+    // resource counter in error red, and left `Bootstrap.progress` with no
+    // trace of the error anyone subscribed for.
+    if (this._state.phase === 'error') return;
 
     this._state = { phase, percent, message };
     this.guardWidget('updateProgress', () =>

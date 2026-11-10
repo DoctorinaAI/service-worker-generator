@@ -43,6 +43,11 @@ export class LoadingWidget {
   private stallBudgetMs: number = STALLED_TIMEOUT_MS;
   private currentPercent = 0;
   private disposed = false;
+  /**
+   * Set by [showError]. A failure is the end of this load, so nothing
+   * that arrives afterwards may undo the error screen.
+   */
+  private errored = false;
 
   /**
    * @param config - Widget appearance and progress range.
@@ -120,7 +125,12 @@ export class LoadingWidget {
     if (this.disposed) return;
 
     // Only allow forward progress
+    const before = this.currentPercent;
     this.currentPercent = Math.max(this.currentPercent, Math.min(percent, 100));
+    // The load is moving again, so the stalled overlay is a lie: it used
+    // to stay up — blurred logo, pulsing reload button — for the rest of
+    // the load once a single slow stretch had raised it.
+    if (this.currentPercent > before) this.hideReloadOverlay();
 
     if (this.progressCircle) {
       const offset =
@@ -162,6 +172,7 @@ export class LoadingWidget {
     this.statusText.style.color = this.errorColor;
     this.statusContainer?.setAttribute('role', 'alert');
     this.statusContainer?.setAttribute('aria-live', 'assertive');
+    this.errored = true;
     this.showReloadOverlay();
   }
 
@@ -372,7 +383,10 @@ export class LoadingWidget {
     statusContainer.setAttribute('aria-live', 'polite');
     this.statusContainer = statusContainer;
     this.statusText = document.createElement('span');
-    this.statusText.textContent = 'Initializing';
+    // From the string table, not a literal: this is the label the user
+    // reads until the pipeline's first stage update lands, and on a
+    // pipeline that throws before that it is the only label they get.
+    this.statusText.textContent = this.text('starting');
     const dots = document.createElement('span');
     dots.className = 'sw-loading-dots';
     statusContainer.appendChild(this.statusText);
@@ -393,6 +407,19 @@ export class LoadingWidget {
   private showReloadOverlay(): void {
     this.logoContainer?.classList.add('is-stalled');
     this.labelReloadButton();
+  }
+
+  /**
+   * Take the stalled overlay back down.
+   *
+   * Only progress does this, never a message: a stage label changing while
+   * the ring stands still is exactly the stall the overlay is reporting.
+   * The error screen raises it again and nothing moves after that, so this
+   * cannot hide a failure.
+   */
+  private hideReloadOverlay(): void {
+    if (this.errored) return;
+    this.logoContainer?.classList.remove('is-stalled');
   }
 
   private resetStallTimer(): void {

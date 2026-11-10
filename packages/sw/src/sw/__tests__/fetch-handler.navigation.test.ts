@@ -42,18 +42,29 @@ interface FakeFetchEvent {
 
 function makeEvent(
   url: string,
-  options: { method?: string; mode?: RequestMode; preload?: Response } = {},
+  options: {
+    method?: string;
+    mode?: RequestMode;
+    /** A promise stands for a preload the browser has not finished yet. */
+    preload?: Response | Promise<Response | undefined>;
+  } = {},
 ): FakeFetchEvent {
   const baseInit: RequestInit = {};
   if (options.method) baseInit.method = options.method;
   const baseRequest = new Request(url, baseInit);
-  const requestLike = new Proxy(baseRequest, {
-    get(target, prop) {
-      if (prop === 'mode' && options.mode) return options.mode;
-      const value = Reflect.get(target, prop);
-      return typeof value === 'function' ? value.bind(target) : value;
-    },
-  });
+  // Only when a mode has to be faked: a `Proxy` is not a `Request` as far
+  // as the platform is concerned (rebuilding one throws on its private
+  // state), and code under test is allowed to rebuild the request it is
+  // given, as a real worker's `event.request` can be.
+  const requestLike = options.mode
+    ? new Proxy(baseRequest, {
+        get(target, prop) {
+          if (prop === 'mode') return options.mode;
+          const value = Reflect.get(target, prop);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      })
+    : baseRequest;
   const extended: Promise<unknown>[] = [];
   const event: FakeFetchEvent = {
     request: requestLike as Request,
@@ -516,6 +527,82 @@ describe('navigation handling — the origin takes its time', () => {
     expect(await (await event._responded!).text()).toBe(SHELL);
   });
 
+  it('applies the deadline to a navigation preload as well', async () => {
+    // `activate` enables navigation preload, so in every browser that has
+    // it the pending promise below — not `fetch` — is what the deadline
+    // has to race. Awaiting it first made this the common case and the
+    // deadline dead code: a slow origin held a blank page for as long as
+    // it liked while the shell sat in the cache.
+    const cache = await mockCaches.open(CONTENT_CACHE);
+    await cache.put(new Request('index.html'), textResponse(SHELL));
+    const spy = hangingFetch();
+    instantTimers();
+
+    const event = makeEvent(`${ORIGIN}/`, {
+      mode: 'navigate',
+      preload: new Promise<Response | undefined>(() => undefined),
+    });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+
+    expect(await (await event._responded!).text()).toBe(SHELL);
+    // The preload is the request in flight; no second one is made.
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('stores the preload answer that arrived after the deadline', async () => {
+    const cache = await mockCaches.open(CONTENT_CACHE);
+    await cache.put(new Request('index.html'), textResponse(SHELL));
+    hangingFetch();
+    instantTimers();
+    let answer: (response: Response) => void = () => undefined;
+    const preload = new Promise<Response | undefined>(
+      (resolve) => (answer = resolve),
+    );
+
+    const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate', preload });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+
+    expect(await (await event._responded!).text()).toBe(SHELL);
+    answer(textResponse('<html>fresh</html>'));
+    await event._settled();
+
+    const stored = await cache.match(new Request('index.html'));
+    expect(await stored!.text()).toBe('<html>fresh</html>');
+  });
+
+  it('lets the origin finish answering a document of its own', async () => {
+    // A path whose last segment looks like a file is a page the origin
+    // serves itself, not a Flutter route the host rewrites to the shell.
+    // Handing it the app shell because it was slow replaces a page that
+    // was coming with the wrong page entirely.
+    const cache = await mockCaches.open(CONTENT_CACHE);
+    await cache.put(new Request('index.html'), textResponse(SHELL));
+    instantTimers();
+    let answer: (response: Response) => void = () => undefined;
+    (globalThis as unknown as { fetch: unknown }).fetch = vi.fn(
+      () => new Promise<Response>((resolve) => (answer = resolve)),
+    );
+
+    const event = makeEvent(`${ORIGIN}/legal/privacy.html`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    answer(textResponse(AUTH_PAGE));
+
+    expect(await (await event._responded!).text()).toBe(AUTH_PAGE);
+  });
+
+  it('still applies the deadline to a Flutter route', async () => {
+    const cache = await mockCaches.open(CONTENT_CACHE);
+    await cache.put(new Request('index.html'), textResponse(SHELL));
+    hangingFetch();
+    instantTimers();
+
+    const event = makeEvent(`${ORIGIN}/chat/42`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+
+    expect(await (await event._responded!).text()).toBe(SHELL);
+  });
+
   it('waits for the origin when there is no cached shell', async () => {
     // A 503 here would be a first visit on a slow link answered with an
     // error page, where a page without a worker would simply have waited.
@@ -593,6 +680,40 @@ describe('navigation handling — the origin takes its time', () => {
 
     const stored = await cache.match(new Request('index.html'));
     expect(await stored!.text()).toBe('<html>fresh</html>');
+  });
+
+  it('drops a late shell once a newer build has appeared', async () => {
+    // Minutes can pass between the deadline and a slow origin's answer,
+    // and the page that booted from the shell has had time to register a
+    // newer build in between. Storing then would pair that build's shell
+    // with this one's code in one cache — the mix that cannot boot.
+    const cache = await mockCaches.open(CONTENT_CACHE);
+    await cache.put(new Request('index.html'), textResponse(SHELL));
+    instantTimers();
+    let answer: (response: Response) => void = () => undefined;
+    (globalThis as unknown as { fetch: unknown }).fetch = vi.fn(
+      () => new Promise<Response>((resolve) => (answer = resolve)),
+    );
+
+    const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    expect(await (await event._responded!).text()).toBe(SHELL);
+
+    // The page booted, ran the new build's bootstrap and registered it.
+    const target = self as unknown as { registration?: unknown };
+    const had = 'registration' in target;
+    const previous = target.registration;
+    target.registration = { installing: { scriptURL: `${ORIGIN}/sw.js?v=v2` } };
+    try {
+      answer(textResponse('<html>build B</html>'));
+      await event._settled();
+
+      const stored = await cache.match(new Request('index.html'));
+      expect(await stored!.text()).toBe(SHELL);
+    } finally {
+      if (had) target.registration = previous;
+      else delete target.registration;
+    }
   });
 
   it('stores nothing when the origin never answers', async () => {

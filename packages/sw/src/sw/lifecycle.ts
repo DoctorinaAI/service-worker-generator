@@ -4,7 +4,7 @@ import type {
   SWStatusMessage,
 } from '../shared/types';
 import { log } from '../shared/logger';
-import { isQuotaExceeded } from './quota';
+import { causedByQuota } from './quota';
 import { notifyClients } from './notify';
 import { ownCacheNames } from '../shared/cache-ownership';
 
@@ -37,7 +37,7 @@ export async function reportLifecycle(
       : error instanceof Error
         ? error.message
         : String(error);
-  const isQuota = error !== undefined && isQuotaExceeded(error);
+  const isQuota = error !== undefined && causedByQuota(error);
   if (status === 'failed' && reason !== undefined) {
     lastError = { phase, reason, isQuota };
   }

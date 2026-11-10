@@ -436,12 +436,24 @@ export async function mapWithConcurrency<T, R>(
   if (n === 0) return results;
   const size = Math.max(1, Math.min(limit, n));
   let cursor = 0;
+  // Once one worker has thrown, `Promise.all` below has already rejected
+  // and nothing will read what the others produce. They used to run on
+  // regardless, through every remaining item: a failed cache swap kept
+  // writing into caches its own caller was in the middle of deleting, and
+  // a precache that ran out of storage kept downloading files it could
+  // not store, with no one left to hear either failure.
+  let failed = false;
 
   async function run(): Promise<void> {
-    while (true) {
+    while (!failed) {
       const i = cursor++;
       if (i >= n) return;
-      results[i] = await worker(items[i]!, i);
+      try {
+        results[i] = await worker(items[i]!, i);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
     }
   }
 

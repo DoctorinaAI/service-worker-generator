@@ -7,8 +7,7 @@ name: sw
 description: >
   Generates a service worker and a bootstrap script for a Flutter Web
   build: per-category caching with integrity checks, a loading screen with
-  real progress, CanvasKit from the CDN with a local fallback, and deploys
-  that land as one coherent build. Replaces flutter_bootstrap.js.
+  real progress, and deploys that land as one coherent build.
 
 version: 0.4.0
 

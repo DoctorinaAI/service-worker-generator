@@ -75,6 +75,41 @@ test.describe('origin faults', () => {
     await expect(page.locator('script[data-sw-bootstrap]')).toHaveCount(1);
   });
 
+  test('boots from the cached shell when the origin is merely slow', async ({ page }) => {
+    // The deadline the worker gives a navigation has to race the *navigation
+    // preload*, which `activate` enables: the browser starts that request
+    // before the worker wakes, and awaiting it first made the deadline dead
+    // code in every engine that has preload. The origin here accepts the
+    // connection and then says nothing for far longer than the deadline —
+    // an overloaded backend, a cold serverless function.
+    test.setTimeout(60_000);
+    await settle(page, host.origin);
+
+    const held: NodeJS.Timeout[] = [];
+    host.fault = ({ pathname }, res) => {
+      if (pathname !== '/' && pathname !== '/index.html') return false;
+      held.push(
+        setTimeout(() => {
+          res.writeHead(200, { 'Content-Type': 'text/html' }).end('<html>late</html>');
+        }, 20_000),
+      );
+      return true;
+    };
+
+    const started = Date.now();
+    const response = await page.goto(`${host.origin}/index.html`, {
+      waitUntil: 'commit',
+    });
+    const waited = Date.now() - started;
+
+    expect(response?.status()).toBe(200);
+    // Comfortably under the origin's 20 s, and not the 3 s deadline on the
+    // nose: engines differ in when they start the preload.
+    expect(waited).toBeLessThan(12_000);
+    await expect(page).toHaveTitle('Service Worker');
+    for (const timer of held) clearTimeout(timer);
+  });
+
   test('a 500 from the origin does not replace the cached shell', async ({ page }) => {
     await settle(page, host.origin);
 

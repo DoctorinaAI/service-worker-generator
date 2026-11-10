@@ -65,7 +65,12 @@ const server = http.createServer((req, res) => {
   const file = path.join(root, pathname === '/' ? 'index.html' : pathname);
   // No SPA rewrite on purpose: a deep route must 404 here, which is what
   // makes the pre-cached shell the only thing that can answer it.
-  const stat = file.startsWith(root) ? fs.statSync(file, { throwIfNoEntry: false }) : undefined;
+  //
+  // `root + sep` rather than `root`: a plain prefix check also accepts a
+  // sibling whose name starts with the root's (`/../web-private/x` next to
+  // `…/build/web`), which a `..` in the path can reach through `join`.
+  const inRoot = file === root || file.startsWith(root + path.sep);
+  const stat = inRoot ? fs.statSync(file, { throwIfNoEntry: false }) : undefined;
   if (!stat || stat.isDirectory()) {
     res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Not found');

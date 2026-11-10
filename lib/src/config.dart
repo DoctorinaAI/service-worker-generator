@@ -265,7 +265,12 @@ class GeneratorConfig {
       inputDir: resolve('input', 'SW_INPUT', 'build/web'),
       swOutput: swOutput,
       bootstrapOutput: bootstrapOutput,
-      cachePrefix: resolve('prefix', 'SW_PREFIX', 'app-cache'),
+      cachePrefix: resolveChecked(
+        'prefix',
+        'SW_PREFIX',
+        'app-cache',
+        _checkPrefix,
+      ),
       // Empty version is a sentinel: the generator will derive it from
       // the manifest content hash after scanning files. Any CLI/YAML/env
       // override preempts that derivation.
@@ -308,6 +313,7 @@ class GeneratorConfig {
     _checkOutputName(swOutput, '--output');
     _checkOutputName(bootstrapOutput, '--bootstrap-output');
     _checkDistinctOutputs(swOutput, bootstrapOutput);
+    _checkPrefix(cachePrefix, '--prefix');
     if (version.isNotEmpty) _checkVersion(version, '--version');
     _checkLogLevel(logLevel, '--log-level');
   }
@@ -391,36 +397,52 @@ class GeneratorConfig {
     final file = io.File(path ?? 'sw.yaml');
     final none = (path: file.path, nodes: const <String, yaml.YamlNode>{});
     if (!file.existsSync()) {
+      // A file the caller named is a requirement, not a preference: a
+      // typo in `--config=sw-prod.yaml` used to warn and then deploy with
+      // every default — the prefix, the categories and the branding of an
+      // app nobody configured. The implicit `sw.yaml` stays optional.
       if (explicit) {
-        io.stderr.writeln(
-          'Warning: config file not found: ${file.path}. '
-          'Continuing without it (CLI args, env and defaults only).',
-        );
+        throw FormatException('--config="${file.path}" does not exist.');
       }
       return none;
     }
-    final nodes = <String, yaml.YamlNode>{};
+    final yaml.YamlNode doc;
     try {
       final content = file.readAsStringSync();
       // Nodes, not values: a value such as `version: 1.10` must keep the
       // text the user wrote rather than become the double 1.1.
-      final doc = yaml.loadYamlNode(content, sourceUrl: file.uri);
-      // An empty file is a valid "no settings".
-      if (doc is yaml.YamlScalar && doc.value == null) return none;
-      if (doc is! yaml.YamlMap) {
-        io.stderr.writeln(
-          'Warning: config file ${file.path} is not a mapping of option '
-          'names to values (found ${doc.value.runtimeType}); it is ignored.',
-        );
-        return none;
-      }
-      for (final MapEntry(:key, :value) in doc.nodes.entries) {
-        final name = key is yaml.YamlNode ? key.value : key;
-        nodes['$name'] = value;
-      }
+      doc = yaml.loadYamlNode(content, sourceUrl: file.uri);
     } on Object catch (e) {
+      // Unparseable YAML in a file that was asked for by name is a
+      // configuration error, not something to continue past with defaults.
+      // (`YamlException` is itself a `FormatException`, so this cannot be
+      // told apart by type from the ones raised deliberately below — which
+      // is why they are raised outside this `try`.)
+      if (explicit) {
+        throw FormatException('Failed to parse ${file.path}: $e');
+      }
       io.stderr.writeln('Warning: Failed to parse YAML config: $e');
       return none;
+    }
+    // An empty file is a valid "no settings".
+    if (doc is yaml.YamlScalar && doc.value == null) return none;
+    if (doc is! yaml.YamlMap) {
+      if (explicit) {
+        throw FormatException(
+          'Config file ${file.path} is not a mapping of option names to '
+          'values (found ${doc.value.runtimeType}).',
+        );
+      }
+      io.stderr.writeln(
+        'Warning: config file ${file.path} is not a mapping of option '
+        'names to values (found ${doc.value.runtimeType}); it is ignored.',
+      );
+      return none;
+    }
+    final nodes = <String, yaml.YamlNode>{};
+    for (final MapEntry(:key, :value) in doc.nodes.entries) {
+      final name = key is yaml.YamlNode ? key.value : key;
+      nodes['$name'] = value;
     }
     io.stdout.writeln('Using config file: ${file.path}');
     for (final MapEntry(:key, :value) in nodes.entries) {
@@ -536,6 +558,15 @@ void _checkOutputName(String name, String option, [String where = '']) {
       p.windows.isAbsolute(name) ||
       name.contains(':')) {
     problem = 'is an absolute path, which would leave the build directory';
+  } else if (_reservedOutputNames.contains(name.toLowerCase())) {
+    problem =
+        'is a name this generator removes from the build. Cleanup deletes '
+        'Flutter\'s own loader files after generation, so the file written '
+        'here would be deleted again and the deploy would 404 for it';
+  } else if (name.toLowerCase() == 'index.html') {
+    problem =
+        'is the app shell, which the generator rewrites rather than '
+        'replaces';
   } else {
     return;
   }
@@ -545,12 +576,56 @@ void _checkOutputName(String name, String option, [String where = '']) {
   );
 }
 
+/// Names the generator's own cleanup deletes from the build directory, so
+/// an output written under one of them would not survive the run. The list
+/// mirrors `_flutterFilesToRemove` in `cleanup.dart`; `main.dart.js` is
+/// here for a different reason — it is a Core manifest entry, hashed
+/// before the outputs are written, so overwriting it makes every load fail
+/// the integrity check.
+const Set<String> _reservedOutputNames = {
+  'flutter_bootstrap.js',
+  'flutter_service_worker.js',
+  'flutter.js',
+  '.last_build_id',
+  'main.dart.js',
+  'main.dart.wasm',
+  'main.dart.mjs',
+};
+
 /// Reject a service worker and a bootstrap written to the same file.
 void _checkDistinctOutputs(String swOutput, String bootstrapOutput) {
   if (swOutput.toLowerCase() != bootstrapOutput.toLowerCase()) return;
   throw FormatException(
     'The service worker and the bootstrap would both be written to '
     '"$swOutput"; give --output and --bootstrap-output different names.',
+  );
+}
+
+/// Reject a cache prefix that cannot name a cache of this app's own.
+///
+/// Every cache the worker keeps is named `{prefix}-...`, and the prefix is
+/// also what scopes the loading screen's "clear the cache and reload": an
+/// empty one makes that button delete every cache on the origin, including
+/// another app's deployed beside this one. A prefix that is only
+/// whitespace, or one carrying a path separator, names caches no cleanup
+/// of ours matches.
+void _checkPrefix(String prefix, String option, [String where = '']) {
+  final String problem;
+  if (prefix.trim().isEmpty) {
+    problem =
+        'is empty. The prefix names this app\'s caches and scopes the '
+        'loading screen\'s cache reset, which would otherwise clear every '
+        'cache on the origin';
+  } else if (prefix != prefix.trim()) {
+    problem = 'starts or ends with whitespace';
+  } else if (prefix.contains('/') || prefix.contains(r'\')) {
+    problem = 'contains a path separator';
+  } else {
+    return;
+  }
+  throw FormatException(
+    '$option="$prefix"$where $problem. Give a plain name such as '
+    '"app-cache".',
   );
 }
 

@@ -14,6 +14,7 @@ import {
   guardBodyStall,
   isHtmlFallback,
   isRetriableStatus,
+  mapWithConcurrency,
   retryAfterDelay,
   withTimeout,
 } from '../utils';
@@ -741,5 +742,50 @@ describe('guardBody — byte reporting', () => {
     const response = streaming([1]);
     expect(guardBody(response, {})).toBe(response);
     expect(seen).toEqual([]);
+  });
+});
+
+describe('mapWithConcurrency', () => {
+  it('runs every item with a bounded number in flight', async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const result = await mapWithConcurrency(
+      [1, 2, 3, 4, 5, 6, 7, 8],
+      3,
+      async (n) => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await Promise.resolve();
+        inFlight--;
+        return n * 2;
+      },
+    );
+
+    expect(result).toEqual([2, 4, 6, 8, 10, 12, 14, 16]);
+    expect(peak).toBeLessThanOrEqual(3);
+  });
+
+  it('stops handing out work once one item has failed', async () => {
+    // Nothing reads what the other workers produce after the rejection,
+    // and what they do meanwhile is not harmless: a failed cache swap kept
+    // writing into caches its caller was deleting, and a precache that ran
+    // out of storage kept downloading files it could not store.
+    const started: number[] = [];
+    const items = Array.from({ length: 50 }, (_, i) => i);
+
+    await expect(
+      mapWithConcurrency(items, 4, async (n) => {
+        started.push(n);
+        await Promise.resolve();
+        if (n === 0) throw new Error('out of storage');
+        return n;
+      }),
+    ).rejects.toThrow('out of storage');
+
+    expect(started.length).toBeLessThan(items.length);
+  });
+
+  it('is a no-op for an empty list', async () => {
+    expect(await mapWithConcurrency([], 4, async () => 1)).toEqual([]);
   });
 });

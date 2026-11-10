@@ -380,4 +380,40 @@ describe('createActivateHandler', () => {
     expect(mockCaches.peek('app-temp-v2')).toBeUndefined();
     expect(claimSpy).toHaveBeenCalledOnce();
   });
+
+  it('tells the page about a swap that failed for any other reason', async () => {
+    // The app now runs from the network on every load. The quota branch
+    // reported that; this one only logged it, inside the worker, where
+    // nothing on the page — and nothing that collects errors for the app —
+    // can see it.
+    const posted: unknown[] = [];
+    (self as unknown as { clients: unknown }).clients = {
+      claim: claimSpy,
+      matchAll: async () => [
+        { postMessage: (message: unknown) => posted.push(message) },
+      ],
+    };
+    (self as unknown as { registration: unknown }).registration = {};
+    const temp = await mockCaches.open('app-temp-v2');
+    await temp.put(new Request('main.dart.js'), textResponse('x'));
+    const content = await mockCaches.open('app-v2');
+    vi.spyOn(content, 'put').mockRejectedValue(new TypeError('broken'));
+
+    const handler = createActivateHandler('app', 'v2', {});
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    expect(posted).toEqual([
+      expect.objectContaining({
+        type: 'sw-lifecycle',
+        swVersion: 'v2',
+        phase: 'activate',
+        status: 'failed',
+        reason: 'broken',
+      }),
+    ]);
+    // Not a quota failure, so nothing claims it was one.
+    expect(posted[0]).not.toHaveProperty('isQuota');
+  });
 });

@@ -30,8 +30,28 @@ jobs:
       - name: 📥 Install dependencies
         run: npm ci
 
+      - name: 🏷️ Check the tag against pubspec.yaml
+        # A tag is what publishes, and nothing else compares the two: a
+        # `0.4.1` tag on a tree whose pubspec still says `0.4.0` would
+        # publish 0.4.0 again (or fail deep inside the publish job), and a
+        # version missing from the CHANGELOG ships undocumented.
+        run: |
+          version=$(grep '^version:' pubspec.yaml | awk '{print $2}' | tr -d '[:space:]')
+          echo "pubspec: $version, ref: ${GITHUB_REF_NAME:-<none>}"
+          if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF_NAME}" != "$version" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match pubspec version $version"
+            exit 1
+          fi
+          grep -q "# $version" CHANGELOG.md || {
+            echo "::error::Version $version is not in CHANGELOG.md"
+            exit 1
+          }
+
       - name: 🔍 Type check
         run: npm -w packages/sw run check
+
+      - name: 🧹 Lint
+        run: npm run lint
 
       - name: 🧪 Run TypeScript tests
         run: npm -w packages/sw run test
@@ -48,6 +68,9 @@ jobs:
         # Without the flag, pub also resolves example/, which needs the Flutter
         # SDK this job does not have.
         run: dart pub get --no-example
+
+      - name: 🚦 Check code format
+        run: dart format --set-exit-if-changed --line-length 80 -o none bin/ lib/ test/
 
       - name: 📈 Check analyzer
         run: dart analyze --fatal-warnings lib/ bin/ test/
@@ -81,9 +104,39 @@ jobs:
           fi
           echo "The published file set is clean."
 
+  verify-oldest:
+    # `pubspec.yaml` claims Dart >=3.8, and `dart pub global activate sw`
+    # compiles the package on whatever SDK the user has. A tag that never
+    # went through `Checkout` — a hotfix pushed straight to a tag — would
+    # otherwise be published without anything having compiled it on the
+    # oldest SDK it promises to support.
+    name: "Verify on the oldest supported SDK"
+    runs-on: ubuntu-latest
+    container:
+      image: dart:3.8
+    env:
+      PUB_CACHE: /github/home/.pub-cache
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: 📦 Checkout repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: 📥 Install dependencies
+        # Without the flag, pub also resolves example/, which needs the
+        # Flutter SDK this job does not have.
+        run: dart pub get --no-example
+
+      - name: 📈 Check analyzer
+        run: dart analyze --fatal-warnings lib/ bin/ test/
+
+      - name: 🧪 Run unit tests
+        run: dart test --platform=vm --timeout=60s --exclude-tags=integration
+
   deploy:
     name: "Deploy to Pub.dev"
-    needs: verify
+    needs: [verify, verify-oldest]
     permissions:
       id-token: write
     uses: dart-lang/setup-dart/.github/workflows/publish.yml@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1

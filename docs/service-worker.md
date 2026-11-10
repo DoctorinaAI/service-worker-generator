@@ -69,7 +69,12 @@ that is true, it stops using and filling its cache for the pre-cached set:
 
 - `Core` and `Required` requests go to the network, with the page's own URL
   rather than `?v={hash}` — that hash names the copy being replaced, and a
-  CDN that keys on the whole URL would serve exactly that.
+  CDN that keys on the whole URL would serve exactly that. Since that URL
+  carries nothing to make it unique, the request is sent with
+  `cache: 'no-cache'`: on a host that sends no `Cache-Control` for
+  `main.dart.js`, the browser's own HTTP cache is otherwise free to answer
+  it from a heuristically fresh copy — the previous build's — and the
+  bypass would quietly serve what it exists to avoid.
 - Nothing is written to this version's content cache, the app shell
   included: the new shell next to the previous build's code is the one pair
   that cannot boot, and the new worker's install stores the matching one.
@@ -78,10 +83,20 @@ that is true, it stops using and filling its cache for the pre-cached set:
   has been open since before the deploy keeps them.
 - If the network cannot answer — offline, or an origin mid-deploy — the
   cached copy is served after all, with a warning. Old code beats no code.
+  That holds for a whole build, not for one file out of two: once this
+  worker has answered any of those files *from the network*, it stops
+  falling back to its own copies and fails the request instead (503, and
+  an `error` progress event the page can show). Half of one build linked
+  against half of another is the one combination that cannot boot, and it
+  fails inside the engine with nothing to retry.
 
 Only the browser creates those workers, and only for a `sw.js` whose bytes
 differ from the one it has, so the state is read from the registration on
-every fetch rather than remembered: a worker is terminated between events.
+every fetch. One thing is remembered: that the network has already answered
+for the new build. A pending worker can go `redundant` mid-load — its own
+install fails on a 404, which is final — and without that latch the next
+file would come from this cache, which is the same mixed build by another
+route.
 
 The previous behaviour was to serve the cache: the first load after a deploy
 ran the previous build's `main.dart.js` inside the new build's page until
@@ -94,12 +109,23 @@ into the old cache failed the body size check (#36).
   itself — `fetch(request)` with no init, so it keeps its `navigate` mode —
   and it is not retried: with a cached shell in hand the fallback answers
   after `NAVIGATION_TIMEOUT_MS` (3 s), because the user is watching a blank
-  page and the shell boots the app, which loads its own route. Without a
-  cached copy there is nothing better to wait for, so the fetch gets as long
-  as it needs, exactly as a page with no worker would. An answer that
-  arrives after the deadline still refreshes the cached shell in the
-  background, so a connection reliably slower than it does not keep booting
-  from a copy that is never updated
+  page and the shell boots the app, which loads its own route. The deadline
+  races the navigation preload too, not only the worker's own `fetch`:
+  `activate` enables preload, so in every browser that has it the preload
+  is what the navigation is waiting on. Without a cached copy there is
+  nothing better to wait for, so the fetch gets as long as it needs,
+  exactly as a page with no worker would. An answer that arrives after the
+  deadline still refreshes the cached shell in the background, so a
+  connection reliably slower than it does not keep booting from a copy that
+  is never updated — unless a newer build has become pending in the
+  meantime, in which case that late shell is dropped rather than paired
+  with this build's code
+- The deadline applies to `index.html` and to paths that look like routes.
+  A path whose last segment looks like a file (`/legal/privacy.html`,
+  `/report.pdf`) is a document the origin serves itself, so it waits for
+  the origin however long that takes: answering it with the app shell
+  because it was slow would replace a page that was coming with the wrong
+  page entirely
 - Only `/` and `/index.html` may *write* that cached shell. Another
   same-origin page — a static legal page, a download, an OAuth callback —
   answers a navigation with its own HTML, and storing that under the shell
@@ -186,12 +212,26 @@ An install that fails keeps its temp cache. A failed `Core` entry fails the
 whole install, which is retried on the next page load, and re-downloading a
 30 MB wasm for the sake of the one entry a flaky connection dropped is how
 such an install never finishes at all. The retry skips an entry that is
-already stored **and** whose stored copy declares the length the manifest
-records for it — so a build deployed twice under one pinned `--version`,
-which shares a temp cache name with the previous one, is still re-fetched.
+already stored **and** whose stored copy carries this entry's hash: every
+copy the install stores records it in an `x-sw-hash` header, because a
+stored body cannot be hashed again without reading it whole and the URL it
+was fetched by is not the key it is stored under. So a build deployed twice
+under one pinned `--version`, which shares a temp cache name with the
+previous one, is re-fetched even where the file's length did not change —
+which is most edits to a JS bundle. A copy with no hash on it, written by
+a worker from before this record existed, is re-fetched too.
+
 Nothing reads that cache before the swap, which a failed install never
 reaches, and it goes away with its version (the orphan cleanup at the start
 of the next install, or `cleanupOldCaches`).
+
+Running out of storage is the exception: that temp cache is then dropped
+immediately, and the entries not yet downloaded are skipped rather than
+fetched into a cache with no room for them. The megabytes it holds are what
+the version actually serving the app needs for its own lazy writes, and
+nothing will ever activate it — what it is missing is exactly what there
+was no room for. The failure is reported to the page as a quota failure
+(`isQuota`), which the aggregate carries as its `cause`.
 
 ### Activate Event
 1. Open content cache and temp cache
@@ -262,7 +302,12 @@ interface SWLifecycleMessage {
 The bootstrap forwards every one of these as a `sw-lifecycle` CustomEvent
 on `window` and hands the failures to `Bootstrap.onWorkerFailure`. A page
 that loaded *after* the failure has no broadcast to catch, which is what
-`getStatus`'s `lastError` is for.
+`getStatus`'s `lastError` is for — within limits worth knowing: it is a
+variable in the worker, so it is gone once the browser terminates that
+worker (Chrome does so after about 30 s idle), and a failure that happened
+in a worker which then became `redundant` is not something the worker
+answering `getStatus` ever saw. It answers "did the install that just ran
+fail?", not "has anything ever failed on this device".
 
 ## Resilience
 
@@ -337,6 +382,9 @@ registration. A `QuotaExceededError` anywhere in caching is logged once per
   move is a whole, size-checked copy, and `cacheFirst` fetches the rest on
   demand; discarding all of it would leave the app loading entirely from the
   network on the device with the least room to spare
+- Either way the failure is broadcast as a `sw-lifecycle` `activate`
+  failure: the app is now loading from the network on every load, and the
+  page is where anything that collects errors for it lives
 - Always call `self.clients.claim()` even on error
 - Prevents stuck pages
 
