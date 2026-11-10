@@ -1,5 +1,5 @@
-import { expect, test, type Page } from '@playwright/test';
-import { expectShellIntact, settle } from './support/host';
+import { expect, test } from '@playwright/test';
+import { clearSiteData, expectShellIntact, settle } from './support/host';
 
 const BASE_URL = 'http://localhost:8089';
 
@@ -16,15 +16,6 @@ const BASE_URL = 'http://localhost:8089';
  */
 const FOREIGN_PAGE = `${BASE_URL}/offline.html`;
 
-async function clearSiteData(page: Page): Promise<void> {
-  await page.goto(BASE_URL);
-  await page.evaluate(async () => {
-    const regs = await navigator.serviceWorker.getRegistrations();
-    await Promise.all(regs.map((r) => r.unregister()));
-    await Promise.all((await caches.keys()).map((k) => caches.delete(k)));
-  });
-}
-
 test.describe('app-shell integrity', () => {
   // Every test here clears the site data and waits for a cold install to
   // finish: ~2.4 MB of pre-cache, a worker activation and a claim, which
@@ -32,7 +23,7 @@ test.describe('app-shell integrity', () => {
   test.describe.configure({ timeout: 90_000 });
 
   test.beforeEach(async ({ page }) => {
-    await clearSiteData(page);
+    await clearSiteData(page, BASE_URL);
     await settle(page, BASE_URL);
   });
 

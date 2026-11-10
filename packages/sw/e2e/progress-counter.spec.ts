@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { clearSiteData } from './support/host';
 
 const BASE_URL = 'http://localhost:8089';
 const COUNTER = /Loaded (\d+) of (\d+) resources/;
@@ -78,15 +79,6 @@ function watchCounter(page: Page): Array<{ done: number; total: number }> {
   return samples;
 }
 
-async function clearSiteData(page: Page): Promise<void> {
-  await page.goto(BASE_URL);
-  await page.evaluate(async () => {
-    const regs = await navigator.serviceWorker.getRegistrations();
-    await Promise.all(regs.map((r) => r.unregister()));
-    await Promise.all((await caches.keys()).map((k) => caches.delete(k)));
-  });
-}
-
 /**
  * The numerator the bootstrap accumulates — distinct counted resources that
  * reached a terminal status — must never leave the counted set.
@@ -117,7 +109,7 @@ function assertCounterHolds(messages: ProgressMessage[]): void {
 
 test.describe('startup progress counter', () => {
   test('cold load never counts past its total', async ({ page }) => {
-    await clearSiteData(page);
+    await clearSiteData(page, BASE_URL);
     await recordProgress(page);
     const counter = watchCounter(page);
 
@@ -130,7 +122,7 @@ test.describe('startup progress counter', () => {
 
   test('warm load never counts past its total', async ({ page }) => {
     await recordProgress(page);
-    await clearSiteData(page);
+    await clearSiteData(page, BASE_URL);
     await page.goto(BASE_URL);
     await settleProgress(page);
 
@@ -152,7 +144,7 @@ test.describe('startup progress counter', () => {
     await recordProgress(page);
     const counter = watchCounter(page);
     for (let run = 0; run < 5; run++) {
-      await clearSiteData(page);
+      await clearSiteData(page, BASE_URL);
       await page.goto(BASE_URL);
       await settleProgress(page);
       assertCounterHolds(await progressMessages(page));

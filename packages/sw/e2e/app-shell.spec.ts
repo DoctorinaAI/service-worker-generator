@@ -1,16 +1,7 @@
-import { expect, test, type Page } from '@playwright/test';
-import { settle } from './support/host';
+import { expect, test } from '@playwright/test';
+import { clearSiteData, settle } from './support/host';
 
 const BASE_URL = 'http://localhost:8089';
-
-async function clearSiteData(page: Page): Promise<void> {
-  await page.goto(BASE_URL);
-  await page.evaluate(async () => {
-    const regs = await navigator.serviceWorker.getRegistrations();
-    await Promise.all(regs.map((r) => r.unregister()));
-    await Promise.all((await caches.keys()).map((k) => caches.delete(k)));
-  });
-}
 
 test.describe('app shell', () => {
   // Every test here clears the site data and waits for a cold install to
@@ -19,7 +10,7 @@ test.describe('app shell', () => {
   test.describe.configure({ timeout: 90_000 });
 
   test.beforeEach(async ({ page }) => {
-    await clearSiteData(page);
+    await clearSiteData(page, BASE_URL);
     await settle(page, BASE_URL);
   });
 
