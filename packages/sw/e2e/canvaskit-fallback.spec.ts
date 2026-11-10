@@ -43,17 +43,17 @@ test.describe('the CanvasKit CDN', () => {
     test.setTimeout(60_000);
     // A proxy that refuses the host outright, probe and all.
     await page.route(CDN, (route) => route.abort());
-    const local: string[] = [];
-    page.on('request', (request) => {
-      if (request.url().startsWith(`${host.origin}/canvaskit/`)) {
-        local.push(request.url());
-      }
-    });
 
     await page.goto(host.origin);
 
-    // The app still boots, on the engine the build ships.
+    // The app still boots, on the engine the build ships. Counted at the
+    // origin, not on the page: a request the worker answers is not
+    // reported to `page.on('request')` in every engine (WebKit does not),
+    // while the origin sees it in all of them.
     await expect.poll(() => markerOf(page), { timeout: 30_000 }).toBe('a');
+    const local = host.requests.filter((request) =>
+      request.pathname.startsWith('/canvaskit/'),
+    );
     expect(local.length).toBeGreaterThan(0);
   });
 
