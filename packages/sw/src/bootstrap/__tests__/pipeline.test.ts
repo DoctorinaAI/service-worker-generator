@@ -920,6 +920,41 @@ describe('runPipeline — SW progress counter', () => {
     expect(reportsIn(warn)).toHaveLength(0);
   });
 
+  /**
+   * Audit #30, item 1.8: the stall threshold depends on whether anything is
+   * reporting progress to this page.
+   */
+  it('expects silence when the page is not served by this build’s worker', async () => {
+    withController(null);
+    const silence = vi.spyOn(LoadingWidget.prototype, 'expectSilence');
+    startAndCapture();
+    await settle();
+
+    expect(silence).toHaveBeenCalled();
+  });
+
+  it('expects progress when the page is served by this build’s worker', async () => {
+    withController('v1');
+    const silence = vi.spyOn(LoadingWidget.prototype, 'expectSilence');
+    startAndCapture();
+    await settle();
+
+    expect(silence).not.toHaveBeenCalled();
+  });
+
+  it('goes back to expecting progress when its worker speaks', async () => {
+    withController(null);
+    const progress = vi.spyOn(LoadingWidget.prototype, 'expectProgress');
+    const { send } = startAndCapture();
+    await settle();
+
+    send({ resourceKey: 'main.dart.wasm' });
+    expect(progress).toHaveBeenCalledOnce();
+    // Once, not per message.
+    send({ resourceKey: 'manifest.json' });
+    expect(progress).toHaveBeenCalledOnce();
+  });
+
   it('stays quiet while the app is still loading', async () => {
     withController('v0');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);

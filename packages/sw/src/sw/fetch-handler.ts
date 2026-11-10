@@ -4,6 +4,7 @@ import {
   BODY_STALL_TIMEOUT_MS,
   FETCH_TIMEOUT_MS,
   MAX_RETRY_ATTEMPTS,
+  NAVIGATION_TIMEOUT_MS,
   NEVER_CACHE_FILES,
   RESERVED_PATH_PREFIXES,
 } from '../shared/constants';
@@ -13,6 +14,7 @@ import {
   fetchWithRetry,
   guardBody,
   replayableResponse,
+  withTimeout,
 } from '../shared/utils';
 import {
   expectedBodySize,
@@ -35,6 +37,9 @@ declare const self: ServiceWorkerGlobalScope;
  * navigation be served from the pre-cached copy while offline.
  */
 const INDEX_KEY = 'index.html';
+
+/** Sentinel for a navigation the origin did not answer in time. */
+const TOO_SLOW = Symbol('navigation-timeout');
 
 /**
  * Whether [entry] is one of the files that decide which build of the app
@@ -155,10 +160,18 @@ async function passThrough(event: FetchEvent): Promise<Response> {
 /**
  * Network-first strategy for navigations and `index.html`.
  *
- * Prefers a navigationPreload response if available, then falls through to
- * `fetchWithRetry`. Falls back to the pre-cached app shell on any network
- * error *or* non-ok HTTP response so a broken origin cannot replace a good
- * cached page.
+ * Prefers a navigationPreload response if available, then the request on
+ * the network — `fetch(request)` with no init, so the request is never
+ * rebuilt and keeps its `navigate` mode (the origin keeps seeing
+ * `Sec-Fetch-Mode: navigate`, and a same-origin 3xx keeps arriving as the
+ * opaque redirect the browser must follow).
+ *
+ * Falls back to the pre-cached app shell on a network error *or* a non-ok
+ * status, so a broken origin cannot replace a good cached page — and, when
+ * there is such a copy, after `NAVIGATION_TIMEOUT_MS`, rather than holding
+ * a blank page while the origin thinks. Without a cached copy there is
+ * nothing better to wait for, so the fetch is given as long as it takes,
+ * exactly as a page with no worker would.
  *
  * Nothing after a successful fetch may reject: this promise is handed to
  * `respondWith`, so a rejection is a failed navigation — a blank error page
@@ -188,16 +201,21 @@ async function networkFirst(
     });
   };
 
+  // Read up front, because it decides how long the origin is given: with a
+  // copy in hand a navigation waits `NAVIGATION_TIMEOUT_MS` and then boots
+  // from it, and without one it waits for the network however long that
+  // takes. The body is not read here, so this costs a cache lookup.
+  let cached: Response | undefined;
+  try {
+    cached = await (await caches.open(cacheName)).match(new Request(INDEX_KEY));
+  } catch (error) {
+    log.warn('[SW] App-shell cache lookup failed:', error);
+  }
+
   const fallbackToCache = async (): Promise<Response> => {
-    try {
-      const cache = await caches.open(cacheName);
-      const cached = await cache.match(new Request(INDEX_KEY));
-      if (cached) {
-        await notifyIndex('cached');
-        return cached;
-      }
-    } catch (error) {
-      log.warn('[SW] App-shell cache lookup failed:', error);
+    if (cached) {
+      await notifyIndex('cached');
+      return cached;
     }
     return new Response('Offline', {
       status: 503,
@@ -209,7 +227,22 @@ async function networkFirst(
   try {
     // Prefer navigationPreload if enabled.
     const preload = (await event.preloadResponse) as Response | undefined;
-    response = preload ?? (await fetchWithRetry(request));
+    if (preload) {
+      response = preload;
+    } else {
+      const network = fetch(request);
+      const answered = cached
+        ? await withTimeout(network, NAVIGATION_TIMEOUT_MS, TOO_SLOW)
+        : await network;
+      if (answered === TOO_SLOW) {
+        log.warn(
+          `[SW] The origin did not answer the navigation within ` +
+            `${NAVIGATION_TIMEOUT_MS}ms; booting from the cached shell`,
+        );
+        return fallbackToCache();
+      }
+      response = answered;
+    }
   } catch {
     return fallbackToCache();
   }

@@ -6,6 +6,7 @@ import {
   MANIFEST_CACHE_SUFFIX,
   MAX_RETRY_ATTEMPTS,
   PRECACHE_CONCURRENCY,
+  SWAP_CONCURRENCY,
   TEMP_CACHE_SUFFIX,
 } from '../shared/constants';
 import {
@@ -66,6 +67,113 @@ export function expectedBodySize(
 }
 
 /**
+ * Whether [path] is already in [cache] with the length [entry] records for
+ * it, from an earlier attempt at the same install.
+ *
+ * Only a stored copy whose declared length matches is accepted. A build
+ * generated with an explicit `--version` that was deployed twice shares a
+ * temp cache name with the previous one, so "there is something under this
+ * key" is not enough; and a copy stored by this version's own precache
+ * already passed the streaming size check. A re-encoded response declares
+ * the encoded length (`declaredBodyLength` returns nothing for those), so
+ * it is re-fetched, which is the safe answer.
+ */
+async function alreadyPrecached(
+  cache: Cache,
+  path: string,
+  entry: ResourceEntry,
+): Promise<boolean> {
+  const expected = expectedBodySize(path, entry);
+  if (expected === undefined) return false;
+  try {
+    const present = await cache.match(new Request(path));
+    if (!present) return false;
+    if (declaredBodyLength(present) !== expected) return false;
+    log.info(`[SW] ${path} is already precached, keeping it`);
+    return true;
+  } catch {
+    // An unreadable cache: fetch it, as before.
+    return false;
+  }
+}
+
+/**
+ * Fetch [path] by its hash-busted URL and store it under its manifest key.
+ *
+ * Returns `true` once stored; throws the reason otherwise — a
+ * [BodySizeMismatchError] when the body was not the build's file, which
+ * says more than whatever the Cache API would have rejected with.
+ */
+async function fetchIntoCache(
+  cache: Cache,
+  path: string,
+  entry: ResourceEntry,
+): Promise<boolean> {
+  const url = cacheBustUrl(path, entry.hash);
+  const request = new Request(url, { cache: 'reload' });
+  let mismatch: BodySizeMismatchError | undefined;
+
+  // Transient server errors (5xx, 429) are retried here, not only thrown
+  // network errors: one 503 on a flaky edge would otherwise fail a Core
+  // entry and restart the download of every file on the next load. Other
+  // 4xx are final.
+  const response = await fetchWithRetry(
+    request,
+    MAX_RETRY_ATTEMPTS,
+    FETCH_TIMEOUT_MS,
+    { retryOnStatus: true },
+  );
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  if (isHtmlFallback(path, response)) {
+    throw new Error('served as HTML (the host has no such file)');
+  }
+  // The guard wraps every body, redirected or not, before `cache.put`
+  // consumes it, and hands back a rebuilt response. Rebuilt, it has no
+  // `redirected` flag, so a shell from a host that redirects
+  // `index.html?v=…` stays replayable for navigations without being
+  // buffered; `replayableResponse` is then a no-op kept as a backstop.
+  //
+  // It also counts the bytes against the manifest's `size`. A body cut
+  // short — a chunked response closed early, a truncating proxy — would
+  // otherwise be served cache-first until the next deploy, breaking the
+  // app for this user only. The count is streaming, so a mismatch errors
+  // the body and `cache.put` stores nothing.
+  //
+  // The stall part of the guard: `fetchWithRetry` only bounds the headers,
+  // and the bodies here are the largest files the app ships — a stream
+  // that dies mid-transfer would otherwise hang `cache.put`, and with it
+  // this install, for as long as the browser lets an install event run.
+  // That is not a slow install: it blocks the scope's job queue, so every
+  // `register()` on the origin hangs until the browser kills it minutes
+  // later. Failing the entry instead costs one install attempt, retried on
+  // the next page load.
+  //
+  // Built inside the `try`: for a null body (a `204`, which is `ok`) the
+  // guard throws its mismatch synchronously, and that must get the same
+  // second look as one found while streaming.
+  try {
+    const guarded = guardBody(response, {
+      idleMs: BODY_STALL_TIMEOUT_MS,
+      expectedBytes: expectedBodySize(path, entry),
+      label: path,
+      onMismatch: (error) => {
+        mismatch = error;
+      },
+    });
+    await cache.put(new Request(path), await replayableResponse(guarded));
+  } catch (error) {
+    if (error instanceof BodySizeMismatchError) mismatch = error;
+    if (!mismatch) throw error;
+    if (!(await storeAfterSizeMismatch(cache, path, url, mismatch))) {
+      throw mismatch;
+    }
+  }
+  return true;
+}
+
+/**
  * Pre-cache resources of specified categories into a cache.
  *
  * Uses cache-busted URLs to avoid stale responses. Failures on `Core`
@@ -88,76 +196,19 @@ export async function precacheResources(
   const coreFailures: string[] = [];
 
   await mapWithConcurrency(entries, PRECACHE_CONCURRENCY, async ([path, entry]) => {
-    const url = cacheBustUrl(path, entry.hash);
-    const request = new Request(url, { cache: 'reload' });
     let stored = false;
-    let mismatch: BodySizeMismatchError | undefined;
     try {
-      // Transient server errors (5xx, 429) are retried here, not only
-      // thrown network errors: one 503 on a flaky edge would otherwise fail
-      // a Core entry, discard the whole temp cache and restart the download
-      // of every file on the next load. Other 4xx are final.
-      const response = await fetchWithRetry(
-        request,
-        MAX_RETRY_ATTEMPTS,
-        FETCH_TIMEOUT_MS,
-        { retryOnStatus: true },
-      );
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      if (isHtmlFallback(path, response)) {
-        throw new Error('served as HTML (the host has no such file)');
-      }
-      // The guard wraps every body, redirected or not, before `cache.put`
-      // consumes it, and hands back a rebuilt response. Rebuilt, it has no
-      // `redirected` flag, so a shell from a host that redirects
-      // `index.html?v=…` stays replayable for navigations without being
-      // buffered; `replayableResponse` is then a no-op kept as a backstop.
-      //
-      // It also counts the bytes against the manifest's `size`. A body cut
-      // short — a chunked response closed early, a truncating proxy —
-      // would otherwise be served cache-first until the next deploy,
-      // breaking the app for this user only. The count is streaming, so a
-      // mismatch errors the body and `cache.put` stores nothing.
-      //
-      // The stall part of the guard:
-      // `fetchWithRetry` only bounds the headers, and the bodies here are
-      // the largest files the app ships — a stream that dies mid-transfer
-      // would otherwise hang `cache.put`, and with it this install, for as
-      // long as the browser lets an install event run. That is not a slow
-      // install: it blocks the scope's job queue, so every `register()` on
-      // the origin hangs until the browser kills it minutes later. Failing
-      // the entry instead costs one install attempt, retried on the next
-      // page load.
-      //
-      // Built inside the `try` below: for a null body (a `204`, which is
-      // `ok`) the guard throws its mismatch synchronously, and that must get
-      // the same second look as one found while streaming.
-      try {
-        const guarded = guardBody(response, {
-          idleMs: BODY_STALL_TIMEOUT_MS,
-          expectedBytes: expectedBodySize(path, entry),
-          label: path,
-          onMismatch: (error) => {
-            mismatch = error;
-          },
-        });
-        await cache.put(new Request(path), await replayableResponse(guarded));
-      } catch (error) {
-        if (error instanceof BodySizeMismatchError) mismatch = error;
-        if (!mismatch) throw error;
-        if (!(await storeAfterSizeMismatch(cache, path, url, mismatch))) {
-          throw mismatch;
-        }
-      }
-      stored = true;
+      // An earlier attempt at this very install may have stored this entry
+      // already: a failed `Core` entry fails the whole install, and the
+      // next page load tries again. Downloading a 30 MB wasm that is
+      // already here is how an install over a flaky connection never
+      // finishes at all.
+      stored =
+        (await alreadyPrecached(cache, path, entry)) ||
+        (await fetchIntoCache(cache, path, entry));
     } catch (error) {
       reportIfQuotaExceeded(`precaching ${path}`, error);
-      // The mismatch, when there was one, says more than whatever the Cache
-      // API rejected with.
-      const cause = mismatch ?? error;
-      const reason = cause instanceof Error ? cause.message : String(cause);
+      const reason = error instanceof Error ? error.message : String(error);
       const msg = `[SW] Precache failed for ${path}: ${reason}`;
       if (entry.category === ResourceCategory.Core) {
         coreFailures.push(`${path} (${reason})`);
@@ -381,15 +432,20 @@ export async function swapCaches(
   // advertised by the previous manifest during the swap.
   const tempKeys = await tempCache.keys();
   const refreshedPaths = new Set<string>();
-  await Promise.all(
-    tempKeys.map(async (request) => {
-      const response = await tempCache.match(request);
-      if (response) {
-        await contentCache.put(request, response);
-        refreshedPaths.add(getResourceKey(request.url));
-      }
-    }),
-  );
+  // Moved a few at a time, and each entry released as soon as it is
+  // copied, rather than the whole set at once with the temp cache dropped
+  // at the end: that way every pre-cached byte of the app exists twice for
+  // the length of the swap, which on Safari's quota is how a wasm app's
+  // activate fails with QuotaExceededError. A worker that dies mid-swap
+  // leaves the moved entries in the content cache and the rest in the temp
+  // one, and the next swap picks up where this one stopped.
+  await mapWithConcurrency(tempKeys, SWAP_CONCURRENCY, async (request) => {
+    const response = await tempCache.match(request);
+    if (!response) return;
+    await contentCache.put(request, response);
+    refreshedPaths.add(getResourceKey(request.url));
+    await tempCache.delete(request).catch(() => false);
+  });
 
   // Step 2: evict entries whose old copy is now stale. An entry is stale if
   //   (a) it vanished from the new manifest, or

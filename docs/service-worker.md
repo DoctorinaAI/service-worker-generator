@@ -89,7 +89,14 @@ the next load handed over to the new worker (#40), and writing the new bytes
 into the old cache failed the body size check (#36).
 
 ### Special Cases
-- Navigations (`/`, `index.html`, and any SPA route): network-first, falling back to the pre-cached `index.html`
+- Navigations (`/`, `index.html`, and any SPA route): network-first, falling
+  back to the pre-cached `index.html`. The request goes to the network as
+  itself — `fetch(request)` with no init, so it keeps its `navigate` mode —
+  and it is not retried: with a cached shell in hand the fallback answers
+  after `NAVIGATION_TIMEOUT_MS` (3 s), because the user is watching a blank
+  page and the shell boots the app, which loads its own route. Without a
+  cached copy there is nothing better to wait for, so the fetch gets as long
+  as it needs, exactly as a page with no worker would
 - Only `/` and `/index.html` may *write* that cached shell. Another
   same-origin page — a static legal page, a download, an OAuth callback —
   answers a navigation with its own HTML, and storing that under the shell
@@ -156,14 +163,29 @@ with the other engine differences.
 0. Open the manifest cache (`{prefix}-manifest`), which marks the prefix as
    in use (see Cache ownership)
 1. Open temp cache (`{prefix}-temp-{version}`)
-2. Fetch all Core and Required resources with cache-busted URLs
+2. Fetch all Core and Required resources with cache-busted URLs, skipping
+   the ones an earlier attempt at this install already stored (see below)
 3. Store responses in temp cache
 4. Leave the new worker in `waiting` until the client explicitly opts in
 5. Notify clients of progress during pre-caching
 
+An install that fails keeps its temp cache. A failed `Core` entry fails the
+whole install, which is retried on the next page load, and re-downloading a
+30 MB wasm for the sake of the one entry a flaky connection dropped is how
+such an install never finishes at all. The retry skips an entry that is
+already stored **and** whose stored copy declares the length the manifest
+records for it — so a build deployed twice under one pinned `--version`,
+which shares a temp cache name with the previous one, is still re-fetched.
+Nothing reads that cache before the swap, which a failed install never
+reaches, and it goes away with its version (the orphan cleanup at the start
+of the next install, or `cleanupOldCaches`).
+
 ### Activate Event
 1. Open content cache and temp cache
-2. Move all resources from temp to content cache (atomic swap)
+2. Move the resources from temp to content cache, `SWAP_CONCURRENCY` at a
+   time, deleting each one from the temp cache as soon as it is copied: at
+   most that many entries exist twice at once, instead of the whole
+   pre-cached set — every byte of a wasm app — for the length of the swap
 3. Load previous manifest from manifest cache
 4. Compare hashes — remove outdated resources from content cache
 5. Save current manifest to manifest cache
@@ -269,6 +291,11 @@ registration. A `QuotaExceededError` anywhere in caching is logged once per
 - Swap, cleanup and navigation preload fail separately: a failed swap drops
   this version's content and temp caches and clears the stored manifest, but
   keeps the manifest cache, so it starts over from the network
+- A swap that ran out of storage (`QuotaExceededError`) is the exception: it
+  keeps the content cache and drops only the temp one. Every entry that did
+  move is a whole, size-checked copy, and `cacheFirst` fetches the rest on
+  demand; discarding all of it would leave the app loading entirely from the
+  network on the device with the least room to spare
 - Always call `self.clients.claim()` even on error
 - Prevents stuck pages
 

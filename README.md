@@ -527,7 +527,14 @@ cache, and so is everything if the network cannot answer at all. See
 - **Fetch timeout**: 10s per request via AbortController (headers only)
 - **Body stall watchdog**: a pre-cached body idle for 30s is cancelled, so a dead
   stream cannot hang `install` — and with it every `register()` on the origin
-- **Fetch retry**: 3 attempts with exponential backoff (1s → 2s → 4s + jitter)
+- **Fetch retry**: 3 attempts with exponential backoff (1s → 2s → 4s + jitter).
+  Navigations are not retried: with a pre-cached shell in hand they fall back
+  to it after 3s rather than hold a blank page
+- **Resumed install**: a failed install keeps what it downloaded, so the retry
+  on the next load fetches only what is missing
+- **Storage pressure**: the temp → content swap moves a few entries at a time
+  and frees each one as it goes, and a swap that runs out of storage keeps
+  what it moved instead of starting over
 - **SW activation timeout**: 4s on a first visit, continues without SW on timeout.
   A page that already has a controller boots with it straight away
 - **Engine change after a deploy**: when the new build runs on a different Flutter

@@ -33,6 +33,25 @@ export const FETCH_TIMEOUT_MS = 10_000;
  */
 export const BODY_STALL_TIMEOUT_MS = 30_000;
 
+/**
+ * How long a navigation waits for the origin before the pre-cached shell
+ * answers it.
+ *
+ * A navigation is the one request a user is watching a blank page for, and
+ * the cached shell boots the app, which then loads its own route. Three
+ * retries of `FETCH_TIMEOUT_MS` plus their backoff — the budget every other
+ * request gets — would hold that blank page for over half a minute before
+ * falling back to a copy that was ready all along.
+ *
+ * The fetch is not aborted when the deadline passes: aborting needs a
+ * `signal`, an init makes `fetch` build a new `Request`, and a navigation
+ * request rebuilt that way loses its `navigate` mode — the origin stops
+ * seeing `Sec-Fetch-Mode: navigate`, and a same-origin 3xx stops arriving
+ * as the opaque redirect the browser must follow. So the answer comes from
+ * the cache and the response is left to finish into the shell cache.
+ */
+export const NAVIGATION_TIMEOUT_MS = 3_000;
+
 /** Default SW registration timeout in milliseconds */
 export const SW_REGISTRATION_TIMEOUT_MS = 4_000;
 
@@ -82,6 +101,25 @@ export const RESET_TIMEOUT_MS = 3_000;
 /** Stalled loading detection timeout in milliseconds */
 export const STALLED_TIMEOUT_MS = 30_000;
 
+/**
+ * Stall threshold while nothing is reporting progress to the page.
+ *
+ * Progress between 25% and 80% comes from the worker's `sw-progress`
+ * messages. A page that has no controller hears none of them: a first
+ * visit (activation is capped at `SW_REGISTRATION_TIMEOUT_MS`, so the page
+ * usually boots uncontrolled), Firefox's private mode, iOS Lockdown Mode,
+ * or any registration that failed. The ring then sits still for the whole
+ * `main.dart.wasm` download — and on a slow link `STALLED_TIMEOUT_MS` of
+ * that is normal, not a stall, while the overlay's reset would throw away
+ * the download in progress and start it again.
+ *
+ * So the threshold is raised for exactly that case, and only until the
+ * first message arrives. The overlay still appears for a load that is
+ * genuinely wedged; it just waits as long as a 3G download of a wasm app
+ * plausibly takes.
+ */
+export const UNREPORTED_STALLED_TIMEOUT_MS = 120_000;
+
 /** Max retry attempts for failed fetches */
 export const MAX_RETRY_ATTEMPTS = 3;
 
@@ -95,6 +133,18 @@ export const RETRY_BASE_DELAY_MS = 1_000;
  * unchanged.
  */
 export const RETRY_AFTER_MAX_MS = 5_000;
+
+/**
+ * How many entries the temp → content swap moves at once.
+ *
+ * Each move is a `put` followed by a `delete`, so at most this many
+ * entries exist in both caches at the same time. Moving them all at once
+ * (a plain `Promise.all`) means the whole pre-cached set does — every byte
+ * of a wasm app twice — which is how activate hits `QuotaExceededError` on
+ * Safari's quota. Low enough to bound that, high enough that the swap is
+ * not a serial walk over hundreds of entries.
+ */
+export const SWAP_CONCURRENCY = 4;
 
 /** Max parallel fetches during SW install precache. Keeps us under HTTP/2
  * multiplexing limits and spares memory on large manifests. */
@@ -139,9 +189,9 @@ export const NEVER_CACHE_FILES = ['bootstrap.js', 'sw.js'] as const;
  * SPA rewrite. Firebase Hosting owns `/__/*`, which is where Firebase Auth
  * puts `/__/auth/handler` and `/__/auth/iframe` when `authDomain` is the
  * app's own domain — both same-origin navigations (the iframe included).
- * Routing them through the app's navigation handler would run a sign-in
- * document through `fetchWithRetry`, which downgrades a navigation
- * request's mode and turns a 3xx into an opaque redirect, and would answer
- * it from the app shell whenever the origin hiccups.
+ * Routing them through the app's navigation handler would answer a sign-in
+ * document from the app shell whenever the origin hiccups, and would give
+ * it the shell's deadline. Their navigations are answered with the
+ * navigation preload response or the request on the network, untouched.
  */
 export const RESERVED_PATH_PREFIXES = ['__/'] as const;

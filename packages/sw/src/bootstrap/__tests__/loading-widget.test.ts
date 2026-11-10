@@ -4,7 +4,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { LoadingWidget } from '../loading-widget';
 import type { ResolvedConfig } from '../config';
-import { RESET_TIMEOUT_MS, STALLED_TIMEOUT_MS } from '../../shared/constants';
+import {
+  RESET_TIMEOUT_MS,
+  STALLED_TIMEOUT_MS,
+  UNREPORTED_STALLED_TIMEOUT_MS,
+} from '../../shared/constants';
 import { FOREIGN_RELOAD_KEY } from '../sw-registration';
 
 function uiConfig(
@@ -233,6 +237,56 @@ describe('LoadingWidget stall detection', () => {
     w.updateProgress(100, 'done');
     vi.advanceTimersByTime(STALLED_TIMEOUT_MS + 1);
     expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  /**
+   * Audit #30, item 1.8: nothing reports progress to a page no worker is
+   * serving, so between 25% and 80% the ring sits still for the whole
+   * download — and the overlay's reset would throw that download away.
+   */
+  it('waits longer for a load nothing is reporting on', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    w.expectSilence();
+
+    vi.advanceTimersByTime(STALLED_TIMEOUT_MS + 1);
+    const logo = document.querySelector('.sw-logo-container');
+    expect(logo?.classList.contains('is-stalled')).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+
+    // Still a rescue, just a later one.
+    vi.advanceTimersByTime(UNREPORTED_STALLED_TIMEOUT_MS);
+    expect(logo?.classList.contains('is-stalled')).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('re-arms the timer already running when it starts expecting silence', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    // Most of the short budget has passed before the pipeline knows that
+    // nothing will report on this load.
+    vi.advanceTimersByTime(STALLED_TIMEOUT_MS - 1_000);
+    w.expectSilence();
+    vi.advanceTimersByTime(2_000);
+
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('goes back to the short budget when progress arrives after all', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    w.expectSilence();
+    w.expectProgress();
+
+    vi.advanceTimersByTime(STALLED_TIMEOUT_MS + 1);
+    expect(document.querySelector('.sw-logo-container')?.classList.contains('is-stalled')).toBe(
+      true,
+    );
     warn.mockRestore();
   });
 });

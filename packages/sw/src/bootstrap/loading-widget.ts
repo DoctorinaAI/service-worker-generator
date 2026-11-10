@@ -1,6 +1,10 @@
 import type { ResolvedConfig } from './config';
 import { findBootstrapScript, withAlpha } from './config';
-import { RESET_TIMEOUT_MS, STALLED_TIMEOUT_MS } from '../shared/constants';
+import {
+  RESET_TIMEOUT_MS,
+  STALLED_TIMEOUT_MS,
+  UNREPORTED_STALLED_TIMEOUT_MS,
+} from '../shared/constants';
 import { withTimeout } from '../shared/utils';
 import { ownCacheNames } from '../shared/cache-ownership';
 import { FOREIGN_RELOAD_KEY } from './sw-registration';
@@ -24,6 +28,8 @@ export class LoadingWidget {
   private reloadButton: HTMLButtonElement | null = null;
   private styleElement: HTMLStyleElement | null = null;
   private stallTimer: ReturnType<typeof setTimeout> | null = null;
+  /** How much silence counts as a stall; see `expectSilence`. */
+  private stallBudgetMs: number = STALLED_TIMEOUT_MS;
   private currentPercent = 0;
   private disposed = false;
 
@@ -289,8 +295,30 @@ export class LoadingWidget {
       this.stallTimer = setTimeout(() => {
         log.warn('[Bootstrap] Loading appears stalled');
         this.showReloadOverlay();
-      }, STALLED_TIMEOUT_MS);
+      }, this.stallBudgetMs);
     }
+  }
+
+  /**
+   * Stop treating silence as a stall for [UNREPORTED_STALLED_TIMEOUT_MS]
+   * instead of [STALLED_TIMEOUT_MS].
+   *
+   * The pipeline calls this when no worker is reporting to this page, so
+   * the only thing between 25% and 80% is a download nobody narrates. See
+   * `UNREPORTED_STALLED_TIMEOUT_MS`.
+   */
+  expectSilence(): void {
+    if (this.stallBudgetMs === UNREPORTED_STALLED_TIMEOUT_MS) return;
+    this.stallBudgetMs = UNREPORTED_STALLED_TIMEOUT_MS;
+    // Re-arm: the timer already running was set for the short budget.
+    if (this.stallTimer) this.resetStallTimer();
+  }
+
+  /** Back to the normal threshold: something is reporting progress again. */
+  expectProgress(): void {
+    if (this.stallBudgetMs === STALLED_TIMEOUT_MS) return;
+    this.stallBudgetMs = STALLED_TIMEOUT_MS;
+    if (this.stallTimer) this.resetStallTimer();
   }
 
   private clearStallTimer(): void {

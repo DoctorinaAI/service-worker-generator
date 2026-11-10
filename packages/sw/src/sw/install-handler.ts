@@ -84,8 +84,13 @@ async function handleInstall(
       },
     );
   } catch (error) {
-    // Clean up the half-populated temp cache so the next install starts fresh.
-    await caches.delete(tempCacheName);
+    // The half-populated temp cache is kept on purpose: this install is
+    // retried on the next page load, and `precacheResources` skips what is
+    // already there, so a 30 MB wasm is not downloaded again for the sake
+    // of the one entry a flaky connection dropped. Nothing reads it before
+    // then — the swap only runs on activate, which a failed install never
+    // reaches — and it is removed with the version, by the orphan cleanup
+    // at the start of the next install or by `cleanupOldCaches`.
     throw error;
   }
 }

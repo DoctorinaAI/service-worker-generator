@@ -59,13 +59,14 @@ export function runPipeline(config: ResolvedConfig): BootstrapAPI {
   const onSwUpdate = (): void => api.notifyUpdateAvailable();
   window.addEventListener('sw-update-available', onSwUpdate);
 
-  void runPipelineWork(api, config);
+  void runPipelineWork(api, config, widget);
   return api;
 }
 
 async function runPipelineWork(
   api: BootstrapAPI,
   config: ResolvedConfig,
+  widget: LoadingWidget,
 ): Promise<void> {
   const { build, ui } = config;
 
@@ -118,7 +119,12 @@ async function runPipelineWork(
             foreignVersion = msg.swVersion;
             return;
           }
-          sawOwnVersion = true;
+          if (!sawOwnVersion) {
+            sawOwnVersion = true;
+            // Something is narrating this load after all, so silence means
+            // a stall again.
+            widget.expectProgress();
+          }
 
           // Latch the denominator once. A single worker reports a constant
           // `resourcesCount`, so this only guards against a mid-load change
@@ -267,6 +273,17 @@ async function runPipelineWork(
 
     // Stage 4-5: Assets + Dart Entry
     updateProgress('assets', STAGE_PROGRESS.canvaskit + 5, 'Loading application');
+
+    // Everything from here is the engine and the app downloading, and the
+    // only thing that reports on it is the worker serving this page. If
+    // that is not this build's worker — a first visit whose activation did
+    // not land, a registration that failed, Firefox's private mode, iOS
+    // Lockdown Mode — the page's own fetches are unnarrated, and 30 s of
+    // silence is a slow link rather than a stall. The overlay's reset
+    // would throw away the download in progress.
+    if (controllerVersion() !== build.swVersion) {
+      widget.expectSilence();
+    }
 
     // An engine served from the CDN passed a one-byte probe of its `.js`,
     // which says nothing about the `.wasm`. If the app then fails because

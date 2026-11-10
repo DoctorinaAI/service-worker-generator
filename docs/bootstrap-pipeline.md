@@ -101,6 +101,14 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
 - Timer starts on widget creation
 - Resets on every progress update
 - After 30 seconds without progress: show "Reset Cache" button with tooltip
+- 120 seconds instead, when the page is not being served by this build's
+  worker (a first visit whose activation did not land in time, a failed
+  registration, Firefox's private mode, iOS Lockdown Mode). Progress between
+  25% and 80% comes from the worker's `sw-progress` messages, so there is
+  nothing to report on the page's own download of `main.dart.wasm`, and 30
+  seconds of silence on a slow link is not a stall — while the reset would
+  throw away the download in progress. The budget goes back to 30 seconds as
+  soon as this build's worker reports anything
 - Button deletes this app's caches (`{prefix}-…`, by the same ownership rule
   as the worker's cleanup, so it leaves alone an app on this release whose
   prefix extends this one; see [Cache Names](service-worker.md#cache-names)), unregisters this app's service worker and reloads; besides its own one-shot reload key in `sessionStorage`, it does not touch storage (`localStorage`, IndexedDB, cookies), other apps' caches or foreign service workers

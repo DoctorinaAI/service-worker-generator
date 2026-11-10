@@ -421,6 +421,41 @@ describe('swapCaches', () => {
     expect(mockCaches.peek('app-temp-v2')).toBeUndefined();
   });
 
+  it('frees each temp entry as soon as it is copied', async () => {
+    // Audit #30, item 1.5: holding the whole pre-cached set twice for the
+    // length of the swap is how a wasm app's activate hits
+    // QuotaExceededError on Safari's quota.
+    const names = ['a', 'b', 'c', 'd', 'e', 'f'];
+    const temp = await mockCaches.open('app-temp-v2');
+    const manifest: ResourceManifest = {};
+    for (const name of names) {
+      await temp.put(new Request(`${name}.js`), textResponse(name));
+      manifest[`${name}.js`] = {
+        name: `${name}.js`,
+        size: 1,
+        hash: name,
+        category: ResourceCategory.Core,
+      };
+    }
+
+    // How much of the temp cache was still there as each copy was made.
+    const held: number[] = [];
+    const content = await mockCaches.open('app-v2');
+    const put = content.put.bind(content);
+    vi.spyOn(content, 'put').mockImplementation(async (request, response) => {
+      await put(request, response);
+      held.push((await temp.keys()).length);
+    });
+
+    await swapCaches('app', 'v2', manifest);
+
+    // Copies were still being made after entries had been freed, so the
+    // two caches never held the whole set at once.
+    expect(held).toHaveLength(names.length);
+    expect(Math.min(...held)).toBeLessThan(names.length);
+    expect(mockCaches.peek('app-temp-v2')).toBeUndefined();
+  });
+
   it('keeps the freshly-precached entry when its hash changed vs previous manifest', async () => {
     // Regression: copy must run BEFORE eviction so a re-precached hash-
     // changed entry is present in content when eviction walks the old
