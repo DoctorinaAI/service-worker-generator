@@ -657,6 +657,68 @@ describe('LoadingWidget accessibility', () => {
     expect(body).toMatch(/max-width:/);
     expect(body).toMatch(/overflow-wrap:\s*anywhere/);
   });
+
+  // jsdom does not lay out, so these pin the declarations the layout rests
+  // on. Each one failing is a glitch that reached a release.
+  it('keeps the animated dots on a single line', () => {
+    // `.sw-status` sets `overflow-wrap: anywhere` and the dots box is only
+    // ~1.5em wide, so without this the three dots wrap onto three lines,
+    // the box grows three lines tall and `vertical-align: bottom` hangs the
+    // extra ones above the message.
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const css = document.head.querySelector('style')!.textContent!;
+    const rule = css.slice(css.indexOf('.sw-loading-dots::after {'));
+    const body = rule.slice(0, rule.indexOf('}'));
+    expect(body).toMatch(/white-space:\s*(pre|nowrap)/);
+  });
+
+  it('animates the dots without changing their footprint', () => {
+    // A width sweep moves the dots onto a line of their own and back on a
+    // line the message nearly fills, shifting everything below them.
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const css = document.head.querySelector('style')!.textContent!;
+    const frames = css.slice(css.indexOf('@keyframes sw-dots'));
+    const body = frames.slice(0, frames.indexOf('\n      }'));
+    expect(body).toMatch(/clip-path:/);
+    expect(body).not.toMatch(/\bwidth:/);
+  });
+
+  it('keeps a long title inside the viewport', () => {
+    const w = new LoadingWidget(uiConfig({ title: 'x' }));
+    w.mount();
+    const css = document.head.querySelector('style')!.textContent!;
+    const rule = css.slice(css.indexOf('.sw-title {'));
+    const body = rule.slice(0, rule.indexOf('}'));
+    expect(body).toMatch(/max-width:/);
+    expect(body).toMatch(/overflow-wrap:\s*anywhere/);
+  });
+
+  it('pads the root and lets it scroll rather than clip', () => {
+    // A long message on a phone in landscape overflows a centred column;
+    // `safe` keeps the overflow below the top edge, where it is reachable.
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const css = document.head.querySelector('style')!.textContent!;
+    const rule = css.slice(css.indexOf('#sw-loading {'));
+    const body = rule.slice(0, rule.indexOf('}'));
+    expect(body).toMatch(/padding:/);
+    expect(body).toMatch(/box-sizing:\s*border-box/);
+    expect(body).toMatch(/justify-content:\s*safe\s+center/);
+    expect(body).toMatch(/overflow-y:\s*auto/);
+  });
+
+  it('compacts the layout on a short viewport', () => {
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const css = document.head.querySelector('style')!.textContent!;
+    expect(css).toMatch(/@media\s*\(max-height:\s*480px\)/);
+    // After the width query, so a short and narrow viewport gets both.
+    expect(css.indexOf('@media (max-height: 480px)')).toBeGreaterThan(
+      css.indexOf('@media (max-width: 480px)'),
+    );
+  });
 });
 
 describe('LoadingWidget dispose teardown', () => {

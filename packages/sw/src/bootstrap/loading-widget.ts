@@ -451,10 +451,22 @@ export class LoadingWidget {
         position: fixed;
         inset: 0;
         z-index: 999999;
+        box-sizing: border-box;
+        padding: 24px 16px;
         display: flex;
         flex-direction: column;
         align-items: center;
         justify-content: center;
+        /* A long message on a short viewport (a phone held in landscape)
+           overflows a centred column in both directions, and the overflow
+           above the top edge of a scroll container cannot be reached.
+           \`safe\` drops to flex-start exactly when that would happen; the
+           plain \`center\` above stays for browsers that drop the whole
+           declaration. */
+        justify-content: safe center;
+        overflow-x: hidden;
+        overflow-y: auto;
+        overscroll-behavior: contain;
         background: ${bg};
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         animation: sw-fadeIn 0.6s ease-in;
@@ -469,6 +481,7 @@ export class LoadingWidget {
         width: 140px;
         height: 140px;
         margin-bottom: 2rem;
+        flex: none;
       }
       .sw-logo-artwork {
         position: absolute;
@@ -514,13 +527,19 @@ export class LoadingWidget {
         font-weight: 700;
         margin: 0 0 1rem 0;
         color: ${titleColor};
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        text-align: center;
       }
       .sw-status {
         font-size: 1.1rem;
         font-weight: 500;
         color: ${subtextColor};
         margin-top: 1rem;
-        max-width: 90vw;
+        /* 100% of the padded root, so the gutter holds on every viewport —
+           90vw sat under the scrollbar on desktop. The second bound keeps
+           the line length readable on a wide one. */
+        max-width: min(100%, 40rem);
         overflow-wrap: anywhere;
         text-align: center;
       }
@@ -531,13 +550,24 @@ export class LoadingWidget {
         text-align: left;
         overflow: hidden;
         vertical-align: bottom;
+        /* This box inherits \`overflow-wrap: anywhere\` from .sw-status, so
+           nothing but \`white-space\` keeps the three dots on one line: the
+           animation used to sweep the width from 0, and below ~0.75em they
+           wrapped onto three lines inside the box. It grew three lines tall
+           and \`vertical-align: bottom\` hung the extra two above the
+           message — the reported glitch. */
+        white-space: pre;
         animation: sw-dots 1.5s steps(4, end) infinite;
       }
+      /* Clipped rather than resized: a width sweep changes the box's
+         footprint mid-cycle, so on a line the message nearly fills the dots
+         jumped to a line of their own and back, shifting everything below
+         them. The insets match the widths this used to animate. */
       @keyframes sw-dots {
-        0%, 100% { width: 0; }
-        25% { width: 0.5em; }
-        50% { width: 1em; }
-        75% { width: 1.5em; }
+        0%, 100% { clip-path: inset(0 1.5em 0 0); }
+        25% { clip-path: inset(0 1em 0 0); }
+        50% { clip-path: inset(0 0.5em 0 0); }
+        75% { clip-path: inset(0 0 0 0); }
       }
       .sw-percentage {
         font-size: 0.9rem;
@@ -622,6 +652,18 @@ export class LoadingWidget {
         .sw-logo-image { width: 100px; height: 100px; }
         .sw-reload-overlay { width: 56px; height: 56px; }
         .sw-title { font-size: 1.6rem; }
+      }
+      /* A phone in landscape leaves ~320px of height. Last, so it also
+         trims the block above on a short *and* narrow viewport. */
+      @media (max-height: 480px) {
+        #sw-loading { padding: 16px; }
+        .sw-logo-container { width: 88px; height: 88px; margin-bottom: 0.75rem; }
+        .sw-logo-image { width: 72px; height: 72px; }
+        .sw-reload-overlay { width: 44px; height: 44px; }
+        .sw-reload-overlay svg { width: 20px; height: 20px; }
+        .sw-title { font-size: 1.4rem; margin-bottom: 0.5rem; }
+        .sw-status { font-size: 1rem; margin-top: 0.5rem; }
+        .sw-percentage { margin-top: 0.25rem; }
       }
       @media (prefers-reduced-motion: reduce) {
         #sw-loading { animation: none; }

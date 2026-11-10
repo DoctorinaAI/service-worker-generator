@@ -1,3 +1,13 @@
+## 0.3.1 — 2026-11-10
+
+### Fixed
+
+- **Bootstrap**: the loading widget's animated ellipsis turned into a column of dots stacked above the status message. The dots are a `::after` whose width the `sw-dots` keyframes sweep from `0` to `1.5em`, and the box inherits `overflow-wrap: anywhere` from `.sw-status` — so for the half of every cycle the width stayed under the width of `...`, the three dots wrapped onto three lines inside it. The box grew three lines tall and `vertical-align: bottom` hung the extra two above the message. It affected every viewport and every message, which is why it read as a flicker rather than a layout bug. The dots now carry `white-space: pre`. (`packages/sw/src/bootstrap/loading-widget.ts`)
+- **Bootstrap**: the same keyframes shifted the whole splash screen once per cycle. Animating `width` changes the dots' footprint, so on a line the message nearly filled they moved onto a line of their own and back, taking the percentage below them with them. The animation now clips a fixed-width box with `clip-path` instead; the insets match the widths it used to sweep, so it looks the same and no longer reflows. (`packages/sw/src/bootstrap/loading-widget.ts`)
+- **Bootstrap**: a long status message on a short viewport (a phone held in landscape, roughly 320 px of height) overflowed the centred column in both directions, and the part above the top edge could not be reached. `#sw-loading` now has a 24/16 px gutter, `justify-content: safe center` and `overflow-y: auto`, and a `max-height: 480px` query trims the logo, title and spacing so the usual messages fit without scrolling at all. (`packages/sw/src/bootstrap/loading-widget.ts`)
+- **Bootstrap**: a title longer than the viewport ran off both edges — `.sw-title` had neither a width bound nor a wrapping rule. It now wraps like the status text. (`packages/sw/src/bootstrap/loading-widget.ts`)
+- **Bootstrap**: `.sw-status` was bounded by `90vw`, which counts the scrollbar on a desktop browser and left the gutter uneven. It is now bounded by the padded root, and by `40rem` so the line length stays readable on a wide screen. (`packages/sw/src/bootstrap/loading-widget.ts`)
+
 ## 0.3.0 — 2026-10-30
 
 ### Fixed
