@@ -1,12 +1,27 @@
 import type { ResolvedConfig } from './config';
 import { findBootstrapScript, withAlpha } from './config';
-import { RESET_TIMEOUT_MS, STALLED_TIMEOUT_MS } from '../shared/constants';
+import {
+  RESET_TIMEOUT_MS,
+  STALLED_TIMEOUT_MS,
+  UNREPORTED_STALLED_TIMEOUT_MS,
+} from '../shared/constants';
 import { withTimeout } from '../shared/utils';
 import { ownCacheNames } from '../shared/cache-ownership';
 import { FOREIGN_RELOAD_KEY } from './sw-registration';
 import { log } from '../shared/logger';
+import { DEFAULT_STRINGS, type StringKey } from '../shared/strings';
+import { ensureContrast } from './color';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * sessionStorage key marking that the overlay's plain reload has been
+ * tried in this tab, so the next click clears the caching layer instead.
+ */
+const RELOAD_TRIED_KEY = 'sw-overlay-reload-tried';
+
+/** The error red, before it is checked against the background. */
+const ERROR_COLOR = '#ff4444';
 const PROGRESS_RING_RADIUS = 65;
 const CIRCUMFERENCE = 2 * Math.PI * PROGRESS_RING_RADIUS;
 
@@ -24,6 +39,8 @@ export class LoadingWidget {
   private reloadButton: HTMLButtonElement | null = null;
   private styleElement: HTMLStyleElement | null = null;
   private stallTimer: ReturnType<typeof setTimeout> | null = null;
+  /** How much silence counts as a stall; see `expectSilence`. */
+  private stallBudgetMs: number = STALLED_TIMEOUT_MS;
   private currentPercent = 0;
   private disposed = false;
 
@@ -73,6 +90,29 @@ export class LoadingWidget {
     }
   }
 
+  /** What the screen calls [key], with the page's overrides applied. */
+  private text(key: StringKey): string {
+    return this.config.strings?.[key] ?? DEFAULT_STRINGS[key];
+  }
+
+  /**
+   * The background the widget paints, which every contrast check is
+   * against. Read through `matchMedia` for the `auto` theme, as the
+   * stylesheet does.
+   */
+  private get background(): string {
+    const dark =
+      this.config.theme === 'dark' ||
+      (this.config.theme === 'auto' &&
+        window.matchMedia('(prefers-color-scheme: dark)').matches);
+    return dark ? '#1a1a2e' : '#f4fdf7';
+  }
+
+  /** The error red, readable on whichever background is in use. */
+  private get errorColor(): string {
+    return ensureContrast(ERROR_COLOR, this.background);
+  }
+
   /**
    * Update the progress display.
    */
@@ -107,15 +147,83 @@ export class LoadingWidget {
   }
 
   /**
-   * Show an error message in the widget.
+   * Show a failure.
+   *
+   * [error] is what the user reads, so the caller is expected to have
+   * chosen it; the raw reason belongs in the console and in
+   * `Bootstrap.progress.detail`. When the browser says it is offline, that
+   * is said instead: no reload of any kind will help until it is back, and
+   * "check your connection" is the only useful instruction on that screen.
    */
   showError(error: string): void {
     if (this.disposed || !this.statusText) return;
-    this.statusText.textContent = error;
-    this.statusText.style.color = '#ff4444';
+    const offline = navigator.onLine === false;
+    this.statusText.textContent = offline ? this.text('offline') : error;
+    this.statusText.style.color = this.errorColor;
     this.statusContainer?.setAttribute('role', 'alert');
     this.statusContainer?.setAttribute('aria-live', 'assertive');
     this.showReloadOverlay();
+  }
+
+  /**
+   * The reload button, clicked.
+   *
+   * A plain reload first: the failure that put the overlay there is far
+   * more often a connection that dropped or a request that timed out than
+   * a cache gone bad, and clearing the cache throws away a download the
+   * user already paid for. Only a second click — a reload that did not
+   * help — drops the caching layer. The flag lives in `sessionStorage`, so
+   * "second click" survives the reload in between, and `dispose` clears it
+   * once a load succeeds.
+   */
+  private async onReloadClick(): Promise<void> {
+    if (this.reloadButton) {
+      this.reloadButton.classList.add('is-loading');
+      this.reloadButton.setAttribute('disabled', 'true');
+    }
+    if (!this.reloadWasTried()) {
+      this.rememberReloadTried();
+      window.location.reload();
+      return;
+    }
+    await this.resetCache();
+  }
+
+  /** Whether a plain reload from this overlay has already been tried. */
+  private reloadWasTried(): boolean {
+    try {
+      return sessionStorage.getItem(RELOAD_TRIED_KEY) !== null;
+    } catch {
+      // Blocked storage: there is no way to tell, so the button does the
+      // thing that always helps if anything does.
+      return true;
+    }
+  }
+
+  private rememberReloadTried(): void {
+    try {
+      sessionStorage.setItem(RELOAD_TRIED_KEY, '1');
+    } catch {
+      // Nothing to remember it in; the next click resets, as above.
+    }
+  }
+
+  private forgetReloadTried(): void {
+    try {
+      sessionStorage.removeItem(RELOAD_TRIED_KEY);
+    } catch {
+      // It could not have been set either.
+    }
+  }
+
+  /** Name the button for what the next click will do. */
+  private labelReloadButton(): void {
+    if (!this.reloadButton) return;
+    const label = this.reloadWasTried()
+      ? this.text('reset')
+      : this.text('reload');
+    this.reloadButton.setAttribute('aria-label', label);
+    this.reloadButton.title = label;
   }
 
   /**
@@ -125,6 +233,10 @@ export class LoadingWidget {
     if (this.disposed) return;
     this.disposed = true;
     this.clearStallTimer();
+    // This load worked, so the next overlay — whenever it appears — starts
+    // over with a plain reload rather than clearing a cache that has just
+    // proved itself.
+    this.forgetReloadTried();
 
     if (this.container) {
       this.container.style.opacity = '0';
@@ -239,10 +351,9 @@ export class LoadingWidget {
     this.reloadButton = document.createElement('button');
     this.reloadButton.className = 'sw-reload-overlay';
     this.reloadButton.type = 'button';
-    this.reloadButton.setAttribute('aria-label', 'Reload');
-    this.reloadButton.title = 'Reload';
+    this.labelReloadButton();
     this.reloadButton.appendChild(this.createReloadIcon());
-    this.reloadButton.addEventListener('click', () => this.resetCache());
+    this.reloadButton.addEventListener('click', () => void this.onReloadClick());
     logoContainer.appendChild(this.reloadButton);
 
     container.appendChild(logoContainer);
@@ -281,6 +392,7 @@ export class LoadingWidget {
 
   private showReloadOverlay(): void {
     this.logoContainer?.classList.add('is-stalled');
+    this.labelReloadButton();
   }
 
   private resetStallTimer(): void {
@@ -289,8 +401,30 @@ export class LoadingWidget {
       this.stallTimer = setTimeout(() => {
         log.warn('[Bootstrap] Loading appears stalled');
         this.showReloadOverlay();
-      }, STALLED_TIMEOUT_MS);
+      }, this.stallBudgetMs);
     }
+  }
+
+  /**
+   * Stop treating silence as a stall for [UNREPORTED_STALLED_TIMEOUT_MS]
+   * instead of [STALLED_TIMEOUT_MS].
+   *
+   * The pipeline calls this when no worker is reporting to this page, so
+   * the only thing between 25% and 80% is a download nobody narrates. See
+   * `UNREPORTED_STALLED_TIMEOUT_MS`.
+   */
+  expectSilence(): void {
+    if (this.stallBudgetMs === UNREPORTED_STALLED_TIMEOUT_MS) return;
+    this.stallBudgetMs = UNREPORTED_STALLED_TIMEOUT_MS;
+    // Re-arm: the timer already running was set for the short budget.
+    if (this.stallTimer) this.resetStallTimer();
+  }
+
+  /** Back to the normal threshold: something is reporting progress again. */
+  expectProgress(): void {
+    if (this.stallBudgetMs === STALLED_TIMEOUT_MS) return;
+    this.stallBudgetMs = STALLED_TIMEOUT_MS;
+    if (this.stallTimer) this.resetStallTimer();
   }
 
   private clearStallTimer(): void {
@@ -347,13 +481,11 @@ export class LoadingWidget {
    * keeps working regardless.
    */
   private async resetCache(): Promise<void> {
-    if (this.reloadButton) {
-      this.reloadButton.classList.add('is-loading');
-      this.reloadButton.setAttribute('disabled', 'true');
-    }
-
     await withTimeout(this.clearCachingLayer(), RESET_TIMEOUT_MS, undefined);
-
+    // The reload that follows is the one chance for a clean start, so the
+    // flag goes: if it fails again, the next overlay starts over with a
+    // plain reload rather than wiping a cache it just filled.
+    this.forgetReloadTried();
     window.location.reload();
   }
 
@@ -442,7 +574,13 @@ export class LoadingWidget {
         window.matchMedia('(prefers-color-scheme: dark)').matches);
     const bg = isDark ? '#1a1a2e' : '#f4fdf7';
     const subtextColor = isDark ? '#b0b0b0' : '#666';
-    const titleColor = isDark ? color : color;
+    // The accent is a brand colour, not a contrast ratio: the default
+    // `#25D366` as the title on the light background is about 1.9:1. Text
+    // gets a darkened or lightened variant that passes 4.5:1, and the
+    // button a variant its white icon has 3:1 against; the ring and the
+    // glows keep the colour as given (audit #30, item 5.1).
+    const titleColor = ensureContrast(color, bg);
+    const buttonColor = ensureContrast(color, '#ffffff', 3);
 
     return `
       html, body {
@@ -588,7 +726,7 @@ export class LoadingWidget {
         justify-content: center;
         border: none;
         border-radius: 50%;
-        background: ${color};
+        background: ${buttonColor};
         color: #fff;
         cursor: pointer;
         opacity: 0;

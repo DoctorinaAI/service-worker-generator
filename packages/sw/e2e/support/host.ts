@@ -52,6 +52,8 @@ export class Host {
   /** Installed by a test to make the origin misbehave. */
   fault?: Fault;
   origin = '';
+  /** Subdirectory the build is served from, with a trailing slash. */
+  base = '';
   private server?: http.Server;
   private port = 0;
 
@@ -62,6 +64,11 @@ export class Host {
     );
     this.port = (this.server.address() as AddressInfo).port;
     this.origin = `http://127.0.0.1:${this.port}`;
+  }
+
+  /** Where the app lives, base path included. */
+  get appUrl(): string {
+    return `${this.origin}/${this.base}`;
   }
 
   /** Take the origin off the network: connections are refused. */
@@ -98,8 +105,15 @@ export class Host {
     if (this.fault?.(seen, res)) return;
 
     let file = path.join(this.root, pathname === '/' ? 'index.html' : pathname);
-    if (!file.startsWith(this.root) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
-      file = path.join(this.root, 'index.html');
+    // A directory — `/` or `/app/` — is its own index.html.
+    if (fs.existsSync(file) && fs.statSync(file).isDirectory()) {
+      file = path.join(file, 'index.html');
+    }
+    // Anything else the deploy does not have is answered with the shell, as
+    // a host with an SPA rewrite does. Under a base path the shell is the
+    // one inside it.
+    if (!file.startsWith(this.root) || !fs.existsSync(file)) {
+      file = path.join(this.root, this.base, 'index.html');
     }
     res.writeHead(200, {
       'Content-Type': TYPES[path.extname(file)] ?? 'application/octet-stream',
@@ -117,17 +131,27 @@ export class Host {
   /**
    * Deploy the example build with [marker] in its Dart code. [suffix] makes
    * it a new version; [engine] replaces its engine revision; [logLevel] is
-   * injected into both artifacts as `--log-level` would have.
+   * injected into both artifacts as `--log-level` would have; [basePath]
+   * serves the whole build from a subdirectory, with the `<base href>` a
+   * deploy under a path needs.
    */
   deploy(
     marker: string,
-    options: { suffix?: string; engine?: string; logLevel?: string } = {},
+    options: {
+      suffix?: string;
+      engine?: string;
+      logLevel?: string;
+      basePath?: string;
+    } = {},
   ): void {
     fs.rmSync(this.root, { recursive: true, force: true });
-    fs.cpSync(WEB_ROOT, this.root, { recursive: true });
+    const base = options.basePath ? `${options.basePath}/` : '';
+    this.base = base;
+    const target = base ? path.join(this.root, options.basePath!) : this.root;
+    fs.cpSync(WEB_ROOT, target, { recursive: true });
 
     const edit = (name: string, change: (text: string) => string): void => {
-      const file = path.join(this.root, name);
+      const file = path.join(target, name);
       const before = fs.readFileSync(file, 'utf8');
       const after = change(before);
       // A pattern the template outgrew would deploy the same build again, and
@@ -138,13 +162,21 @@ export class Host {
     edit('main.dart.js', (js) => `${js}\n;window.__buildMarker=${JSON.stringify(marker)};\n`);
     // The worker refuses a body whose size differs from its manifest, so the
     // marked file gets a manifest entry of its own, as a real build would.
-    const marked = fs.readFileSync(path.join(this.root, 'main.dart.js'));
+    const marked = fs.readFileSync(path.join(target, 'main.dart.js'));
     edit('sw.js', (js) =>
       js.replace(
         /("main\.dart\.js":\{"name":"main\.dart\.js","size":)\d+(,"hash":")[0-9a-f]+/,
         `$1${marked.length}$2${crypto.createHash('md5').update(marked).digest('hex')}`,
       ),
     );
+
+    if (base) {
+      // What `flutter build web --base-href` produces, and what the
+      // worker's scope and every manifest key are then relative to.
+      edit('index.html', (html) =>
+        html.replace('<base href="/">', `<base href="/${base}">`),
+      );
+    }
 
     const { suffix, engine, logLevel } = options;
     if (logLevel) {

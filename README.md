@@ -54,6 +54,9 @@ on the next unrelated build:
 dart pub global activate sw 0.4.0
 ```
 
+That puts an `sw` command on `PATH`; `dart pub global run sw:generate` works
+the same way without it.
+
 Note that a pre-release is not matched by a plain caret constraint — `0.5.0-dev`
 sorts *before* `0.5.0`, so it falls outside `^0.4.0`. Pin a pre-release
 exactly, or write `^0.5.0-dev` to accept it now and the release later.
@@ -238,6 +241,7 @@ Do not keep Flutter's `<script>{{flutter_bootstrap_js}}</script>`: `flutter buil
 | `minProgress`    | number  | `0`         | Minimum progress value for the bootstrap range |
 | `maxProgress`    | number  | `90`        | Maximum progress value (Dart manages the rest) |
 | `logLevel`       | string  | `--log-level` | `"silent"`, `"error"`, `"warn"` or `"info"`: how much reaches the console, overriding the generated default |
+| `strings`        | object  | English     | What the loading screen says, by key — `starting`, `environment`, `worker`, `update`, `engine`, `app`, `resources` (`{done}`/`{total}`), `initializing`, `running`, `failed`, `offline`, `reload`, `reset`. Unknown keys and non-strings are ignored |
 
 ## Local Development
 
@@ -328,7 +332,7 @@ After this sequence, `build/web/` contains exactly the artifacts that should shi
 | `--ignore`           |       | Ignore category glob overrides        | —                 |
 | `--keep-maps`        |       | Keep `.js.map`, `.js.symbols` and `.wasm.map` files | `false`           |
 | `--no-cleanup`       |       | Skip Flutter file cleanup             | `false`           |
-| `--comments`         | `-c`  | Reserved; has no effect yet           | `false`           |
+| `--comments`         | `-c`  | Deprecated; warns and has no effect   | `false`           |
 | `--config`           |       | Path to YAML config file              | `sw.yaml`         |
 | `--theme`            |       | Loading widget theme                  | `auto`            |
 | `--logo`             |       | Loading widget logo path              | —                 |
@@ -364,6 +368,8 @@ no-glob: "sw.js; bootstrap.js; **/*.map; assets/NOTICES"
 ```
 
 Glob options also take a YAML list (`glob: ["**.js", "assets/**"]`). Plain values are used as written, so `version: 1.10` stays `1.10`.
+
+These are `package:glob` patterns: `*` does not cross `/`, so `*.png` means the top level only and `**/*.png` means every directory. A pattern of the first shape is warned about.
 
 Priority: CLI arguments > YAML config > environment variables > defaults.
 
@@ -442,9 +448,11 @@ external JSObject get bootstrapProgress;
 | Method                                 | Description                                                                                                                                                 |
 | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Bootstrap.dispose()`                  | Remove loading widget, clean up listeners                                                                                                                   |
-| `Bootstrap.progress`                   | Current state: `{ phase, percent, message }`                                                                                                                |
+| `Bootstrap.progress`                   | Current state: `{ phase, percent, message }`, plus `detail` once `phase` is `error` — the raw reason, which the screen does not show                        |
 | `Bootstrap.subscribe(callback)`        | Subscribe to progress changes, returns unsubscribe function                                                                                                 |
 | `Bootstrap.onUpdateAvailable(handler)` | Runs when a newer Service Worker has installed and is waiting; notifications stay active for the whole page session, even after the loading widget is gone. |
+| `Bootstrap.onError(handler)`           | Runs when loading fails, with the `error` state; `detail` carries the engine's or the network's own message. Also reaches `subscribe` consumers as `phase: 'error'` |
+| `Bootstrap.onWorkerFailure(handler)`   | Runs when the service worker reports a failed install, a cache swap that ran out of storage, or a refused cache write. The app is loading or running — this is a degraded caching layer, not a failed load |
 | `Bootstrap.applyUpdate(reload = true)` | Activates the waiting Service Worker and reloads the page into the updated build. Resolves `true` (and reloads, by default) once the page's controller changes or the waiting worker reaches `activated`, which covers a hard-reloaded page with no controller. Resolves `false`, without reloading, if no worker is waiting, at once if it turns `redundant`, or if neither lands within 10s. |
 
 Alternatively, the loading widget auto-disposes on the `flutter-first-frame` event.
@@ -519,6 +527,7 @@ cache, and so is everything if the network cannot answer at all. See
 
 - **Atomic updates** — New resources cached in temp cache, then swapped atomically on activate
 - **Manifest diff** — Previous manifest compared to detect changed resources (by MD5 hash)
+- **Reuse across versions** — a new version's install copies the Core and Required files whose hash did not change out of the previous version's cache instead of downloading them, so an assets-only deploy costs the assets
 - **Stale cleanup** — Old versioned caches automatically deleted on activate
 - **Error recovery** — On activate error, all caches cleared (clean slate), `clients.claim()` always called
 
@@ -527,7 +536,14 @@ cache, and so is everything if the network cannot answer at all. See
 - **Fetch timeout**: 10s per request via AbortController (headers only)
 - **Body stall watchdog**: a pre-cached body idle for 30s is cancelled, so a dead
   stream cannot hang `install` — and with it every `register()` on the origin
-- **Fetch retry**: 3 attempts with exponential backoff (1s → 2s → 4s + jitter)
+- **Fetch retry**: 3 attempts with exponential backoff (1s → 2s → 4s + jitter).
+  Navigations are not retried: with a pre-cached shell in hand they fall back
+  to it after 3s rather than hold a blank page
+- **Resumed install**: a failed install keeps what it downloaded, so the retry
+  on the next load fetches only what is missing
+- **Storage pressure**: the temp → content swap moves a few entries at a time
+  and frees each one as it goes, and a swap that runs out of storage keeps
+  what it moved instead of starting over
 - **SW activation timeout**: 4s on a first visit, continues without SW on timeout.
   A page that already has a controller boots with it straight away
 - **Engine change after a deploy**: when the new build runs on a different Flutter
@@ -570,6 +586,12 @@ messages with `counted: true`, and only from your own `swVersion` — see
 | ------------------------ | --------------------------------------------- |
 | `'skipWaiting'`          | Immediately activate a waiting service worker |
 | `{ type: 'getVersion' }` | Respond with the SW version and engine revision |
+| `{ type: 'getStatus' }`  | Respond with the caches and their sizes, the storage estimate and the last worker failure |
+
+The worker also broadcasts `sw-lifecycle` messages when an install, a cache
+swap or a cache write fails; the bootstrap re-dispatches them as a
+`sw-lifecycle` event on `window` and calls `Bootstrap.onWorkerFailure`
+handlers with the failures.
 
 ## Architecture
 

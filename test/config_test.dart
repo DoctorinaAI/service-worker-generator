@@ -303,6 +303,52 @@ max-progress: 80
     // Issue #38: the generated artifacts must be able to keep quiet in
     // production, and the setting has to travel through every channel the
     // other options do.
+    // Audit #30, item 3.6: `*` does not cross `/` in package:glob, so
+    // `--ignore="*.png"` quietly covered only the top level of the build.
+    group('segment-only globs', () {
+      test('are warned about, and still work as written', () async {
+        final out = await captureOutput(
+          () => GeneratorConfig.parse(const ['--ignore=*.png']),
+        );
+        expect(out.result.ignoreGlobs, {'*.png'});
+        expect(out.stderr, contains('matches only the top level'));
+        expect(out.stderr, contains('**/*.png'));
+      });
+
+      test('are quiet when the pattern already crosses directories', () async {
+        for (final pattern in ['**/*.png', '**.png', 'assets/*.png', '*']) {
+          final out = await captureOutput(
+            () => GeneratorConfig.parse(['--ignore=$pattern']),
+          );
+          expect(out.stderr, isEmpty, reason: pattern);
+        }
+      });
+
+      test('name the YAML key they came from', () async {
+        final out = await parseWith('ignore: "*.png"\n');
+        expect(out.stderr, contains('ignore="*.png"'));
+        expect(out.stderr, contains('sw.yaml'));
+      });
+    });
+
+    // Audit #30, section 7: the flag was documented as "reserved" and did
+    // nothing, which reads as if it does something.
+    group('--comments', () {
+      test('warns when it is switched on', () async {
+        final out = await captureOutput(
+          () => GeneratorConfig.parse(const ['--comments']),
+        );
+        expect(out.result.comments, isTrue);
+        expect(out.stderr, contains('--comments has no effect'));
+      });
+
+      test('is quiet when it is not', () async {
+        final out = await captureOutput(() => GeneratorConfig.parse(const []));
+        expect(out.result.comments, isFalse);
+        expect(out.stderr, isEmpty);
+      });
+    });
+
     group('log level', () {
       test('defaults to info', () async {
         final out = await captureOutput(() => GeneratorConfig.parse(const []));

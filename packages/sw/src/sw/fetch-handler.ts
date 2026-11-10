@@ -4,6 +4,7 @@ import {
   BODY_STALL_TIMEOUT_MS,
   FETCH_TIMEOUT_MS,
   MAX_RETRY_ATTEMPTS,
+  NAVIGATION_TIMEOUT_MS,
   NEVER_CACHE_FILES,
   RESERVED_PATH_PREFIXES,
 } from '../shared/constants';
@@ -13,6 +14,7 @@ import {
   fetchWithRetry,
   guardBody,
   replayableResponse,
+  withTimeout,
 } from '../shared/utils';
 import {
   expectedBodySize,
@@ -21,6 +23,7 @@ import {
 } from './cache-manager';
 import { reportIfQuotaExceeded } from './quota';
 import { hasPendingWorker } from './registration';
+import { reportLifecycle } from './lifecycle';
 import type { ProgressReporter } from './progress';
 import { log } from '../shared/logger';
 
@@ -35,6 +38,9 @@ declare const self: ServiceWorkerGlobalScope;
  * navigation be served from the pre-cached copy while offline.
  */
 const INDEX_KEY = 'index.html';
+
+/** Sentinel for a navigation the origin did not answer in time. */
+const TOO_SLOW = Symbol('navigation-timeout');
 
 /**
  * Whether [entry] is one of the files that decide which build of the app
@@ -155,10 +161,18 @@ async function passThrough(event: FetchEvent): Promise<Response> {
 /**
  * Network-first strategy for navigations and `index.html`.
  *
- * Prefers a navigationPreload response if available, then falls through to
- * `fetchWithRetry`. Falls back to the pre-cached app shell on any network
- * error *or* non-ok HTTP response so a broken origin cannot replace a good
- * cached page.
+ * Prefers a navigationPreload response if available, then the request on
+ * the network — `fetch(request)` with no init, so the request is never
+ * rebuilt and keeps its `navigate` mode (the origin keeps seeing
+ * `Sec-Fetch-Mode: navigate`, and a same-origin 3xx keeps arriving as the
+ * opaque redirect the browser must follow).
+ *
+ * Falls back to the pre-cached app shell on a network error *or* a non-ok
+ * status, so a broken origin cannot replace a good cached page — and, when
+ * there is such a copy, after `NAVIGATION_TIMEOUT_MS`, rather than holding
+ * a blank page while the origin thinks. Without a cached copy there is
+ * nothing better to wait for, so the fetch is given as long as it takes,
+ * exactly as a page with no worker would.
  *
  * Nothing after a successful fetch may reject: this promise is handed to
  * `respondWith`, so a rejection is a failed navigation — a blank error page
@@ -188,16 +202,24 @@ async function networkFirst(
     });
   };
 
-  const fallbackToCache = async (): Promise<Response> => {
+  // Started, not awaited: whether there is a cached shell decides how long
+  // the origin is given, but waiting for a cache lookup before the request
+  // goes out would delay every navigation by it. Never rejects.
+  const cachedShell = (async (): Promise<Response | undefined> => {
     try {
-      const cache = await caches.open(cacheName);
-      const cached = await cache.match(new Request(INDEX_KEY));
-      if (cached) {
-        await notifyIndex('cached');
-        return cached;
-      }
+      return await (await caches.open(cacheName)).match(new Request(INDEX_KEY));
     } catch (error) {
       log.warn('[SW] App-shell cache lookup failed:', error);
+      return undefined;
+    }
+  })();
+
+  const fallbackToCache = async (): Promise<Response> => {
+    const cached = await cachedShell;
+    if (cached) {
+      // Not awaited: this is a navigation, and the document waits for it.
+      keepAlive(event, notifyIndex('cached'));
+      return cached;
     }
     return new Response('Offline', {
       status: 503,
@@ -209,7 +231,31 @@ async function networkFirst(
   try {
     // Prefer navigationPreload if enabled.
     const preload = (await event.preloadResponse) as Response | undefined;
-    response = preload ?? (await fetchWithRetry(request));
+    if (preload) {
+      response = preload;
+    } else {
+      // The request goes out first; the lookup above has settled by the
+      // time its result is needed.
+      const network = fetch(request);
+      const answered = (await cachedShell)
+        ? await withTimeout(network, NAVIGATION_TIMEOUT_MS, TOO_SLOW)
+        : await network;
+      if (answered === TOO_SLOW) {
+        log.warn(
+          `[SW] The origin did not answer the navigation within ` +
+            `${NAVIGATION_TIMEOUT_MS}ms; booting from the cached shell`,
+        );
+        // The page boots from the copy it has, and the fresh one still
+        // lands in the cache when it arrives: without this, a connection
+        // that is reliably slower than the deadline would never refresh
+        // the shell at all.
+        if (isShellRequest && !hasPendingWorker()) {
+          keepAlive(event, storeLateShell(network, cacheName, notifyIndex));
+        }
+        return fallbackToCache();
+      }
+      response = answered;
+    }
   } catch {
     return fallbackToCache();
   }
@@ -240,6 +286,36 @@ async function networkFirst(
   }
 
   return response;
+}
+
+/**
+ * Store the shell from a navigation the cache already answered.
+ *
+ * Never rejects: the page has its response, and this is the next load's
+ * benefit. A non-ok answer is released rather than stored, as the
+ * network-first path does.
+ */
+async function storeLateShell(
+  network: Promise<Response>,
+  cacheName: string,
+  notifyIndex: (status: 'updated') => Promise<void>,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await network;
+  } catch {
+    // The origin never answered. Nothing to store, nothing to report.
+    return;
+  }
+  if (!response.ok || response.type === 'opaqueredirect' || response.status === 0) {
+    try {
+      response.body?.cancel().catch(() => undefined);
+    } catch {
+      // Nothing to release.
+    }
+    return;
+  }
+  await storeShell(cacheName, response, notifyIndex);
 }
 
 /**
@@ -332,14 +408,21 @@ async function cacheFirst(
     cache = await caches.open(cacheName);
     const cached = retired ? undefined : await cache.match(new Request(resourceKey));
     if (cached) {
-      await progress.report({
-        key: resourceKey,
-        name: entry.name,
-        url: request.url,
-        size: entry.size,
-        loaded: entry.size,
-        status: 'cached',
-      });
+      // Not awaited: `report` is a `clients.matchAll` round trip and a
+      // broadcast to every open tab, and this is the path every font and
+      // image takes on every load. The page gets the file; the telemetry
+      // follows under `waitUntil`.
+      keepAlive(
+        event,
+        progress.report({
+          key: resourceKey,
+          name: entry.name,
+          url: request.url,
+          size: entry.size,
+          loaded: entry.size,
+          status: 'cached',
+        }),
+      );
       return cached;
     }
   } catch (error) {
@@ -362,7 +445,7 @@ async function cacheFirst(
       `[SW] ${resourceKey}: ${reason} while a newer build is installing; ` +
         "answering from this version's cache",
     );
-    await progress.report({
+    void progress.report({
       key: resourceKey,
       name: entry.name,
       url: request.url,
@@ -374,14 +457,19 @@ async function cacheFirst(
   };
 
   try {
-    await progress.report({
-      key: resourceKey,
-      name: entry.name,
-      url: request.url,
-      size: entry.size,
-      loaded: 0,
-      status: 'loading',
-    });
+    // Fire-and-forget, as above: awaiting it would hold the fetch that is
+    // the point of this request behind a broadcast.
+    keepAlive(
+      event,
+      progress.report({
+        key: resourceKey,
+        name: entry.name,
+        url: request.url,
+        size: entry.size,
+        loaded: 0,
+        status: 'loading',
+      }),
+    );
 
     // A retired worker asks for the page's own URL: `fetchRefill` would ask
     // for `?v={hash}` of the build *this* worker was generated for, and a
@@ -406,35 +494,44 @@ async function cacheFirst(
             new Request(resourceKey),
             response,
             expectedBodySize(resourceKey, entry),
-          ).catch((error: unknown) => {
+          ).catch(async (error: unknown) => {
             if (!reportIfQuotaExceeded(`caching ${resourceKey}`, error)) {
               log.warn(`[SW] Cache write failed for ${resourceKey}:`, error);
             }
+            // Visible to the page, which is where anything that collects
+            // errors for the app lives.
+            await reportLifecycle(version, 'cache', 'failed', error);
           }),
         );
       }
 
-      await progress.report({
-        key: resourceKey,
-        name: entry.name,
-        url: request.url,
-        size: entry.size,
-        loaded: entry.size,
-        status: 'completed',
-      });
+      keepAlive(
+        event,
+        progress.report({
+          key: resourceKey,
+          name: entry.name,
+          url: request.url,
+          size: entry.size,
+          loaded: entry.size,
+          status: 'completed',
+        }),
+      );
     } else {
       // Non-OK response is still a user-visible failure: emit an error
       // progress event so the bootstrap UI can surface it instead of
       // hanging on 'loading'.
-      await progress.report({
-        key: resourceKey,
-        name: entry.name,
-        url: request.url,
-        size: entry.size,
-        loaded: 0,
-        status: 'error',
-        error: `HTTP ${response.status}`,
-      });
+      keepAlive(
+        event,
+        progress.report({
+          key: resourceKey,
+          name: entry.name,
+          url: request.url,
+          size: entry.size,
+          loaded: 0,
+          status: 'error',
+          error: `HTTP ${response.status}`,
+        }),
+      );
     }
 
     return response;
@@ -445,15 +542,18 @@ async function cacheFirst(
       );
       if (stale) return stale;
     }
-    await progress.report({
-      key: resourceKey,
-      name: entry.name,
-      url: request.url,
-      size: entry.size,
-      loaded: 0,
-      status: 'error',
-      error: error instanceof Error ? error.message : String(error),
-    });
+    keepAlive(
+      event,
+      progress.report({
+        key: resourceKey,
+        name: entry.name,
+        url: request.url,
+        size: entry.size,
+        loaded: 0,
+        status: 'error',
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
     return new Response('Network error', {
       status: 503,
       headers: { 'Content-Type': 'text/plain' },

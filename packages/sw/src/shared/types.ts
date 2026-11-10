@@ -1,4 +1,5 @@
 import type { LogLevel } from './logger';
+import type { Strings } from './strings';
 
 /**
  * Resource category determining caching behavior.
@@ -65,6 +66,12 @@ export interface BootstrapConfig {
    * generator baked in: "silent", "error", "warn" or "info".
    */
   logLevel?: LogLevel;
+  /**
+   * What the loading screen says, by key. Unknown keys and non-string
+   * values are ignored; everything not given keeps its English default.
+   * See `shared/strings.ts` for the keys.
+   */
+  strings?: Partial<Strings>;
   /** Path to logo image */
   logo?: string;
   /** Title text for loading widget */
@@ -137,6 +144,12 @@ export interface ProgressState {
   percent: number;
   /** Human-readable status message */
   message: string;
+  /**
+   * What actually went wrong, when [phase] is `error`: the engine's or the
+   * network's own message, which [message] deliberately does not show the
+   * user. Absent otherwise.
+   */
+  detail?: string;
 }
 
 /**
@@ -148,7 +161,13 @@ export type BootstrapPhase =
   | 'canvaskit'
   | 'assets'
   | 'dart-entry'
-  | 'dart-init';
+  | 'dart-init'
+  /**
+   * Loading failed and the widget is showing it. A `subscribe` consumer
+   * had no way to learn that before: the phase stayed wherever the
+   * pipeline stopped.
+   */
+  | 'error';
 
 /**
  * Progress message sent from SW to clients.
@@ -180,6 +199,54 @@ export interface SWProgressMessage {
    */
   counted: boolean;
   error?: string;
+}
+
+/**
+ * What a worker tells its clients about its own lifecycle, beyond the
+ * per-resource `sw-progress` stream.
+ *
+ * Install failures, a failed cache swap, dropped caches and quota errors
+ * used to be logged inside the worker and nowhere else: a page had no way
+ * to know its caching layer had given up, and neither had whatever
+ * collects errors for the app (audit #30, item 6.1).
+ */
+export interface SWLifecycleMessage {
+  type: 'sw-lifecycle';
+  timestamp: number;
+  /** Version of the worker that sent this, as `sw-progress` carries it. */
+  swVersion: string;
+  /** Which part of the worker's life this is about. */
+  phase: SWLifecyclePhase;
+  /** What happened to it. */
+  status: 'started' | 'completed' | 'failed';
+  /** Why, when [status] is `failed`: the error's own message. */
+  reason?: string;
+  /**
+   * Whether the failure was the storage quota, which is a condition of the
+   * device rather than of the deploy, and is worth telling apart.
+   */
+  isQuota?: boolean;
+}
+
+/** The parts of a worker's life it reports on. */
+export type SWLifecyclePhase = 'install' | 'activate' | 'cache';
+
+/**
+ * The reply to a `getStatus` message: what this worker has, and the last
+ * thing that went wrong in it.
+ */
+export interface SWStatusMessage {
+  type: 'status';
+  /** Echoed from the request, when it carried one. */
+  requestId?: string;
+  swVersion: string;
+  engineRevision?: string;
+  /** Cache name → number of entries, for this app's caches only. */
+  caches: Record<string, number>;
+  /** `navigator.storage.estimate()`, when the browser answers it. */
+  storage?: { usage?: number; quota?: number };
+  /** The last lifecycle failure, if there has been one in this worker. */
+  lastError?: { phase: SWLifecyclePhase; reason: string; isQuota: boolean };
 }
 
 /**

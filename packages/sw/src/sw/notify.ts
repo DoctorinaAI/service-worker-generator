@@ -1,8 +1,8 @@
-import type { SWProgressMessage } from '../shared/types';
+import type { SWLifecycleMessage, SWProgressMessage } from '../shared/types';
 import { log } from '../shared/logger';
 
 /**
- * Send a progress notification to all connected clients.
+ * Send a notification to all connected clients.
  *
  * A single `postMessage` failure (e.g. a client whose channel just closed)
  * must not abort the loop — otherwise one dead client starves all others
@@ -10,7 +10,7 @@ import { log } from '../shared/logger';
  */
 export async function notifyClients(
   sw: ServiceWorkerGlobalScope,
-  message: SWProgressMessage,
+  message: SWProgressMessage | SWLifecycleMessage,
 ): Promise<void> {
   const clients = await sw.clients.matchAll({
     type: 'window',

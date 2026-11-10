@@ -92,7 +92,7 @@ describe('createInstallHandler', () => {
     expect(skipWaitingSpy).not.toHaveBeenCalled();
   });
 
-  it('deletes the temp cache and rethrows when a Core precache fails', async () => {
+  it('keeps the temp cache and rethrows when a Core precache fails', async () => {
     // 5xx is retried with backoff now; collapse the delays.
     const origSetTimeout = globalThis.setTimeout;
     vi.spyOn(globalThis, 'setTimeout').mockImplementation(((
@@ -113,8 +113,130 @@ describe('createInstallHandler', () => {
     handler(event as unknown as ExtendableEvent);
 
     await expect(event._promise).rejects.toThrow(/Precache failed/);
-    expect(mockCaches.peek('app-temp-v2')).toBeUndefined();
+    // Kept for the next attempt: whatever did arrive is not downloaded
+    // again (see `alreadyPrecached`). Nothing reads it before the swap,
+    // which a failed install never reaches.
+    expect(mockCaches.peek('app-temp-v2')).toBeDefined();
     expect(skipWaitingSpy).not.toHaveBeenCalled();
+  });
+
+  it('reports byte-level beats while a file downloads', async () => {
+    // Audit #30, item 2.7: without them the ring does not move during the
+    // download that dominates a cold load.
+    const chunks = [new Uint8Array(4), new Uint8Array(4)];
+    installMockFetch(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              for (const chunk of chunks) controller.enqueue(chunk);
+              controller.close();
+            },
+          }),
+        ),
+    );
+    const manifest: ResourceManifest = {
+      'main.dart.js': {
+        name: 'main.dart.js',
+        size: 8,
+        hash: 'h-core',
+        category: ResourceCategory.Core,
+      },
+    };
+    const beats: number[] = [];
+    const reporter = createProgressReporter('v5', manifest);
+    vi.spyOn(reporter, 'report').mockImplementation(async (update) => {
+      if (update.status === 'loading' && update.key) beats.push(update.loaded);
+    });
+
+    const handler = createInstallHandler('app', 'v5', manifest, reporter);
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    // The first chunk's running total; the second is inside the throttle
+    // window, and the completion is reported by `onEach`.
+    expect(beats[0]).toBe(4);
+  });
+
+  it('resumes an install instead of downloading what it already has', async () => {
+    const manifest: ResourceManifest = {
+      'main.dart.js': {
+        name: 'main.dart.js',
+        size: 4,
+        hash: 'h-core',
+        category: ResourceCategory.Core,
+      },
+      'manifest.json': {
+        name: 'manifest.json',
+        size: 2,
+        hash: 'h-man',
+        category: ResourceCategory.Required,
+      },
+    };
+    // What a previous attempt stored: the big one, with the length a
+    // response carries, so it can be told from another build's copy.
+    const temp = await mockCaches.open('app-temp-v3');
+    await temp.put(
+      new Request('main.dart.js'),
+      new Response('core', { headers: { 'Content-Length': '4' } }),
+    );
+    const spy = installMockFetch(
+      async () => new Response('ok', { headers: { 'Content-Length': '2' } }),
+    );
+
+    const handler = createInstallHandler(
+      'app',
+      'v3',
+      manifest,
+      createProgressReporter('v3', manifest),
+    );
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    // Only the missing entry was fetched.
+    const fetched = spy.mock.calls.map((call) => String((call[0] as Request).url));
+    expect(fetched.some((url) => url.includes('manifest.json'))).toBe(true);
+    expect(fetched.some((url) => url.includes('main.dart.js'))).toBe(false);
+    // And the one that was already there is still the one that is stored.
+    const stored = await temp.match(new Request('main.dart.js'));
+    expect(await stored!.text()).toBe('core');
+  });
+
+  it('re-fetches an entry whose stored length is another build’s', async () => {
+    // A caller that pins `--version` deploys twice under one name, so the
+    // temp cache may hold the previous build's copy of the same path.
+    const manifest: ResourceManifest = {
+      'main.dart.js': {
+        name: 'main.dart.js',
+        size: 7,
+        hash: 'h-core',
+        category: ResourceCategory.Core,
+      },
+    };
+    const temp = await mockCaches.open('app-temp-v4');
+    await temp.put(
+      new Request('main.dart.js'),
+      new Response('core', { headers: { 'Content-Length': '4' } }),
+    );
+    const spy = installMockFetch(
+      async () => new Response('newcore', { headers: { 'Content-Length': '7' } }),
+    );
+
+    const handler = createInstallHandler(
+      'app',
+      'v4',
+      manifest,
+      createProgressReporter('v4', manifest),
+    );
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    expect(spy).toHaveBeenCalledOnce();
+    const stored = await temp.match(new Request('main.dart.js'));
+    expect(await stored!.text()).toBe('newcore');
   });
 
   it('tolerates Required/Optional failures and still completes install without auto-activating', async () => {

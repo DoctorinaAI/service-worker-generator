@@ -6,6 +6,8 @@ import {
   MANIFEST_CACHE_SUFFIX,
   MAX_RETRY_ATTEMPTS,
   PRECACHE_CONCURRENCY,
+  PROGRESS_THROTTLE_MS,
+  SWAP_CONCURRENCY,
   TEMP_CACHE_SUFFIX,
 } from '../shared/constants';
 import {
@@ -66,6 +68,177 @@ export function expectedBodySize(
 }
 
 /**
+ * A previous version's content cache, and the manifest that describes what
+ * is in it. See `findReusableSource`.
+ */
+export interface ReuseSource {
+  /** The version that cache belongs to, for the log line. */
+  version: string;
+  cache: Cache;
+  manifest: ResourceManifest;
+}
+
+/**
+ * Copy [path] from a previous version's cache when that version had the
+ * very same file, and report whether it was.
+ *
+ * "The same file" is the manifest's hash and size, both from the build that
+ * wrote the cache and from this one. The stored copy is taken as it is: it
+ * passed the size check when it was first stored, and a host that
+ * re-encodes what it serves had its copy accepted deliberately (see
+ * `storeAfterSizeMismatch`), so re-checking its length here would reject
+ * exactly the copy that host will serve again.
+ */
+async function reuseFromPreviousVersion(
+  cache: Cache,
+  path: string,
+  entry: ResourceEntry,
+  source: ReuseSource | undefined,
+): Promise<boolean> {
+  if (!source) return false;
+  const before = source.manifest[path];
+  if (!before || before.hash !== entry.hash || before.size !== entry.size) {
+    return false;
+  }
+  try {
+    const stored = await source.cache.match(new Request(path));
+    if (!stored) return false;
+    await cache.put(new Request(path), stored);
+    return true;
+  } catch (error) {
+    // A cache that was deleted under us, or a write that failed: fetch it.
+    log.warn(`[SW] Could not reuse the cached ${path}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Whether [path] is already in [cache] with the length [entry] records for
+ * it, from an earlier attempt at the same install.
+ *
+ * Only a stored copy whose declared length matches is accepted. A build
+ * generated with an explicit `--version` that was deployed twice shares a
+ * temp cache name with the previous one, so "there is something under this
+ * key" is not enough; and a copy stored by this version's own precache
+ * already passed the streaming size check. A re-encoded response declares
+ * the encoded length (`declaredBodyLength` returns nothing for those), so
+ * it is re-fetched, which is the safe answer.
+ */
+async function alreadyPrecached(
+  cache: Cache,
+  path: string,
+  entry: ResourceEntry,
+): Promise<boolean> {
+  const expected = expectedBodySize(path, entry);
+  if (expected === undefined) return false;
+  try {
+    const present = await cache.match(new Request(path));
+    if (!present) return false;
+    if (declaredBodyLength(present) !== expected) return false;
+    log.info(`[SW] ${path} is already precached, keeping it`);
+    return true;
+  } catch {
+    // An unreadable cache: fetch it, as before.
+    return false;
+  }
+}
+
+/**
+ * Wrap [report] so it is called at most every `PROGRESS_THROTTLE_MS`, and
+ * `undefined` when there is nothing to report to.
+ */
+function throttled(
+  report: ((loaded: number) => void) | undefined,
+): ((loaded: number) => void) | undefined {
+  if (!report) return undefined;
+  let last = 0;
+  return (loaded: number): void => {
+    const now = Date.now();
+    if (now - last < PROGRESS_THROTTLE_MS) return;
+    last = now;
+    report(loaded);
+  };
+}
+
+/**
+ * Fetch [path] by its hash-busted URL and store it under its manifest key.
+ *
+ * Returns `true` once stored; throws the reason otherwise — a
+ * [BodySizeMismatchError] when the body was not the build's file, which
+ * says more than whatever the Cache API would have rejected with.
+ */
+async function fetchIntoCache(
+  cache: Cache,
+  path: string,
+  entry: ResourceEntry,
+  onBytes?: (loaded: number) => void,
+): Promise<boolean> {
+  const url = cacheBustUrl(path, entry.hash);
+  const request = new Request(url, { cache: 'reload' });
+  let mismatch: BodySizeMismatchError | undefined;
+
+  // Transient server errors (5xx, 429) are retried here, not only thrown
+  // network errors: one 503 on a flaky edge would otherwise fail a Core
+  // entry and restart the download of every file on the next load. Other
+  // 4xx are final.
+  const response = await fetchWithRetry(
+    request,
+    MAX_RETRY_ATTEMPTS,
+    FETCH_TIMEOUT_MS,
+    { retryOnStatus: true },
+  );
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  if (isHtmlFallback(path, response)) {
+    throw new Error('served as HTML (the host has no such file)');
+  }
+  // The guard wraps every body, redirected or not, before `cache.put`
+  // consumes it, and hands back a rebuilt response. Rebuilt, it has no
+  // `redirected` flag, so a shell from a host that redirects
+  // `index.html?v=…` stays replayable for navigations without being
+  // buffered; `replayableResponse` is then a no-op kept as a backstop.
+  //
+  // It also counts the bytes against the manifest's `size`. A body cut
+  // short — a chunked response closed early, a truncating proxy — would
+  // otherwise be served cache-first until the next deploy, breaking the
+  // app for this user only. The count is streaming, so a mismatch errors
+  // the body and `cache.put` stores nothing.
+  //
+  // The stall part of the guard: `fetchWithRetry` only bounds the headers,
+  // and the bodies here are the largest files the app ships — a stream
+  // that dies mid-transfer would otherwise hang `cache.put`, and with it
+  // this install, for as long as the browser lets an install event run.
+  // That is not a slow install: it blocks the scope's job queue, so every
+  // `register()` on the origin hangs until the browser kills it minutes
+  // later. Failing the entry instead costs one install attempt, retried on
+  // the next page load.
+  //
+  // Built inside the `try`: for a null body (a `204`, which is `ok`) the
+  // guard throws its mismatch synchronously, and that must get the same
+  // second look as one found while streaming.
+  try {
+    const guarded = guardBody(response, {
+      idleMs: BODY_STALL_TIMEOUT_MS,
+      expectedBytes: expectedBodySize(path, entry),
+      label: path,
+      onMismatch: (error) => {
+        mismatch = error;
+      },
+      onBytes: throttled(onBytes),
+    });
+    await cache.put(new Request(path), await replayableResponse(guarded));
+  } catch (error) {
+    if (error instanceof BodySizeMismatchError) mismatch = error;
+    if (!mismatch) throw error;
+    if (!(await storeAfterSizeMismatch(cache, path, url, mismatch))) {
+      throw mismatch;
+    }
+  }
+  return true;
+}
+
+/**
  * Pre-cache resources of specified categories into a cache.
  *
  * Uses cache-busted URLs to avoid stale responses. Failures on `Core`
@@ -79,6 +252,8 @@ export async function precacheResources(
   manifest: ResourceManifest,
   categories: readonly ResourceCategory[],
   onEach?: (path: string, entry: ResourceEntry) => void | Promise<void>,
+  reuse?: ReuseSource,
+  onBytes?: (path: string, entry: ResourceEntry, loaded: number) => void,
 ): Promise<void> {
   const cache = await caches.open(cacheName);
   const entries = Object.entries(manifest).filter(([, entry]) =>
@@ -86,78 +261,32 @@ export async function precacheResources(
   );
 
   const coreFailures: string[] = [];
+  let reused = 0;
 
   await mapWithConcurrency(entries, PRECACHE_CONCURRENCY, async ([path, entry]) => {
-    const url = cacheBustUrl(path, entry.hash);
-    const request = new Request(url, { cache: 'reload' });
     let stored = false;
-    let mismatch: BodySizeMismatchError | undefined;
     try {
-      // Transient server errors (5xx, 429) are retried here, not only
-      // thrown network errors: one 503 on a flaky edge would otherwise fail
-      // a Core entry, discard the whole temp cache and restart the download
-      // of every file on the next load. Other 4xx are final.
-      const response = await fetchWithRetry(
-        request,
-        MAX_RETRY_ATTEMPTS,
-        FETCH_TIMEOUT_MS,
-        { retryOnStatus: true },
-      );
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+      // An earlier attempt at this very install may have stored this entry
+      // already: a failed `Core` entry fails the whole install, and the
+      // next page load tries again. Downloading a 30 MB wasm that is
+      // already here is how an install over a flaky connection never
+      // finishes at all.
+      if (await alreadyPrecached(cache, path, entry)) {
+        stored = true;
+      } else if (await reuseFromPreviousVersion(cache, path, entry, reuse)) {
+        stored = true;
+        reused++;
+      } else {
+        stored = await fetchIntoCache(
+          cache,
+          path,
+          entry,
+          onBytes && ((loaded) => onBytes(path, entry, loaded)),
+        );
       }
-      if (isHtmlFallback(path, response)) {
-        throw new Error('served as HTML (the host has no such file)');
-      }
-      // The guard wraps every body, redirected or not, before `cache.put`
-      // consumes it, and hands back a rebuilt response. Rebuilt, it has no
-      // `redirected` flag, so a shell from a host that redirects
-      // `index.html?v=…` stays replayable for navigations without being
-      // buffered; `replayableResponse` is then a no-op kept as a backstop.
-      //
-      // It also counts the bytes against the manifest's `size`. A body cut
-      // short — a chunked response closed early, a truncating proxy —
-      // would otherwise be served cache-first until the next deploy,
-      // breaking the app for this user only. The count is streaming, so a
-      // mismatch errors the body and `cache.put` stores nothing.
-      //
-      // The stall part of the guard:
-      // `fetchWithRetry` only bounds the headers, and the bodies here are
-      // the largest files the app ships — a stream that dies mid-transfer
-      // would otherwise hang `cache.put`, and with it this install, for as
-      // long as the browser lets an install event run. That is not a slow
-      // install: it blocks the scope's job queue, so every `register()` on
-      // the origin hangs until the browser kills it minutes later. Failing
-      // the entry instead costs one install attempt, retried on the next
-      // page load.
-      //
-      // Built inside the `try` below: for a null body (a `204`, which is
-      // `ok`) the guard throws its mismatch synchronously, and that must get
-      // the same second look as one found while streaming.
-      try {
-        const guarded = guardBody(response, {
-          idleMs: BODY_STALL_TIMEOUT_MS,
-          expectedBytes: expectedBodySize(path, entry),
-          label: path,
-          onMismatch: (error) => {
-            mismatch = error;
-          },
-        });
-        await cache.put(new Request(path), await replayableResponse(guarded));
-      } catch (error) {
-        if (error instanceof BodySizeMismatchError) mismatch = error;
-        if (!mismatch) throw error;
-        if (!(await storeAfterSizeMismatch(cache, path, url, mismatch))) {
-          throw mismatch;
-        }
-      }
-      stored = true;
     } catch (error) {
       reportIfQuotaExceeded(`precaching ${path}`, error);
-      // The mismatch, when there was one, says more than whatever the Cache
-      // API rejected with.
-      const cause = mismatch ?? error;
-      const reason = cause instanceof Error ? cause.message : String(cause);
+      const reason = error instanceof Error ? error.message : String(error);
       const msg = `[SW] Precache failed for ${path}: ${reason}`;
       if (entry.category === ResourceCategory.Core) {
         coreFailures.push(`${path} (${reason})`);
@@ -179,6 +308,12 @@ export async function precacheResources(
       }
     }
   });
+
+  if (reused > 0 && reuse) {
+    log.info(
+      `[SW] Reused ${reused} unchanged file(s) from v${reuse.version}`,
+    );
+  }
 
   if (coreFailures.length > 0) {
     throw new Error(
@@ -381,15 +516,20 @@ export async function swapCaches(
   // advertised by the previous manifest during the swap.
   const tempKeys = await tempCache.keys();
   const refreshedPaths = new Set<string>();
-  await Promise.all(
-    tempKeys.map(async (request) => {
-      const response = await tempCache.match(request);
-      if (response) {
-        await contentCache.put(request, response);
-        refreshedPaths.add(getResourceKey(request.url));
-      }
-    }),
-  );
+  // Moved a few at a time, and each entry released as soon as it is
+  // copied, rather than the whole set at once with the temp cache dropped
+  // at the end: that way every pre-cached byte of the app exists twice for
+  // the length of the swap, which on Safari's quota is how a wasm app's
+  // activate fails with QuotaExceededError. A worker that dies mid-swap
+  // leaves the moved entries in the content cache and the rest in the temp
+  // one, and the next swap picks up where this one stopped.
+  await mapWithConcurrency(tempKeys, SWAP_CONCURRENCY, async (request) => {
+    const response = await tempCache.match(request);
+    if (!response) return;
+    await contentCache.put(request, response);
+    refreshedPaths.add(getResourceKey(request.url));
+    await tempCache.delete(request).catch(() => false);
+  });
 
   // Step 2: evict entries whose old copy is now stale. An entry is stale if
   //   (a) it vanished from the new manifest, or
@@ -414,7 +554,7 @@ export async function swapCaches(
   }
 
   // Step 3: persist the new manifest only after the content cache is coherent.
-  await saveManifest(manifestCache, manifest);
+  await saveManifest(manifestCache, version, manifest);
 
   // Step 4: drop temp cache.
   await caches.delete(tempCacheName);
@@ -525,24 +665,91 @@ export async function cleanupOrphanedTempCaches(
 async function loadPreviousManifest(
   cache: Cache,
 ): Promise<ResourceManifest | null> {
+  return (await loadPreviousRecord(cache))?.manifest ?? null;
+}
+
+/**
+ * What the last activated version left behind: its manifest, and its own
+ * version when it recorded one.
+ *
+ * Releases before the version was stored wrote the manifest alone, so a
+ * stored object without a `manifest` key *is* the manifest. Reading both
+ * shapes is what keeps the first install after an upgrade from treating a
+ * perfectly good cache as corrupt.
+ */
+export async function loadPreviousRecord(
+  cache: Cache,
+): Promise<{ version?: string; manifest: ResourceManifest } | null> {
   const response = await cache.match('manifest');
   if (!response) return null;
   try {
-    return (await response.json()) as ResourceManifest;
+    const stored = (await response.json()) as
+      | ResourceManifest
+      | { version?: unknown; manifest?: unknown };
+    const manifest = (stored as { manifest?: unknown }).manifest;
+    if (manifest && typeof manifest === 'object') {
+      const version = (stored as { version?: unknown }).version;
+      return {
+        manifest: manifest as ResourceManifest,
+        ...(typeof version === 'string' && version ? { version } : {}),
+      };
+    }
+    return { manifest: stored as ResourceManifest };
   } catch {
     return null;
   }
 }
 
 /**
- * Save the current manifest to the manifest cache.
+ * Save the current manifest, and the version it belongs to, in the
+ * manifest cache. The version is what lets the next install find the
+ * content cache whose unchanged files it can reuse.
  */
 async function saveManifest(
   cache: Cache,
+  version: string,
   manifest: ResourceManifest,
 ): Promise<void> {
-  const response = new Response(JSON.stringify(manifest), {
+  const response = new Response(JSON.stringify({ version, manifest }), {
     headers: { 'Content-Type': 'application/json' },
   });
   await cache.put('manifest', response);
+}
+
+/**
+ * The content cache of the last activated version, when it is another one
+ * and it is still there, with the manifest that describes it.
+ *
+ * Its entries are what a new version's install can copy instead of
+ * downloading: a content cache is named after its version, so every deploy
+ * used to start from an empty one and fetch every Core and Required file
+ * again — an assets-only deploy made every user download the whole
+ * `main.dart.wasm` a second time. Only entries whose hash is unchanged are
+ * copied, so the one guarantee that matters — shell, bootstrap and Dart
+ * code from one deploy — is untouched.
+ *
+ * `undefined` when there is nothing to reuse, which is also what every
+ * failure to look returns: reuse is an optimisation.
+ */
+export async function findReusableSource(
+  prefix: string,
+  version: string,
+): Promise<ReuseSource | undefined> {
+  try {
+    const record = await loadPreviousRecord(
+      await caches.open(getManifestCacheName(prefix)),
+    );
+    if (!record?.version || record.version === version) return undefined;
+    const name = getContentCacheName(prefix, record.version);
+    // `caches.open` would create it; a missing cache means nothing to reuse.
+    if (!(await caches.has(name))) return undefined;
+    return {
+      version: record.version,
+      cache: await caches.open(name),
+      manifest: record.manifest,
+    };
+  } catch (error) {
+    log.warn('[SW] Could not look for reusable cached files:', error);
+    return undefined;
+  }
 }

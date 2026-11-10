@@ -89,7 +89,17 @@ the next load handed over to the new worker (#40), and writing the new bytes
 into the old cache failed the body size check (#36).
 
 ### Special Cases
-- Navigations (`/`, `index.html`, and any SPA route): network-first, falling back to the pre-cached `index.html`
+- Navigations (`/`, `index.html`, and any SPA route): network-first, falling
+  back to the pre-cached `index.html`. The request goes to the network as
+  itself — `fetch(request)` with no init, so it keeps its `navigate` mode —
+  and it is not retried: with a cached shell in hand the fallback answers
+  after `NAVIGATION_TIMEOUT_MS` (3 s), because the user is watching a blank
+  page and the shell boots the app, which loads its own route. Without a
+  cached copy there is nothing better to wait for, so the fetch gets as long
+  as it needs, exactly as a page with no worker would. An answer that
+  arrives after the deadline still refreshes the cached shell in the
+  background, so a connection reliably slower than it does not keep booting
+  from a copy that is never updated
 - Only `/` and `/index.html` may *write* that cached shell. Another
   same-origin page — a static legal page, a download, an OAuth callback —
   answers a navigation with its own HTML, and storing that under the shell
@@ -156,14 +166,39 @@ with the other engine differences.
 0. Open the manifest cache (`{prefix}-manifest`), which marks the prefix as
    in use (see Cache ownership)
 1. Open temp cache (`{prefix}-temp-{version}`)
-2. Fetch all Core and Required resources with cache-busted URLs
+2. Fetch all Core and Required resources with cache-busted URLs, skipping
+   the ones an earlier attempt at this install already stored (see below)
 3. Store responses in temp cache
 4. Leave the new worker in `waiting` until the client explicitly opts in
 5. Notify clients of progress during pre-caching
 
+An install also copies, rather than downloads, every Core and Required
+file whose hash this build did not change: the manifest cache records the
+version its manifest belongs to, so the install can open that version's
+content cache and take the unchanged entries from it. Only the entries
+whose hash **and** size match in both manifests are copied, so the one
+guarantee that matters — shell, bootstrap and Dart code from one deploy —
+is untouched. Without it an assets-only deploy made every user download the
+whole `main.dart.wasm` again, because a content cache is named after its
+version and therefore starts empty.
+
+An install that fails keeps its temp cache. A failed `Core` entry fails the
+whole install, which is retried on the next page load, and re-downloading a
+30 MB wasm for the sake of the one entry a flaky connection dropped is how
+such an install never finishes at all. The retry skips an entry that is
+already stored **and** whose stored copy declares the length the manifest
+records for it — so a build deployed twice under one pinned `--version`,
+which shares a temp cache name with the previous one, is still re-fetched.
+Nothing reads that cache before the swap, which a failed install never
+reaches, and it goes away with its version (the orphan cleanup at the start
+of the next install, or `cleanupOldCaches`).
+
 ### Activate Event
 1. Open content cache and temp cache
-2. Move all resources from temp to content cache (atomic swap)
+2. Move the resources from temp to content cache, `SWAP_CONCURRENCY` at a
+   time, deleting each one from the temp cache as soon as it is copied: at
+   most that many entries exist twice at once, instead of the whole
+   pre-cached set — every byte of a wasm app — for the length of the swap
 3. Load previous manifest from manifest cache
 4. Compare hashes — remove outdated resources from content cache
 5. Save current manifest to manifest cache
@@ -200,6 +235,34 @@ with the other engine differences.
 |---------|--------|
 | `skipWaiting` | Call `self.skipWaiting()` to activate waiting SW |
 | `getVersion` | Respond with the SW version and, when the build has one, its Flutter `engineRevision` |
+| `getStatus` | Respond with this worker's version, engine revision, its caches and their entry counts, `navigator.storage.estimate()` and the last lifecycle failure |
+
+Both replies echo a `requestId` when the client sends one.
+
+### Lifecycle notifications
+
+Install failures, a cache swap that failed or ran out of storage, and a
+cache write that was refused used to be logged inside the worker and
+nowhere else, so a page could not tell that its caching layer had given up
+— and neither could whatever collects errors for the app. Each of them now
+also broadcasts:
+
+```typescript
+interface SWLifecycleMessage {
+  type: 'sw-lifecycle';
+  timestamp: number;
+  swVersion: string;
+  phase: 'install' | 'activate' | 'cache';
+  status: 'started' | 'completed' | 'failed';
+  reason?: string;   // the error's own message, when it failed
+  isQuota?: boolean; // the storage quota, not the deploy
+}
+```
+
+The bootstrap forwards every one of these as a `sw-lifecycle` CustomEvent
+on `window` and hands the failures to `Bootstrap.onWorkerFailure`. A page
+that loaded *after* the failure has no broadcast to catch, which is what
+`getStatus`'s `lastError` is for.
 
 ## Resilience
 
@@ -269,6 +332,11 @@ registration. A `QuotaExceededError` anywhere in caching is logged once per
 - Swap, cleanup and navigation preload fail separately: a failed swap drops
   this version's content and temp caches and clears the stored manifest, but
   keeps the manifest cache, so it starts over from the network
+- A swap that ran out of storage (`QuotaExceededError`) is the exception: it
+  keeps the content cache and drops only the temp one. Every entry that did
+  move is a whole, size-checked copy, and `cacheFirst` fetches the rest on
+  demand; discarding all of it would leave the app loading entirely from the
+  network on the device with the least room to spare
 - Always call `self.clients.claim()` even on error
 - Prevents stuck pages
 

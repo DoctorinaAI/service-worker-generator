@@ -332,12 +332,22 @@ describe('createActivateHandler', () => {
     expect(remaining).toContain('other');
   });
 
-  it('logs a quota failure of the swap distinctly, and recovers as before', async () => {
+  it('keeps what it swapped when the storage ran out', async () => {
+    // Audit #30, item 1.5: dropping the version's content on a quota error
+    // left the app fetching everything on every load, on the device with
+    // the least room to spare. What did move is whole and size-checked;
+    // `cacheFirst` fetches the rest on demand.
     (self as unknown as { registration: unknown }).registration = {};
     const temp = await mockCaches.open('app-temp-v2');
-    await temp.put(new Request('main.dart.js'), textResponse('x'));
+    await temp.put(new Request('moved.js'), textResponse('first'));
+    await temp.put(new Request('main.dart.js'), textResponse('second'));
     const content = await mockCaches.open('app-v2');
-    vi.spyOn(content, 'put').mockRejectedValue(new DOMException('full', 'QuotaExceededError'));
+    const real = content.put.bind(content);
+    let puts = 0;
+    vi.spyOn(content, 'put').mockImplementation(async (request, response) => {
+      if (++puts > 1) throw new DOMException('full', 'QuotaExceededError');
+      await real(request, response);
+    });
 
     const handler = createActivateHandler('app', 'v2', {});
     const event = makeEvent();
@@ -346,7 +356,26 @@ describe('createActivateHandler', () => {
 
     const logged = errorSpy.mock.calls.map((c: unknown[]) => String(c[0])).join('\n');
     expect(logged).toMatch(/quota exceeded/i);
-    // Recovery unchanged: this version's caches are dropped.
+    expect(logged).toMatch(/keeping what was swapped/i);
+    // The entry that made it is still there...
+    expect(await mockCaches.peek('app-v2')!.match(new Request('moved.js'))).toBeDefined();
+    // ...and the duplicates that filled the quota are gone.
+    expect(mockCaches.peek('app-temp-v2')).toBeUndefined();
+    expect(claimSpy).toHaveBeenCalledOnce();
+  });
+
+  it('drops this version’s caches when the swap fails for any other reason', async () => {
+    (self as unknown as { registration: unknown }).registration = {};
+    const temp = await mockCaches.open('app-temp-v2');
+    await temp.put(new Request('main.dart.js'), textResponse('x'));
+    const content = await mockCaches.open('app-v2');
+    vi.spyOn(content, 'put').mockRejectedValue(new TypeError('broken'));
+
+    const handler = createActivateHandler('app', 'v2', {});
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
     expect(mockCaches.peek('app-v2')).toBeUndefined();
     expect(mockCaches.peek('app-temp-v2')).toBeUndefined();
     expect(claimSpy).toHaveBeenCalledOnce();

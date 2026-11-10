@@ -1,6 +1,10 @@
 import type { FlutterBuildEntry } from '../shared/types';
-import { CANVASKIT_CDN_BASE, CANVASKIT_LOCAL_PATH } from '../shared/constants';
-import { fetchWithRetry, fetchWithTimeout } from '../shared/utils';
+import {
+  CANVASKIT_CDN_BASE,
+  CANVASKIT_LOCAL_PATH,
+  CANVASKIT_PROBE_TIMEOUT_MS,
+} from '../shared/constants';
+import { fetchWithTimeout } from '../shared/utils';
 import { logPhase } from './console-logger';
 
 /**
@@ -267,8 +271,12 @@ export function getCanvasKitVariant(
  * With [useLocalCanvasKit] (the app was built with
  * `--no-web-resources-cdn`) the local directory is used straight away. The
  * CDN probe is a `no-store` request, so it would otherwise cost a network
- * round trip on every load, and up to two 8 s timeouts where gstatic.com
- * is blocked, only to load the engine from somewhere the app chose not to.
+ * round trip on every load only to load the engine from somewhere the app
+ * chose not to.
+ *
+ * The probe itself is a single attempt with a `CANVASKIT_PROBE_TIMEOUT_MS`
+ * deadline, and a failure is remembered for the tab session, so a network
+ * that blocks `gstatic.com` costs one short wait rather than one per load.
  */
 export async function loadCanvasKit(
   engineRevision: string,
@@ -305,14 +313,14 @@ export async function loadCanvasKit(
       // as net::ERR_ABORTED even on 200 because the body stream is never
       // finalized. Range bytes=0-0 returns a one-byte 206 that we drain with
       // arrayBuffer(), so the fetch closes cleanly and DevTools stays quiet.
-      const response = await fetchWithRetry(
+      // Once, with a short deadline: see CANVASKIT_PROBE_TIMEOUT_MS.
+      const response = await fetchWithTimeout(
         new Request(cdnJsUrl, {
           method: 'GET',
           headers: { Range: 'bytes=0-0' },
           cache: 'no-store',
         }),
-        2,
-        8000,
+        CANVASKIT_PROBE_TIMEOUT_MS,
       );
       if (response.ok) {
         await response.arrayBuffer();

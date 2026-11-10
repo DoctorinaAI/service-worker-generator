@@ -49,6 +49,12 @@ with status 64 and names the option and the pattern.
 
 These are additive — they extend the default patterns, not replace them.
 
+**`*` does not cross `/`.** These are `package:glob` patterns, not
+`.gitignore` lines: `--ignore="*.png"` matches `favicon.png` and nothing
+under `assets/`. Write `**/*.png` for every directory, or
+`"{*.png,**/*.png}"` for both. A pattern of that shape is warned about so
+it cannot quietly do nothing.
+
 Patterns are matched in a fixed order: **core → required → ignore →
 optional**, and the first match wins. A pattern that already matches a
 built-in higher-priority default therefore cannot demote a file:
@@ -73,7 +79,7 @@ manifest entirely.
 |--------|---------|-------------|
 | `--keep-maps` | `false` | Keep `.js.map`, `.js.symbols` and `.wasm.map` files (removed by default) |
 | `--no-cleanup` | `false` | Leave the input tree alone: keep Flutter's files and leave `{{sw_version}}` unsubstituted (otherwise it is replaced with the HTML-escaped version) |
-| `--comments` | `false` | Reserved: accepted, but has no effect on the output yet |
+| `--comments` | `false` | Deprecated: accepted and warned about, with no effect. `sw.js` and `bootstrap.js` are built and minified before the generator sees them, so there is nothing to comment |
 | `--log-level` | `info` | How much the generated `sw.js` and `bootstrap.js` print on the browser console: `silent`, `error`, `warn` or `info` |
 | `--config` | `sw.yaml` | Path to YAML config file |
 

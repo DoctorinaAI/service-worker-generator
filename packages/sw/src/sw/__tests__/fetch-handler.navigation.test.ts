@@ -471,3 +471,161 @@ describe('navigation handling — app served from a subpath', () => {
     expect(event.respondWith).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Audit #30, item 1.7: how long a navigation waits for the origin.
+ *
+ * The user is watching a blank page while it does, and the pre-cached
+ * shell boots the app, which then loads its own route.
+ */
+describe('navigation handling — the origin takes its time', () => {
+  let mockCaches: MockCacheStorage;
+
+  beforeEach(() => {
+    mockCaches = installMockCaches();
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** Fire every timer at once, so a deadline is reached deterministically. */
+  function instantTimers(): void {
+    const realSetTimeout = globalThis.setTimeout;
+    vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void) =>
+      realSetTimeout(fn, 0)) as unknown as typeof setTimeout);
+  }
+
+  /** A fetch that never settles, as an origin that stopped answering. */
+  function hangingFetch(): ReturnType<typeof vi.fn> {
+    const spy = vi.fn(() => new Promise<Response>(() => undefined));
+    (globalThis as unknown as { fetch: unknown }).fetch = spy;
+    return spy;
+  }
+
+  it('boots from the cached shell instead of holding a blank page', async () => {
+    const cache = await mockCaches.open(CONTENT_CACHE);
+    await cache.put(new Request('index.html'), textResponse(SHELL));
+    hangingFetch();
+    instantTimers();
+
+    const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+
+    expect(await (await event._responded!).text()).toBe(SHELL);
+  });
+
+  it('waits for the origin when there is no cached shell', async () => {
+    // A 503 here would be a first visit on a slow link answered with an
+    // error page, where a page without a worker would simply have waited.
+    await mockCaches.open(CONTENT_CACHE);
+    instantTimers();
+    let answer: (response: Response) => void = () => undefined;
+    const spy = vi.fn(
+      () => new Promise<Response>((resolve) => (answer = resolve)),
+    );
+    (globalThis as unknown as { fetch: unknown }).fetch = spy;
+
+    const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    // Let every timer that was armed fire before the origin answers.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    answer(textResponse(SHELL));
+
+    const response = await event._responded!;
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(SHELL);
+  });
+
+  it('asks the network with the request itself, so the mode survives', async () => {
+    // An init makes `fetch` build a new Request, and a navigation rebuilt
+    // that way is no longer `navigate`: the origin stops seeing
+    // `Sec-Fetch-Mode: navigate` and a 3xx stops arriving as an opaque
+    // redirect the browser can follow.
+    const spy = installMockFetch(async () => textResponse(SHELL));
+    await mockCaches.open(CONTENT_CACHE);
+
+    const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    await event._settled();
+
+    expect(spy).toHaveBeenCalledExactlyOnceWith(event.request);
+  });
+
+  it('does not retry a navigation the origin refused', async () => {
+    // Three attempts with their backoff held the page for half a minute
+    // before the copy that was ready all along answered it.
+    const cache = await mockCaches.open(CONTENT_CACHE);
+    await cache.put(new Request('index.html'), textResponse(SHELL));
+    instantTimers();
+    const spy = vi.fn(async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    (globalThis as unknown as { fetch: unknown }).fetch = spy;
+
+    const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+
+    expect(await (await event._responded!).text()).toBe(SHELL);
+    expect(spy).toHaveBeenCalledOnce();
+  });
+
+  it('stores the shell that arrived after the deadline', async () => {
+    // Otherwise a connection reliably slower than the deadline would keep
+    // booting from a shell that is never refreshed.
+    const cache = await mockCaches.open(CONTENT_CACHE);
+    await cache.put(new Request('index.html'), textResponse(SHELL));
+    instantTimers();
+    let answer: (response: Response) => void = () => undefined;
+    (globalThis as unknown as { fetch: unknown }).fetch = vi.fn(
+      () => new Promise<Response>((resolve) => (answer = resolve)),
+    );
+
+    const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+
+    // The page gets the copy it has...
+    expect(await (await event._responded!).text()).toBe(SHELL);
+    // ...and the origin answers a moment later.
+    answer(textResponse('<html>fresh</html>'));
+    await event._settled();
+
+    const stored = await cache.match(new Request('index.html'));
+    expect(await stored!.text()).toBe('<html>fresh</html>');
+  });
+
+  it('stores nothing when the origin never answers', async () => {
+    const cache = await mockCaches.open(CONTENT_CACHE);
+    await cache.put(new Request('index.html'), textResponse(SHELL));
+    instantTimers();
+    let fail: (error: Error) => void = () => undefined;
+    (globalThis as unknown as { fetch: unknown }).fetch = vi.fn(
+      () => new Promise<Response>((_, reject) => (fail = reject)),
+    );
+
+    const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    expect(await (await event._responded!).text()).toBe(SHELL);
+
+    fail(new TypeError('Failed to fetch'));
+    await event._settled();
+
+    expect(await (await cache.match(new Request('index.html')))!.text()).toBe(SHELL);
+  });
+
+  it('still prefers the navigation preload response', async () => {
+    const cache = await mockCaches.open(CONTENT_CACHE);
+    await cache.put(new Request('index.html'), textResponse(SHELL));
+    const spy = hangingFetch();
+
+    const event = makeEvent(`${ORIGIN}/`, {
+      mode: 'navigate',
+      preload: textResponse('<html>preloaded</html>'),
+    });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+
+    expect(await (await event._responded!).text()).toBe('<html>preloaded</html>');
+    expect(spy).not.toHaveBeenCalled();
+  });
+});

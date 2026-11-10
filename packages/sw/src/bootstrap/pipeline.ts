@@ -1,11 +1,13 @@
 import type { SWProgressMessage } from '../shared/types';
 import { STAGE_PROGRESS } from '../shared/constants';
+import { format, type StringKey } from '../shared/strings';
 import type { ResolvedConfig } from './config';
 import { BootstrapAPI } from './api';
 import { LoadingWidget } from './loading-widget';
 import { logPhase } from './console-logger';
 import {
   controllerVersion,
+  forwardLifecycleEvents,
   registerServiceWorker,
   listenForSWMessages,
   reloadIfForeignController,
@@ -59,15 +61,24 @@ export function runPipeline(config: ResolvedConfig): BootstrapAPI {
   const onSwUpdate = (): void => api.notifyUpdateAvailable();
   window.addEventListener('sw-update-available', onSwUpdate);
 
-  void runPipelineWork(api, config);
+  // The worker's own failures, for the page and for anything that reports
+  // errors for the app. Installed for the life of the page: a quota error
+  // or a failed swap arrives long after the loading screen is gone.
+  forwardLifecycleEvents((message) => api.notifyWorkerFailure(message));
+
+  void runPipelineWork(api, config, widget);
   return api;
 }
 
 async function runPipelineWork(
   api: BootstrapAPI,
   config: ResolvedConfig,
+  widget: LoadingWidget,
 ): Promise<void> {
   const { build, ui } = config;
+
+  /** What this page calls [key]; see `shared/strings.ts`. */
+  const text = (key: StringKey): string => ui.strings[key];
 
   const mapProgress = (internal: number): number =>
     ui.minProgress + (internal / 100) * (ui.maxProgress - ui.minProgress);
@@ -81,7 +92,7 @@ async function runPipelineWork(
   };
 
   // Stage 0: visible 0% beat so the console shows bootstrap started.
-  updateProgress('init', STAGE_PROGRESS.start, 'Starting');
+  updateProgress('init', STAGE_PROGRESS.start, text('starting'));
 
   // Attach the SW message listener BEFORE registering so we don't miss
   // install-time progress messages (navigator.serviceWorker does not
@@ -100,7 +111,20 @@ async function runPipelineWork(
   //     the fetch handler are outside it. Counting them against that total
   //     is what produced `Loaded 5 of 4 resources`.
   const completedKeys = new Set<string>();
+  /**
+   * Bytes reported for each counted resource, the terminal ones pinned at
+   * their full size.
+   *
+   * The percentage is rendered from these and the message from the count:
+   * the pre-cached set is one or two multi-megabyte files next to a handful
+   * of small ones, so counting files moves the ring in two jumps while
+   * counting bytes moves it as the download goes. The count is still what
+   * the message says, because "Loaded 3 of 5 resources" is something a
+   * user can read.
+   */
+  const loadedBytes = new Map<string, number>();
   let totalResourcesCount = 0;
+  let totalResourcesSize = 0;
   let foreignVersion: string | null = null;
   let sawOwnVersion = false;
   const cleanupSWListener: (() => void) | null =
@@ -118,23 +142,36 @@ async function runPipelineWork(
             foreignVersion = msg.swVersion;
             return;
           }
-          sawOwnVersion = true;
+          if (!sawOwnVersion) {
+            sawOwnVersion = true;
+            // Something is narrating this load after all, so silence means
+            // a stall again.
+            widget.expectProgress();
+          }
 
           // Latch the denominator once. A single worker reports a constant
           // `resourcesCount`, so this only guards against a mid-load change
           // ever becoming possible again.
           if (!totalResourcesCount && msg.resourcesCount) {
             totalResourcesCount = msg.resourcesCount;
+            totalResourcesSize = msg.resourcesSize;
           }
           if (!totalResourcesCount) return;
           if (!msg.counted || !msg.resourceKey) return;
 
-          if (
+          const done =
             msg.status === 'completed' ||
             msg.status === 'cached' ||
-            msg.status === 'updated'
-          ) {
+            msg.status === 'updated';
+          if (done) {
             completedKeys.add(msg.resourceKey);
+            // Whatever the last beat said, a finished resource is all of it.
+            loadedBytes.set(msg.resourceKey, msg.resourceSize);
+          } else if (msg.status === 'loading' && msg.loaded > 0) {
+            // Only forwards: a second worker, or a retry of the same file,
+            // must not walk the ring backwards.
+            const before = loadedBytes.get(msg.resourceKey) ?? 0;
+            if (msg.loaded > before) loadedBytes.set(msg.resourceKey, msg.loaded);
           }
 
           // Within one worker `completedKeys` is a subset of the counted
@@ -143,8 +180,19 @@ async function runPipelineWork(
           // `--version` report different counted sets under one identity,
           // and their union can outrun the latched total. The number it
           // guards is rendered straight to the user.
-          const done = Math.min(completedKeys.size, totalResourcesCount);
-          const downloadPercent = (done / totalResourcesCount) * 100;
+          const count = Math.min(completedKeys.size, totalResourcesCount);
+          // Bytes when the worker said how many there are in total, which
+          // every release since the protocol gained `resourcesSize` does;
+          // the count is the fallback, and the clamp is there for the same
+          // reason as above.
+          let downloadPercent: number;
+          if (totalResourcesSize > 0) {
+            let bytes = 0;
+            for (const loaded of loadedBytes.values()) bytes += loaded;
+            downloadPercent = Math.min(100, (bytes / totalResourcesSize) * 100);
+          } else {
+            downloadPercent = (count / totalResourcesCount) * 100;
+          }
           const internalPercent =
             STAGE_PROGRESS.canvaskit +
             (downloadPercent / 100) *
@@ -153,7 +201,10 @@ async function runPipelineWork(
           updateProgress(
             'assets',
             internalPercent,
-            `Loaded ${done} of ${totalResourcesCount} resources`,
+            format(text('resources'), {
+              done: count,
+              total: totalResourcesCount,
+            }),
           );
         })
       : null;
@@ -206,7 +257,7 @@ async function runPipelineWork(
     }
 
     // Stage 1: Init
-    updateProgress('init', STAGE_PROGRESS.init, 'Checking environment');
+    updateProgress('init', STAGE_PROGRESS.init, text('environment'));
     logPhase('Init', 'Detecting browser capabilities');
     const caps = detectBrowserCaps();
     logPhase(
@@ -216,7 +267,7 @@ async function runPipelineWork(
     );
 
     // Stage 2: Service Worker
-    updateProgress('sw', STAGE_PROGRESS.sw, 'Registering service worker');
+    updateProgress('sw', STAGE_PROGRESS.sw, text('worker'));
     const registration = await registerServiceWorker(
       build.swFilename,
       build.swVersion,
@@ -229,18 +280,14 @@ async function runPipelineWork(
       (await settleUpdateAtBootstrap(
         registration,
         build.engineRevision,
-        () => updateProgress('sw', STAGE_PROGRESS.sw, 'Installing update'),
+        () => updateProgress('sw', STAGE_PROGRESS.sw, text('update')),
       ))
     ) {
       return;
     }
 
     // Stage 3: CanvasKit
-    updateProgress(
-      'canvaskit',
-      STAGE_PROGRESS.canvaskit,
-      'Loading rendering engine',
-    );
+    updateProgress('canvaskit', STAGE_PROGRESS.canvaskit, text('engine'));
 
     const activeBuild = selectBuild(build.builds, caps);
     if (!activeBuild) {
@@ -266,7 +313,18 @@ async function runPipelineWork(
     );
 
     // Stage 4-5: Assets + Dart Entry
-    updateProgress('assets', STAGE_PROGRESS.canvaskit + 5, 'Loading application');
+    updateProgress('assets', STAGE_PROGRESS.canvaskit + 5, text('app'));
+
+    // Everything from here is the engine and the app downloading, and the
+    // only thing that reports on it is the worker serving this page. If
+    // that is not this build's worker — a first visit whose activation did
+    // not land, a registration that failed, Firefox's private mode, iOS
+    // Lockdown Mode — the page's own fetches are unnarrated, and 30 s of
+    // silence is a slow link rather than a stall. The overlay's reset
+    // would throw away the download in progress.
+    if (controllerVersion() !== build.swVersion) {
+      widget.expectSilence();
+    }
 
     // An engine served from the CDN passed a one-byte probe of its `.js`,
     // which says nothing about the `.wasm`. If the app then fails because
@@ -288,7 +346,7 @@ async function runPipelineWork(
         const reason = error instanceof Error ? error.message : String(error);
         if (reloadWithLocalCanvasKit(reason)) return;
       }
-      reportPipelineError(api, error);
+      reportPipelineError(api, ui, error);
     };
     const onAppFailure = (error: unknown): void => {
       if (appFailureHandled) return;
@@ -310,14 +368,26 @@ async function runPipelineWork(
       onAppFailure(error);
     }
   } catch (error) {
-    reportPipelineError(api, error);
+    reportPipelineError(api, ui, error);
     stopListening();
   }
 }
 
-function reportPipelineError(api: BootstrapAPI, error: unknown): void {
-  const message =
-    error instanceof Error ? error.message : 'Failed to load application';
+/**
+ * Show a failure to the user and hand the reason to whoever asked for it.
+ *
+ * The widget gets a sentence a user can act on; the engine's own message —
+ * `WebAssembly.instantiate(): Import #3 "…"` — goes to the console and to
+ * `Bootstrap.progress.detail`, where an error reporter can pick it up.
+ * Showing that text on the loading screen told the user nothing and hid
+ * what little they could do about it (audit #30, item 5.2).
+ */
+function reportPipelineError(
+  api: BootstrapAPI,
+  ui: ResolvedConfig['ui'],
+  error: unknown,
+): void {
+  const detail = error instanceof Error ? error.message : String(error);
   log.error('[Bootstrap] Pipeline error:', error);
-  api.error(message);
+  api.error(ui.strings.failed, detail);
 }

@@ -5,8 +5,10 @@
 name: sw
 
 description: >
-  A command-line tool to generate service worker files for web applications.
-  It simplifies the process of creating service workers.
+  Generates a service worker and a bootstrap script for a Flutter Web
+  build: per-category caching with integrity checks, a loading screen with
+  real progress, CanvasKit from the CDN with a local fallback, and deploys
+  that land as one coherent build. Replaces flutter_bootstrap.js.
 
 version: 0.4.0
 
@@ -32,15 +34,22 @@ platforms:
 
 # dart pub global activate --source path .
 # dart run sw:generate
+#
+# The command is `sw`, not `generate`: `dart pub global activate` puts the
+# key on PATH, and a binary called `generate` there belongs to nobody.
 executables:
-  generate: generate
+  sw: generate
 
 # ==============================================================================
 # DEPENDENCIES
 # ==============================================================================
 
 environment:
-  sdk: ">=3.11.0 <4.0.0"
+  # The floor is what CI actually tests (see the "Dart (oldest)" job), not
+  # the newest SDK that happens to be installed: a constraint of 3.11 kept
+  # every Flutter release before 3.41 from using the package at all, for
+  # language features it does not use. Raise it only with a job to match.
+  sdk: ">=3.8.0 <4.0.0"
 
 dependencies:
   path: ^1.9.1

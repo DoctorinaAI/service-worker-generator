@@ -1,12 +1,14 @@
 import type { ResourceManifest } from '../shared/types';
 import {
   cleanupOrphanedTempCaches,
+  findReusableSource,
   getManifestCacheName,
   precacheResources,
   getTempCacheName,
 } from './cache-manager';
 import { readableVersions, workerVersion } from './registration';
 import { COUNTED_CATEGORIES, type ProgressReporter } from './progress';
+import { reportLifecycle } from './lifecycle';
 import { log } from '../shared/logger';
 
 /**
@@ -60,6 +62,13 @@ async function handleInstall(
     status: 'loading',
   });
 
+  // What the last activated version cached: every file whose hash this
+  // build did not change is copied from there instead of downloaded again.
+  // A content cache is named after its version, so without this an
+  // assets-only deploy makes every user fetch the whole `main.dart.wasm` a
+  // second time.
+  const reuse = await findReusableSource(cachePrefix, version);
+
   // Pre-cache the counted set, notifying clients per file so the bootstrap
   // can show smooth count-based progress during install. `COUNTED_CATEGORIES`
   // is shared with the reporter, so what gets pre-cached and what gets
@@ -82,10 +91,33 @@ async function handleInstall(
           status: 'completed',
         });
       },
+      reuse,
+      // Byte-level beats for the file being downloaded, so the loading
+      // ring moves during the download that dominates a cold load instead
+      // of jumping once per file. Throttled inside `precacheResources`.
+      (path, entry, loaded) => {
+        void progress.report({
+          key: path,
+          name: entry.name,
+          url: path,
+          size: entry.size,
+          loaded,
+          status: 'loading',
+        });
+      },
     );
+    await reportLifecycle(version, 'install', 'completed');
   } catch (error) {
-    // Clean up the half-populated temp cache so the next install starts fresh.
-    await caches.delete(tempCacheName);
+    // The page's only signal that its caching layer gave up: the log line
+    // below lives in the worker, where nothing on the page can see it.
+    await reportLifecycle(version, 'install', 'failed', error);
+    // The half-populated temp cache is kept on purpose: this install is
+    // retried on the next page load, and `precacheResources` skips what is
+    // already there, so a 30 MB wasm is not downloaded again for the sake
+    // of the one entry a flaky connection dropped. Nothing reads it before
+    // then — the swap only runs on activate, which a failed install never
+    // reaches — and it is removed with the version, by the orphan cleanup
+    // at the start of the next install or by `cleanupOldCaches`.
     throw error;
   }
 }

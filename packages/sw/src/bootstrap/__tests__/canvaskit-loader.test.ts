@@ -365,6 +365,23 @@ describe('loadCanvasKit — session memory of a failed CDN', () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
+  it('probes once, so a blocked CDN costs one short wait', async () => {
+    // Audit #30, item 2.4: two attempts of an 8 s timeout plus backoff was
+    // up to ~17 s of "Loading rendering engine" on a network that blocks
+    // gstatic.com, before the local engine every build ships was used.
+    collapseBackoff();
+    const spy = installMockFetch(async () => {
+      throw new Error('blocked');
+    });
+    const result = await loadCanvasKit(
+      'engine-rev',
+      { renderer: 'canvaskit' },
+      caps(),
+    );
+    expect(result).toBe(CANVASKIT_LOCAL_PATH);
+    expect(spy).toHaveBeenCalledOnce();
+  });
+
   it('remembers a probe that threw for the rest of the session', async () => {
     collapseBackoff();
     installMockFetch(async () => {

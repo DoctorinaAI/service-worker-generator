@@ -193,6 +193,7 @@ class GeneratorConfig {
             'not a valid glob pattern: ${e.message}',
           );
         }
+        _warnSegmentOnlyGlob(pattern, source);
       }
       return globs;
     }
@@ -277,7 +278,7 @@ class GeneratorConfig {
       ignoreGlobs: resolveGlobs('ignore', 'SW_IGNORE', ''),
       keepMaps: resolveFlag('keep-maps', 'SW_KEEP_MAPS'),
       noCleanup: resolveFlag('no-cleanup', 'SW_NO_CLEANUP'),
-      comments: resolveFlag('comments', 'SW_COMMENTS'),
+      comments: _warnDeprecatedComments(resolveFlag('comments', 'SW_COMMENTS')),
       theme: _normalizeTheme(resolve('theme', 'SW_THEME', 'auto')),
       // Normalized here so the artifacts carry one spelling of it.
       logLevel: resolveChecked(
@@ -600,6 +601,41 @@ void _checkLogLevel(String level, String option, [String where = '']) {
   throw FormatException(
     '$option="$level"$where is not a log level. Use one of '
     '${_logLevels.join(", ")}.',
+  );
+}
+
+/// Warn when `--comments` is switched on: it has never had an effect.
+///
+/// The flag was reserved for emitting commented output, which the
+/// artifacts cannot have — they are built and minified by Vite before the
+/// generator ever sees them. Accepting it silently left a configuration
+/// that reads as if it does something. The value is returned unchanged.
+bool _warnDeprecatedComments(bool enabled) {
+  if (!enabled) return enabled;
+  io.stderr.writeln(
+    'Warning: --comments has no effect on the output (sw.js and '
+    'bootstrap.js ship minified) and will be removed. Drop it.',
+  );
+  return enabled;
+}
+
+/// Warn about a pattern that only matches the top level of the build.
+///
+/// `*` does not cross a `/` in `package:glob`, so `*.png` matches
+/// `favicon.png` and nothing under `assets/` — while the user who wrote it
+/// almost certainly meant every PNG. The pattern is left alone (changing
+/// what it matches would change what existing configurations categorise);
+/// it is the silence that was the problem.
+void _warnSegmentOnlyGlob(String pattern, _Source source) {
+  // Only the plain `*.ext` shape, which is the one that reads like
+  // `.gitignore`. Anything with a `/` or a `**` was written by someone who
+  // knows what the separator does, and a bare `*` says "the files here".
+  if (!RegExp(r'^\*[^*/]+$').hasMatch(pattern)) return;
+  io.stderr.writeln(
+    'Warning: ${source.option}="$pattern"${source.where} matches only the '
+    'top level of the build directory: "*" does not cross "/". Write '
+    '"**/$pattern" to match it in every directory, or '
+    '"{$pattern,**/$pattern}" for both.',
   );
 }
 

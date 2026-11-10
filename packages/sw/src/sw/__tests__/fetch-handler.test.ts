@@ -671,7 +671,9 @@ describe('handleFetch — audit #30', () => {
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(answered?.status).toBe(200);
-      expect(event.waitUntil).toHaveBeenCalledOnce();
+      // The cache write, plus the progress reports that also no longer
+      // make the page wait for a broadcast.
+      expect(event.waitUntil).toHaveBeenCalled();
 
       // The write itself is cut off by the stall watchdog and stores nothing.
       const settled = event._settled();

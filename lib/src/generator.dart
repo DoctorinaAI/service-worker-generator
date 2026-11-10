@@ -337,6 +337,12 @@ Set<String> _findCanvaskitFiles(io.Directory buildDir, Set<String> renderers) {
           'canvaskit/canvaskit.wasm',
           'canvaskit/chromium/canvaskit.js',
           'canvaskit/chromium/canvaskit.wasm',
+          // The engine's own variant choice, not ours: an app built with
+          // the WebParagraph text layout loads this pair, and pruning it
+          // leaves such a build without an engine to load locally. Kept
+          // only when the build actually ships it.
+          'canvaskit/webparagraph/canvaskit.js',
+          'canvaskit/webparagraph/canvaskit.wasm',
         ]);
       case 'skwasm':
         files.addAll([
