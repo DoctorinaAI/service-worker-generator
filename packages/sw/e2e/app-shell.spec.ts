@@ -13,6 +13,11 @@ async function clearSiteData(page: Page): Promise<void> {
 }
 
 test.describe('app shell', () => {
+  // Every test here clears the site data and waits for a cold install to
+  // finish: ~2.4 MB of pre-cache, a worker activation and a claim, which
+  // on a loaded CI runner in WebKit does not fit the suite's 30 s default.
+  test.describe.configure({ timeout: 90_000 });
+
   test.beforeEach(async ({ page }) => {
     await clearSiteData(page);
     await settle(page, BASE_URL);

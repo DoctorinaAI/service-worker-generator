@@ -58,7 +58,7 @@ tests pass or fail against old code.
 | `deploy-reuse` | A deploy that changed nothing but its version downloads no code again |
 | `two-tabs` | A second tab open across a deploy: the reloaded one runs the new build, the other keeps its own, the new worker waits |
 | `base-href` | An app under `<base href="/app/">`: scope, cache keys, deep routes and the host's reserved namespace |
-| `canvaskit-fallback` | The engine from the CDN, from the local copy when the CDN is blocked, and the session flag that spares the second probe |
+| `canvaskit-fallback` | The engine from the CDN, and from the local copy when the CDN does not have this build's revision |
 | `fetch-routing` | Redirects, `Range`, POST, lazy caching, navigation preload, the version protocol |
 | `origin-faults` | An origin that is down, 500s, fails once, or breaks a deploy's Core file |
 | `storage-purge` | Caches or registrations gone, a single evicted file, a refill that 503s |
@@ -75,6 +75,7 @@ nothing reports progress), and a host that serves a stale `bootstrap.js`.
 
 | Engine | Behaviour | In the suite |
 |---|---|---|
+| WebKit | `page.route` does not intercept the CanvasKit CDN probe, so a test that "blocks" the CDN that way sees it answer anyway. | `canvaskit-fallback.spec.ts` deploys an engine revision the CDN does not have instead of intercepting |
 | Firefox | With navigation preload on, a refused connection fails the navigation although the worker catches the rejection and answers from cache. `setOffline` does not show this. | Pinned by `firefoxRefusesNavigation` in `origin-faults.spec.ts` |
 | WebKit | `context.setOffline(true)` fails the navigation with an internal error. A real outage works. | `test.skip` in `app-shell.spec.ts` |
 
