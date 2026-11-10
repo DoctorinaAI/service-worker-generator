@@ -8,6 +8,7 @@ import {
 } from '../shared/constants';
 import { withTimeout } from '../shared/utils';
 import { logPhase } from './console-logger';
+import { log } from '../shared/logger';
 
 /** Sentinel distinguishing "the budget ran out" from a null registration. */
 const TIMED_OUT = Symbol('sw-registration-timeout');
@@ -153,6 +154,26 @@ function wireUpdateDetection(registration: ServiceWorkerRegistration): void {
 }
 
 /**
+ * Version of the worker controlling this page, read from the `?v=` it was
+ * registered with, or `null` when there is no controller or no readable
+ * version.
+ *
+ * Read from the script URL rather than asked over the message protocol:
+ * this answers synchronously, and the question — "is the page being served
+ * by this build's worker?" — is about the registration, not about anything
+ * the worker has to be alive to tell us.
+ */
+export function controllerVersion(): string | null {
+  try {
+    const url = navigator.serviceWorker?.controller?.scriptURL;
+    if (!url) return null;
+    return new URL(url, window.location.href).searchParams.get('v') || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Set up a message listener for SW progress notifications.
  * Returns a cleanup function.
  */
@@ -284,7 +305,7 @@ export async function settleUpdateAtBootstrap(
   onWait?: () => void,
 ): Promise<boolean> {
   if (!engineRevision) {
-    console.warn(
+    log.warn(
       '[Bootstrap] The build config has no engineRevision, so the engine ' +
         'of a new deploy cannot be compared with the current one: every ' +
         'update waits for the new service worker to install before the ' +

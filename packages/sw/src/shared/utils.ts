@@ -4,6 +4,7 @@ import {
   RETRY_AFTER_MAX_MS,
   RETRY_BASE_DELAY_MS,
 } from './constants';
+import { log } from './logger';
 
 /**
  * Format bytes into a human-readable string.
@@ -485,7 +486,7 @@ export async function fetchWithRetry(
         return response;
       }
       delay = retryAfterDelay(response) ?? backoffDelay(attempt);
-      console.warn(
+      log.warn(
         `[SW] HTTP ${response.status} for ${request.url}, retrying in ` +
           `${Math.round(delay)}ms (attempt ${attempt + 2}/${maxAttempts})`,
       );

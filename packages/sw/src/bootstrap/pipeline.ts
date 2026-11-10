@@ -5,6 +5,7 @@ import { BootstrapAPI } from './api';
 import { LoadingWidget } from './loading-widget';
 import { logPhase } from './console-logger';
 import {
+  controllerVersion,
   registerServiceWorker,
   listenForSWMessages,
   reloadIfForeignController,
@@ -20,6 +21,7 @@ import {
 } from './canvaskit-loader';
 import { CANVASKIT_LOCAL_PATH } from '../shared/constants';
 import { FlutterLoaderMissingError, loadFlutterApp } from './flutter-loader';
+import { log } from '../shared/logger';
 
 /**
  * Start the bootstrap pipeline.
@@ -44,7 +46,7 @@ export function runPipeline(config: ResolvedConfig): BootstrapAPI {
   try {
     widget.mount();
   } catch (error) {
-    console.error('[Bootstrap] Loading widget failed to mount; continuing without it:', error);
+    log.error('[Bootstrap] Loading widget failed to mount; continuing without it:', error);
   }
 
   // Bridge the `sw-update-available` CustomEvent (fired by sw-registration
@@ -155,6 +157,41 @@ async function runPipelineWork(
           );
         })
       : null;
+
+  /**
+   * Stop listening and, if nothing this build's worker said ever arrived,
+   * say so once.
+   *
+   * Called when the app has started — not when `loadFlutterApp` resolves:
+   * flutter.js settles `load()` as soon as the entry point is fetched and
+   * runs `onEntrypointLoaded` after that, so the engine's own files, and
+   * every `sw-progress` about them, arrive later. Tearing down there froze
+   * the counter at whatever install had reported and made the diagnosis
+   * below fire in the middle of a healthy load (#39).
+   */
+  let listening = true;
+  const stopListening = (): void => {
+    if (!listening) return;
+    listening = false;
+    cleanupSWListener?.();
+    // Only when the worker serving this page is from another build. During
+    // an update load the previous controller reports its own manifest
+    // before the handover, and that is no one's fault; the case worth a
+    // line is a page whose controller stays a build this bootstrap knows
+    // nothing about — usually a `bootstrap.js` served from the HTTP cache
+    // without `Cache-Control: no-cache`.
+    if (foreignVersion === null || sawOwnVersion) return;
+    const controller = controllerVersion();
+    if (controller === null || controller === build.swVersion) return;
+    log.warn(
+      `[Bootstrap] No sw-progress from v${build.swVersion}; every message ` +
+        `came from v${String(foreignVersion)}, and v${controller} is still ` +
+        `in control. This bootstrap and the service worker are from ` +
+        `different builds, so the resource counter stayed empty. Check that ` +
+        `bootstrap.js is served with Cache-Control: no-cache.`,
+    );
+  };
+  window.addEventListener('flutter-first-frame', stopListening, { once: true });
 
   try {
     // Preflight: a foreign SW controller (Flutter's default SW, or an older
@@ -274,25 +311,13 @@ async function runPipelineWork(
     }
   } catch (error) {
     reportPipelineError(api, error);
-  } finally {
-    cleanupSWListener?.();
-    // Every message came from a worker that is not this build, so the
-    // counter never had a denominator to fill. Usually a `bootstrap.js`
-    // served from the HTTP cache without `Cache-Control: no-cache`.
-    if (foreignVersion !== null && !sawOwnVersion) {
-      console.warn(
-        `[Bootstrap] No sw-progress from v${build.swVersion}; every message ` +
-          `came from v${String(foreignVersion)}. This bootstrap and the ` +
-          `service worker are from different builds, so the resource ` +
-          `counter stayed empty.`,
-      );
-    }
+    stopListening();
   }
 }
 
 function reportPipelineError(api: BootstrapAPI, error: unknown): void {
   const message =
     error instanceof Error ? error.message : 'Failed to load application';
-  console.error('[Bootstrap] Pipeline error:', error);
+  log.error('[Bootstrap] Pipeline error:', error);
   api.error(message);
 }

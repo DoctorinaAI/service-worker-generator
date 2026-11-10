@@ -11,17 +11,23 @@ const String _bootstrapPlaceholder = '"__INJECT_BOOTSTRAP_CONFIG__"';
 
 /// Inject SW configuration into the compiled SW template.
 ///
-/// Replaces the placeholder with the actual config JSON.
+/// Replaces the placeholder with the actual config JSON. [logLevel] is how
+/// much the worker prints on the console; the default, `info`, is left out
+/// of the config, which is what the worker assumes.
 String injectSWConfig({
   required String template,
   required String cachePrefix,
   required String version,
   required Map<String, ResourceEntry> manifest,
   String engineRevision = '',
+  String logLevel = 'info',
 }) {
   final config = {
     'cachePrefix': cachePrefix,
     'version': version,
+    // Omitted for the default, like the fields below: the worker logs
+    // everything unless it is told otherwise.
+    if (logLevel.isNotEmpty && logLevel != 'info') 'logLevel': logLevel,
     'manifest': {
       for (final entry in manifest.entries) entry.key: entry.value.toJson(),
     },
@@ -73,6 +79,8 @@ String injectBootstrapConfig({
   if (config.maxProgress != 90) uiDefaults['maxProgress'] = config.maxProgress;
 
   final buildConfig = <String, dynamic>{
+    if (config.logLevel.isNotEmpty && config.logLevel != 'info')
+      'logLevel': config.logLevel,
     'engineRevision': engineRevision,
     'swVersion': swVersion,
     'swFilename': swFilename,

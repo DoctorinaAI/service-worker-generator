@@ -15,7 +15,8 @@ Runs in the ServiceWorkerGlobalScope. Responsibilities:
 
 - **Install**: Pre-cache Core and Required resources into a temp cache
 - **Activate**: Atomic swap from temp to content cache, diff against previous manifest, clean stale caches, `clients.claim()`
-- **Fetch**: Cache-first for cached resources, network-first for every navigation (served from the pre-cached `index.html` when the origin is unreachable), pass-through for uncached and for host-reserved paths (`__/*`)
+- **Fetch**: Cache-first for cached resources (except while a newer build is
+  pending, see below), network-first for every navigation (served from the pre-cached `index.html` when the origin is unreachable), pass-through for uncached and for host-reserved paths (`__/*`)
 - **Messages**: Handle `skipWaiting`, `getVersion` commands
 - **Notifications**: Send `sw-progress` messages to clients during resource operations
 
@@ -104,6 +105,14 @@ Users can override categorization via CLI args or YAML config using glob pattern
 
 ### Cache Busting
 All cached resources use `?v={hash}` query parameters to prevent stale responses.
+
+### A newer build is pending
+While a worker's registration holds an installing or waiting worker, the one
+in control stops answering `Core` and `Required` requests from its cache and
+stops writing it: its cache is the previous build's, while the page asking is
+already the new build's `index.html`. The page therefore runs the new code on
+the first load after a deploy, without waiting for the new worker. See
+[service-worker.md](service-worker.md#a-newer-build-is-pending).
 
 ### Never Cached
 - `bootstrap.js` — Must always be fresh to pick up new configs

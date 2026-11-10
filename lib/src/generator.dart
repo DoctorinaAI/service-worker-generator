@@ -186,6 +186,7 @@ Future<void> generate(GeneratorConfig config) async {
     version: effectiveVersion,
     manifest: manifest,
     engineRevision: buildInfo.engineRevision,
+    logLevel: config.logLevel,
   );
 
   // Warn when the embedded manifest gets unreasonably large: the entire

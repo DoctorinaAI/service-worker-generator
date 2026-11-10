@@ -20,7 +20,9 @@ import {
   getContentCacheName,
 } from './cache-manager';
 import { reportIfQuotaExceeded } from './quota';
+import { hasPendingWorker } from './registration';
 import type { ProgressReporter } from './progress';
+import { log } from '../shared/logger';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -35,6 +37,22 @@ declare const self: ServiceWorkerGlobalScope;
 const INDEX_KEY = 'index.html';
 
 /**
+ * Whether [entry] is one of the files that decide which build of the app
+ * runs: the pre-cached set — the Dart code, the engine's support files and
+ * the manifests the engine reads before its first frame.
+ *
+ * Exactly the set an install downloads, so "what this worker pre-cached"
+ * and "what it stops serving once a newer build is pending" are the same
+ * list by construction.
+ */
+function isCodeEntry(entry: ResourceEntry): boolean {
+  return (
+    entry.category === ResourceCategory.Core ||
+    entry.category === ResourceCategory.Required
+  );
+}
+
+/**
  * Keep the worker alive for [work] without making the response wait for
  * it. Called while the promise handed to `respondWith` is still pending,
  * which is when `waitUntil` is allowed; should it throw anyway, the work
@@ -44,7 +62,7 @@ function keepAlive(event: FetchEvent, work: Promise<unknown>): void {
   try {
     event.waitUntil(work);
   } catch (error) {
-    console.warn('[SW] waitUntil refused; the cache write runs unextended:', error);
+    log.warn('[SW] waitUntil refused; the cache write runs unextended:', error);
   }
 }
 
@@ -74,12 +92,23 @@ export function handleFetch(
   const resourceKey = getResourceKey(request.url);
   const entry = manifest[resourceKey];
 
+  // Requests this worker has no business answering. A navigation among
+  // them still has to be answered: navigation preload has already started
+  // a request for it, and a fetch event that ends without consuming
+  // `preloadResponse` logs "The service worker navigation preload request
+  // was cancelled before 'preloadResponse' settled" and throws that
+  // response away. `passThrough` hands it back untouched — no retries, no
+  // shell fallback, no cache — which is what not answering was meant to be.
+  const isNavigation = request.mode === 'navigate';
+
   if (NEVER_CACHE_FILES.some((f) => resourceKey === f || resourceKey.endsWith(`/${f}`))) {
+    if (isNavigation) event.respondWith(passThrough(event));
     return;
   }
 
   // Namespaces the host serves itself. Same origin, but not ours.
   if (RESERVED_PATH_PREFIXES.some((prefix) => resourceKey.startsWith(prefix))) {
+    if (isNavigation) event.respondWith(passThrough(event));
     return;
   }
 
@@ -95,7 +124,7 @@ export function handleFetch(
   // storing that under the shell key leaves the app unable to boot from
   // cache at all.
   const isShellRequest = resourceKey === INDEX_KEY;
-  if (request.mode === 'navigate' || isShellRequest) {
+  if (isNavigation || isShellRequest) {
     event.respondWith(
       networkFirst(event, cachePrefix, version, manifest, progress, isShellRequest),
     );
@@ -107,6 +136,20 @@ export function handleFetch(
   event.respondWith(
     cacheFirst(event, resourceKey, entry, cachePrefix, version, progress),
   );
+}
+
+/**
+ * The response the browser would have produced on its own: the navigation
+ * preload response when there is one, the request on the network otherwise.
+ *
+ * `fetch` is given the request itself, with no init: an init makes it a new
+ * `Request`, whose mode is then `same-origin` rather than `navigate`, and
+ * the origin stops seeing `Sec-Fetch-Mode: navigate`. A rejection here is a
+ * failed navigation, exactly as a failed default fetch would be.
+ */
+async function passThrough(event: FetchEvent): Promise<Response> {
+  const preload = (await event.preloadResponse) as Response | undefined;
+  return preload ?? fetch(event.request);
 }
 
 /**
@@ -154,7 +197,7 @@ async function networkFirst(
         return cached;
       }
     } catch (error) {
-      console.warn('[SW] App-shell cache lookup failed:', error);
+      log.warn('[SW] App-shell cache lookup failed:', error);
     }
     return new Response('Offline', {
       status: 503,
@@ -184,7 +227,11 @@ async function networkFirst(
     return fallbackToCache();
   }
 
-  if (isShellRequest) {
+  // A newer build is pending, so this is its `index.html`. Storing it here
+  // would pair the new shell with the previous build's code in one cache,
+  // and that is the mix that cannot boot; the new worker's own install has
+  // the matching copy. See `cacheFirst`.
+  if (isShellRequest && !hasPendingWorker()) {
     // Stored in the background: the navigation gets the response at once,
     // and a shell body that stalls cannot hold the page — or, through
     // `replayableResponse`, which reads a redirected copy whole — hang
@@ -224,7 +271,7 @@ async function storeShell(
     stored = true;
   } catch (error) {
     if (!reportIfQuotaExceeded(`writing ${INDEX_KEY}`, error)) {
-      console.warn('[SW] App-shell cache write failed:', error);
+      log.warn('[SW] App-shell cache write failed:', error);
     }
   }
   // Report the refresh only when it happened. Announcing an update we
@@ -234,7 +281,7 @@ async function storeShell(
     try {
       await notifyIndex('updated');
     } catch (error) {
-      console.warn('[SW] App-shell progress report failed:', error);
+      log.warn('[SW] App-shell progress report failed:', error);
     }
   }
 }
@@ -263,13 +310,27 @@ async function cacheFirst(
   const { request } = event;
   const cacheName = getContentCacheName(cachePrefix, version);
 
+  // A newer build is already deployed, and this worker's cache holds the
+  // previous one's code. The page asking is the new build's `index.html`
+  // and `bootstrap.js` — both network-first, neither ever cached — so
+  // answering `main.dart.js` from here runs the previous build's Dart code
+  // inside the new build's page, until the next load hands over to the new
+  // worker. Writing the new bytes into this cache is no better: they do not
+  // have the size this manifest records for them, and the write fails.
+  //
+  // So the files that decide which build runs go to the network, and this
+  // version's cache is left exactly as it is. Only those: a tab that has
+  // been open since before the deploy keeps its lazily cached fonts and
+  // images, which are not what makes it the build it is.
+  const retired = isCodeEntry(entry) && hasPendingWorker();
+
   // An unusable CacheStorage (evicted, blocked by a privacy mode) must
   // degrade to a plain network fetch. Rejecting here would fail the
   // resource outright, and these are the files the app is made of.
   let cache: Cache | null = null;
   try {
     cache = await caches.open(cacheName);
-    const cached = await cache.match(new Request(resourceKey));
+    const cached = retired ? undefined : await cache.match(new Request(resourceKey));
     if (cached) {
       await progress.report({
         key: resourceKey,
@@ -282,9 +343,35 @@ async function cacheFirst(
       return cached;
     }
   } catch (error) {
-    console.warn(`[SW] Cache lookup failed for ${resourceKey}:`, error);
+    log.warn(`[SW] Cache lookup failed for ${resourceKey}:`, error);
     cache = null;
   }
+
+  /**
+   * The copy a retired worker skipped, when the network could not be asked
+   * at all — offline, or an origin mid-deploy. It is the previous build's,
+   * which is why it was skipped; a page that boots on the previous build
+   * still beats one that does not boot. `undefined` when there is none.
+   */
+  const lastResort = async (reason: string): Promise<Response | undefined> => {
+    const stale = await cache
+      ?.match(new Request(resourceKey))
+      .catch(() => undefined);
+    if (!stale) return undefined;
+    log.warn(
+      `[SW] ${resourceKey}: ${reason} while a newer build is installing; ` +
+        "answering from this version's cache",
+    );
+    await progress.report({
+      key: resourceKey,
+      name: entry.name,
+      url: request.url,
+      size: entry.size,
+      loaded: entry.size,
+      status: 'cached',
+    });
+    return stale;
+  };
 
   try {
     await progress.report({
@@ -296,14 +383,22 @@ async function cacheFirst(
       status: 'loading',
     });
 
+    // A retired worker asks for the page's own URL: `fetchRefill` would ask
+    // for `?v={hash}` of the build *this* worker was generated for, and a
+    // CDN that keys on the whole URL answers that with the file the hash
+    // names — the very copy being replaced.
     const response =
-      entry.category === ResourceCategory.Core ||
-      entry.category === ResourceCategory.Required
+      !retired && isCodeEntry(entry)
         ? await fetchRefill(request, resourceKey, entry)
         : await fetchWithRetry(request);
 
+    if (retired && !response.ok) {
+      const stale = await lastResort(`HTTP ${response.status}`);
+      if (stale) return stale;
+    }
+
     if (response.ok) {
-      if (cache) {
+      if (cache && !retired) {
         keepAlive(
           event,
           lazyCacheResponse(
@@ -313,7 +408,7 @@ async function cacheFirst(
             expectedBodySize(resourceKey, entry),
           ).catch((error: unknown) => {
             if (!reportIfQuotaExceeded(`caching ${resourceKey}`, error)) {
-              console.warn(`[SW] Cache write failed for ${resourceKey}:`, error);
+              log.warn(`[SW] Cache write failed for ${resourceKey}:`, error);
             }
           }),
         );
@@ -344,6 +439,12 @@ async function cacheFirst(
 
     return response;
   } catch (error) {
+    if (retired) {
+      const stale = await lastResort(
+        error instanceof Error ? error.message : String(error),
+      );
+      if (stale) return stale;
+    }
     await progress.report({
       key: resourceKey,
       name: entry.name,
@@ -393,7 +494,7 @@ async function fetchRefill(
       headers: request.headers,
     });
   } catch (error) {
-    console.warn(`[SW] Could not build refill request for ${resourceKey}:`, error);
+    log.warn(`[SW] Could not build refill request for ${resourceKey}:`, error);
   }
   if (!busted) return fetchWithRetry(request);
 
@@ -405,7 +506,7 @@ async function fetchRefill(
       { retryOnStatus: true },
     );
     if (response.ok) return response;
-    console.warn(
+    log.warn(
       `[SW] Refill of ${resourceKey} by hash answered HTTP ${response.status}; ` +
         'retrying with the page request',
     );
@@ -415,7 +516,7 @@ async function fetchRefill(
       // Nothing to release.
     }
   } catch (error) {
-    console.warn(
+    log.warn(
       `[SW] Refill of ${resourceKey} by hash failed; retrying with the page request:`,
       error,
     );

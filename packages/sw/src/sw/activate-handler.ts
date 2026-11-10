@@ -8,6 +8,7 @@ import {
 } from './cache-manager';
 import { reportIfQuotaExceeded } from './quota';
 import { allVersionsOrNull } from './registration';
+import { log } from '../shared/logger';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -49,7 +50,7 @@ async function handleActivate(
       // prefix is a shorter start of ours would otherwise treat our pending
       // temp caches as its own until our next install.
       reportIfQuotaExceeded('swapping the temp cache into the content cache', error);
-      console.error('[SW] Cache swap failed, dropping this version\'s caches:', error);
+      log.error('[SW] Cache swap failed, dropping this version\'s caches:', error);
       // A version named `manifest` would name its content cache like the
       // manifest cache; that one is only ever emptied.
       const manifestCacheName = getManifestCacheName(cachePrefix);
@@ -68,7 +69,7 @@ async function handleActivate(
       // Passed as a function: read after the cache listing, see there.
       await cleanupOldCaches(cachePrefix, version, pendingVersions);
     } catch (error) {
-      console.warn('[SW] Old cache cleanup failed:', error);
+      log.warn('[SW] Old cache cleanup failed:', error);
     }
 
     // Enable navigation preload so network-first navigations start their
@@ -78,7 +79,7 @@ async function handleActivate(
         await self.registration.navigationPreload.enable();
       }
     } catch (error) {
-      console.warn('[SW] Navigation preload unavailable:', error);
+      log.warn('[SW] Navigation preload unavailable:', error);
     }
   } finally {
     await self.clients.claim();

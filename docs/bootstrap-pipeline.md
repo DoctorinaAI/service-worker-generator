@@ -35,6 +35,10 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
 - A build config without `engineRevision` sends every update down the
   unknown-engine path; the bootstrap logs one `console.warn` per load naming
   the cause
+- Either way the page gets this build's code: while a newer worker is
+  installing or waiting, the worker in control stops answering `main.dart.*`
+  and the manifests from its own cache (see
+  [service-worker.md](service-worker.md#a-newer-build-is-pending))
 - The whole stage is capped at 10s: service worker jobs are serialised per scope,
   so a stuck install elsewhere leaves `register()` pending indefinitely
 - On timeout or failure: continue without SW (app still works, just no caching)
@@ -56,6 +60,10 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
 - Flutter loader handles loading `main.dart.js` or WASM entry point
 - Track download progress via SW notifications
 - Progress is proportional to bytes downloaded vs total expected size
+- `flutter.loader.load()` settles as soon as the entry point is fetched and
+  runs `onEntrypointLoaded` after that, so the engine's own files are reported
+  later still. The `sw-progress` listener therefore stays up until the app's
+  first frame, not until the loader resolves
 
 ### Stage 5: Dart Entry Point (80% → 90%)
 - Flutter calls `onEntrypointLoaded` with `engineInitializer`
@@ -150,6 +158,11 @@ On startup, prints a styled banner to the console:
 ```
 
 ### Phase Logging
+
+All of it is gated by the log level (`--log-level`, overridable with
+`data-config.logLevel`): `info` prints everything below, `warn` and `error`
+only what went wrong, `silent` nothing.
+
 Each pipeline stage logs:
 - Phase name with colored prefix
 - Duration of each phase
@@ -203,6 +216,7 @@ the shell; replace it in `web/index.html` with
 | `showPercentage` | boolean | `true` | Show numeric percentage |
 | `minProgress` | number | `0` | Minimum progress value |
 | `maxProgress` | number | `90` | Maximum progress value (Dart manages the rest) |
+| `logLevel` | string | `--log-level` | `"silent"`, `"error"`, `"warn"` or `"info"`: how much the bootstrap prints on the console, overriding the level the generator baked in. It never changes what the bootstrap does |
 
 ## Retry Logic
 

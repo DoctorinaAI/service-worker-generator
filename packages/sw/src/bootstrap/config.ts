@@ -1,5 +1,14 @@
 import type { BootstrapConfig, BuildConfig } from '../shared/types';
 import { DEFAULT_MIN_PROGRESS, DEFAULT_MAX_PROGRESS } from '../shared/constants';
+import { log, setLogLevel } from '../shared/logger';
+
+/**
+ * The loading widget's settings, every one resolved.
+ *
+ * `logLevel` is not among them: it is applied to the logger rather than
+ * rendered, so the widget never has to carry a setting it cannot use.
+ */
+export type ResolvedUi = Required<Omit<BootstrapConfig, 'logLevel'>>;
 
 /**
  * Merged configuration with all defaults applied.
@@ -8,7 +17,7 @@ export interface ResolvedConfig {
   /** Build-time config injected by Dart CLI */
   build: BuildConfig;
   /** Runtime config from data-config + defaults */
-  ui: Required<BootstrapConfig>;
+  ui: ResolvedUi;
 }
 
 /**
@@ -23,7 +32,7 @@ export function parseDataConfig(
   try {
     return JSON.parse(raw) as BootstrapConfig;
   } catch {
-    console.warn('[Bootstrap] Invalid data-config JSON, using defaults');
+    log.warn('[Bootstrap] Invalid data-config JSON, using defaults');
     return {};
   }
 }
@@ -54,6 +63,10 @@ export function resolveConfig(
   userConfig: BootstrapConfig,
 ): ResolvedConfig {
   const d = buildConfig.uiDefaults ?? {};
+  // Before the corrections below are reported: the level decides whether
+  // they are heard. The build-time level is already in force (see
+  // bootstrap/index.ts), so an absent or unusable override leaves it alone.
+  setLogLevel(userConfig.logLevel);
   return {
     build: buildConfig,
     ui: normalizeUi({
@@ -77,7 +90,7 @@ const HEX_6 = /^#[0-9a-f]{6}$/i;
 const HEX_8 = /^#[0-9a-f]{8}$/i;
 
 function warnConfig(message: string): void {
-  console.warn(`[Bootstrap] Config: ${message}`);
+  log.warn(`[Bootstrap] Config: ${message}`);
 }
 
 /**
@@ -109,8 +122,8 @@ export function withAlpha(color: string, alphaHex: string): string {
  * deliver in a shape the widget cannot use. Every correction is warned
  * about; values that are already valid pass through unchanged.
  */
-function normalizeUi(ui: Required<BootstrapConfig>): Required<BootstrapConfig> {
-  const raw = ui as Record<keyof BootstrapConfig, unknown>;
+function normalizeUi(ui: ResolvedUi): ResolvedUi {
+  const raw = ui as Record<keyof ResolvedUi, unknown>;
 
   // theme: case-insensitive; anything else renders light, as before.
   let theme = ui.theme;

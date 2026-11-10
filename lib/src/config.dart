@@ -24,6 +24,7 @@ class GeneratorConfig {
     this.noCleanup = false,
     this.comments = false,
     this.theme = 'auto',
+    this.logLevel = 'info',
     this.logo = '',
     this.title = '',
     this.color = '#25D366',
@@ -76,6 +77,10 @@ class GeneratorConfig {
   /// Loading widget theme.
   final String theme;
 
+  /// How much the generated artifacts print on the browser console:
+  /// `silent`, `error`, `warn` or `info` (everything, the default).
+  final String logLevel;
+
   /// Loading widget logo path.
   final String logo;
 
@@ -111,7 +116,7 @@ class GeneratorConfig {
         '  SW_PREFIX, SW_VERSION, SW_GLOB, SW_EXCLUDE_GLOB, SW_CORE,\n'
         '  SW_REQUIRED, SW_OPTIONAL, SW_IGNORE, SW_THEME, SW_LOGO,\n'
         '  SW_TITLE, SW_COLOR, SW_MIN_PROGRESS, SW_MAX_PROGRESS,\n'
-        '  SW_KEEP_MAPS, SW_NO_CLEANUP, SW_COMMENTS',
+        '  SW_KEEP_MAPS, SW_NO_CLEANUP, SW_COMMENTS, SW_LOG_LEVEL',
       );
       io.exit(0);
     }
@@ -274,6 +279,13 @@ class GeneratorConfig {
       noCleanup: resolveFlag('no-cleanup', 'SW_NO_CLEANUP'),
       comments: resolveFlag('comments', 'SW_COMMENTS'),
       theme: _normalizeTheme(resolve('theme', 'SW_THEME', 'auto')),
+      // Normalized here so the artifacts carry one spelling of it.
+      logLevel: resolveChecked(
+        'log-level',
+        'SW_LOG_LEVEL',
+        'info',
+        _checkLogLevel,
+      ).trim().toLowerCase(),
       logo: resolve('logo', 'SW_LOGO', ''),
       title: resolve('title', 'SW_TITLE', ''),
       color: _checkColor(resolve('color', 'SW_COLOR', '#25D366')),
@@ -296,6 +308,7 @@ class GeneratorConfig {
     _checkOutputName(bootstrapOutput, '--bootstrap-output');
     _checkDistinctOutputs(swOutput, bootstrapOutput);
     if (version.isNotEmpty) _checkVersion(version, '--version');
+    _checkLogLevel(logLevel, '--log-level');
   }
 
   static ArgParser _buildArgParser() => ArgParser()
@@ -353,6 +366,16 @@ class GeneratorConfig {
     )
     ..addOption('config', help: 'Path to YAML config file')
     ..addOption('theme', help: 'Loading widget theme (light/dark/auto)')
+    // No `allowed:`: the YAML key and the environment variable never pass
+    // through ArgParser, and `_checkLogLevel` accepts any case, so one
+    // check for all three channels gives one error message for all three.
+    ..addOption(
+      'log-level',
+      help:
+          'Console output of the generated artifacts '
+          '(silent/error/warn/info)',
+      defaultsTo: 'info',
+    )
     ..addOption('logo', help: 'Loading widget logo path')
     ..addOption('title', help: 'Loading widget title')
     ..addOption('color', help: 'Loading widget accent color')
@@ -560,6 +583,23 @@ void _checkVersion(String version, String option, [String where = '']) {
   }
   throw FormatException(
     '$option="$version"$where $problem. Choose another version.',
+  );
+}
+
+/// Console verbosity levels the generated artifacts understand, from
+/// quietest to loudest.
+const List<String> _logLevels = ['silent', 'error', 'warn', 'info'];
+
+/// Reject a console verbosity level the artifacts would not understand.
+///
+/// `ArgParser` rejects a bad `--log-level` itself; this covers the YAML
+/// key and the environment variable, which it never sees. [option] and
+/// [where] name where the value came from.
+void _checkLogLevel(String level, String option, [String where = '']) {
+  if (_logLevels.contains(level.trim().toLowerCase())) return;
+  throw FormatException(
+    '$option="$level"$where is not a log level. Use one of '
+    '${_logLevels.join(", ")}.',
   );
 }
 

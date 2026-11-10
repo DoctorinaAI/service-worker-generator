@@ -1,4 +1,5 @@
 import { formatBytes } from '../shared/utils';
+import { log } from '../shared/logger';
 
 /**
  * Minimum gap between two storage estimates in the log. A precache that
@@ -34,7 +35,7 @@ export function isQuotaExceeded(error: unknown): boolean {
 export function reportIfQuotaExceeded(context: string, error: unknown): boolean {
   if (!isQuotaExceeded(error)) return false;
   try {
-    console.error(`[SW] Storage quota exceeded while ${context}:`, error);
+    log.error(`[SW] Storage quota exceeded while ${context}:`, error);
     const now = Date.now();
     if (now - lastEstimateAt < ESTIMATE_LOG_INTERVAL_MS) return true;
     lastEstimateAt = now;
@@ -49,7 +50,7 @@ export function reportIfQuotaExceeded(context: string, error: unknown): boolean 
         (estimate) => {
           const usage = estimate?.usage;
           const quota = estimate?.quota;
-          console.warn(
+          log.warn(
             `[SW] Storage estimate: usage ${fmt(usage)} of quota ${fmt(quota)}`,
           );
         },

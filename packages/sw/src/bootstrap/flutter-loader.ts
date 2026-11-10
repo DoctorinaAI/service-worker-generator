@@ -1,6 +1,7 @@
 import type { FlutterBuildEntry } from '../shared/types';
 import { STAGE_PROGRESS } from '../shared/constants';
 import { logPhase } from './console-logger';
+import { log } from '../shared/logger';
 
 /**
  * `window._flutter.loader` is missing: `bootstrap.js` was not produced by
@@ -77,7 +78,7 @@ export async function loadFlutterApp(
         try {
           onEngineError?.(error);
         } catch (handlerError) {
-          console.error('[Bootstrap] Engine error handler threw:', handlerError);
+          log.error('[Bootstrap] Engine error handler threw:', handlerError);
         }
         throw error;
       }

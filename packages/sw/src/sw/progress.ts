@@ -5,6 +5,7 @@ import type {
 } from '../shared/types';
 import { ResourceCategory } from '../shared/types';
 import { notifyClients } from './notify';
+import { log } from '../shared/logger';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -120,7 +121,7 @@ export function createProgressReporter(
       try {
         await broadcast(update);
       } catch (error) {
-        console.warn('[SW] Progress report failed:', error);
+        log.warn('[SW] Progress report failed:', error);
       }
     },
   };

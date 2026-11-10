@@ -12,6 +12,7 @@ import { createActivateHandler } from './activate-handler';
 import { handleFetch } from './fetch-handler';
 import { createMessageHandler } from './message-handler';
 import { createProgressReporter } from './progress';
+import { log, setLogLevel } from '../shared/logger';
 
 declare const self: ServiceWorkerGlobalScope;
 
@@ -23,6 +24,9 @@ declare const self: ServiceWorkerGlobalScope;
 const config: SWConfig = "__INJECT_SW_CONFIG__" as unknown as SWConfig;
 
 const { cachePrefix, version, manifest, engineRevision } = config;
+
+// Before the first line this worker prints.
+setLogLevel(config.logLevel);
 
 // Single source of truth for what progress is measured against: the
 // pre-cached set, its byte total, and per-message membership. Every
@@ -40,7 +44,7 @@ const cacheableSize = Object.values(manifest).reduce(
 
 // Log initialization
 const resourceCount = Object.keys(manifest).length;
-console.log(
+log.info(
   `[SW] v${version} | prefix: ${cachePrefix} | ` +
     `resources: ${resourceCount} | counted: ${progress.resourcesCount} | ` +
     `size: ${cacheableSize} bytes`,

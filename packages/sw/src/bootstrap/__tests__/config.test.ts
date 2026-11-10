@@ -13,6 +13,11 @@ import {
   DEFAULT_MAX_PROGRESS,
   DEFAULT_MIN_PROGRESS,
 } from '../../shared/constants';
+import {
+  DEFAULT_LOG_LEVEL,
+  getLogLevel,
+  setLogLevel,
+} from '../../shared/logger';
 
 describe('parseDataConfig', () => {
   it('returns empty config when element is null', () => {
@@ -272,5 +277,50 @@ describe('withAlpha', () => {
   });
   it('keeps the old concatenation for other formats', () => {
     expect(withAlpha('teal', '80')).toBe('teal80');
+  });
+});
+
+/**
+ * Issue #38: the page can turn the console output off without regenerating
+ * the artifacts, through the same `data-config` the widget is themed with.
+ */
+describe('resolveConfig — log level', () => {
+  const buildConfig: BuildConfig = {
+    engineRevision: 'abc123',
+    swVersion: '12345',
+    swFilename: 'sw.js',
+    builds: [],
+  };
+
+  afterEach(() => {
+    setLogLevel(DEFAULT_LOG_LEVEL);
+    vi.restoreAllMocks();
+  });
+
+  it('applies a level given in data-config', () => {
+    resolveConfig(buildConfig, { logLevel: 'silent' });
+    expect(getLogLevel()).toBe('silent');
+  });
+
+  it('silences the corrections it would otherwise report', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // A theme and a colour the widget cannot use: normally a line each.
+    resolveConfig(buildConfig, {
+      logLevel: 'silent',
+      theme: 'neon' as BootstrapConfig['theme'],
+      color: 'rebeccapurple',
+    });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('keeps the level the build was generated with when data-config has none', () => {
+    setLogLevel('error');
+    resolveConfig(buildConfig, { title: 'App' });
+    expect(getLogLevel()).toBe('error');
+  });
+
+  it('leaves logLevel out of the widget’s settings', () => {
+    const resolved = resolveConfig(buildConfig, { logLevel: 'warn' });
+    expect('logLevel' in resolved.ui).toBe(false);
   });
 });

@@ -1,3 +1,4 @@
+import { log } from '../shared/logger';
 declare const self: ServiceWorkerGlobalScope;
 
 interface ClientMessage {
@@ -44,7 +45,7 @@ export function createMessageHandler(
           if (msg.requestId !== undefined) reply.requestId = msg.requestId;
           event.source?.postMessage(reply);
         } catch (error) {
-          console.warn('[SW] Failed to reply with version:', error);
+          log.warn('[SW] Failed to reply with version:', error);
         }
         break;
     }

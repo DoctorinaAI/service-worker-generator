@@ -22,6 +22,7 @@ import {
 } from '../shared/utils';
 import { ownCacheNames } from '../shared/cache-ownership';
 import { reportIfQuotaExceeded } from './quota';
+import { log } from '../shared/logger';
 
 /**
  * Get the content cache name for a given prefix and version.
@@ -160,9 +161,9 @@ export async function precacheResources(
       const msg = `[SW] Precache failed for ${path}: ${reason}`;
       if (entry.category === ResourceCategory.Core) {
         coreFailures.push(`${path} (${reason})`);
-        console.error(msg);
+        log.error(msg);
       } else {
-        console.warn(msg);
+        log.warn(msg);
       }
     }
 
@@ -174,7 +175,7 @@ export async function precacheResources(
       try {
         await onEach(path, entry);
       } catch (error) {
-        console.warn(`[SW] Precache progress report failed for ${path}:`, error);
+        log.warn(`[SW] Precache progress report failed for ${path}:`, error);
       }
     }
   });
@@ -232,7 +233,7 @@ async function storeAfterSizeMismatch(
   // short of it is the wire, whatever the first copy looked like.
   const declared = declaredBodyLength(response);
   if (declared !== undefined && size !== declared) {
-    console.error(
+    log.error(
       `[SW] ${path}: the host declares ${declared} bytes and ${size} were ` +
         `received (${first.received} the first time); the transfer is being ` +
         `cut short`,
@@ -240,13 +241,13 @@ async function storeAfterSizeMismatch(
     return false;
   }
   if (size !== first.expected && size === 0) {
-    console.error(
+    log.error(
       `[SW] ${path}: an empty body for a file of ${first.expected} bytes`,
     );
     return false;
   }
   if (size !== first.expected && !isReencoded(response)) {
-    console.error(
+    log.error(
       `[SW] ${path}: ${size} bytes where the build has ${first.expected}, ` +
         `sent uncompressed (${first.received} the first time); a different ` +
         `or truncated copy of the file, not stored`,
@@ -259,14 +260,14 @@ async function storeAfterSizeMismatch(
       ? size > first.expected
       : size === first.received);
   if (!consistent) {
-    console.error(
+    log.error(
       `[SW] ${path}: ${first.received} bytes, then ${size}, for a file of ` +
         `${first.expected}; the transfer is being cut short`,
     );
     return false;
   }
   if (size !== first.expected) {
-    console.warn(
+    log.warn(
       `[SW] ${path}: the host serves ${size} bytes where the build has ` +
         `${first.expected}, re-encoded, on every request; storing it as served`,
     );
@@ -304,11 +305,11 @@ export async function lazyCacheResponse(
 ): Promise<void> {
   const key = getResourceKey(request.url);
   if (response.status !== 200) {
-    console.warn(`[SW] Not caching ${key}: HTTP ${response.status}`);
+    log.warn(`[SW] Not caching ${key}: HTTP ${response.status}`);
     return;
   }
   if (isHtmlFallback(key, response)) {
-    console.warn(`[SW] Not caching ${request.url}: served as HTML`);
+    log.warn(`[SW] Not caching ${request.url}: served as HTML`);
     return;
   }
   // Cloned before the first await: the caller hands [response] to the page
@@ -459,7 +460,7 @@ export async function cleanupOldCaches(
     ...(pending ?? []).map((v) => getTempCacheName(prefix, v)),
   ]);
   if (pending === null) {
-    console.warn(
+    log.warn(
       '[SW] A pending worker has no readable version; keeping all temp caches',
     );
   }
@@ -508,10 +509,10 @@ export async function cleanupOrphanedTempCaches(
   );
   const removed = doomed.filter((_, i) => results[i]);
   if (removed.length > 0) {
-    console.log(`[SW] Removed orphaned temp cache(s): ${removed.join(', ')}`);
+    log.info(`[SW] Removed orphaned temp cache(s): ${removed.join(', ')}`);
   }
   if (removed.length < doomed.length) {
-    console.warn(
+    log.warn(
       `[SW] Could not remove temp cache(s): ` +
         doomed.filter((_, i) => !results[i]).join(', '),
     );
