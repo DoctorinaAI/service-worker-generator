@@ -48,6 +48,29 @@ tests pass or fail against old code.
 - **Prove the scenario ran.** A check like "nothing is installing" is also true
   before the install starts. Assert on the origin that the worker got that far.
 
+### What the browser suite covers
+
+| Spec | Scenario |
+|---|---|
+| `app-shell`, `app-shell-integrity` | The shell is pre-cached under its manifest key, answers a deep route and a failed navigation, and nothing else may take its slot |
+| `bootstrap` | The page boots, the widget mounts, `data-config` is read, and a wedged service worker job queue does not stop the app |
+| `engine-update` | The first load after a deploy, on the same engine and on a changed one |
+| `deploy-reuse` | A deploy that changed nothing but its version downloads no code again |
+| `two-tabs` | A second tab open across a deploy: the reloaded one runs the new build, the other keeps its own, the new worker waits |
+| `base-href` | An app under `<base href="/app/">`: scope, cache keys, deep routes and the host's reserved namespace |
+| `canvaskit-fallback` | The engine from the CDN, from the local copy when the CDN is blocked, and the session flag that spares the second probe |
+| `fetch-routing` | Redirects, `Range`, POST, lazy caching, navigation preload, the version protocol |
+| `origin-faults` | An origin that is down, 500s, fails once, or breaks a deploy's Core file |
+| `storage-purge` | Caches or registrations gone, a single evicted file, a refill that 503s |
+| `progress-counter` | The counter never passes its total, cold and warm |
+| `logging` | `--log-level=silent` really is silent, with the default as the control |
+
+Still uncovered, and why: a quota that runs out (no way to fill a browser's
+storage from a test in reasonable time), multithreaded skwasm under
+COOP/COEP (the example is a canvaskit build, and the headers need a host
+that sets them), the stall overlay (its threshold is 30 s, and 120 s where
+nothing reports progress), and a host that serves a stale `bootstrap.js`.
+
 ### Known engine differences
 
 | Engine | Behaviour | In the suite |

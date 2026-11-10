@@ -924,7 +924,9 @@ describe('runPipeline — SW progress counter', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const api = runPipeline(resolved());
     const seen: unknown[] = [];
-    api.onWorkerFailure((message) => seen.push(message));
+    api.onWorkerFailure((message) => {
+      seen.push(message);
+    });
     const onWindow = vi.fn();
     window.addEventListener('sw-lifecycle', onWindow);
 
@@ -961,7 +963,9 @@ describe('runPipeline — SW progress counter', () => {
     });
     const api = runPipeline(resolved());
     const seen: unknown[] = [];
-    api.onWorkerFailure((message) => seen.push(message));
+    api.onWorkerFailure((message) => {
+      seen.push(message);
+    });
 
     for (const fn of listeners) {
       fn({
