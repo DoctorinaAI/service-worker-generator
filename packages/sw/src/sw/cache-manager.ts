@@ -67,6 +67,51 @@ export function expectedBodySize(
 }
 
 /**
+ * A previous version's content cache, and the manifest that describes what
+ * is in it. See `findReusableSource`.
+ */
+export interface ReuseSource {
+  /** The version that cache belongs to, for the log line. */
+  version: string;
+  cache: Cache;
+  manifest: ResourceManifest;
+}
+
+/**
+ * Copy [path] from a previous version's cache when that version had the
+ * very same file, and report whether it was.
+ *
+ * "The same file" is the manifest's hash and size, both from the build that
+ * wrote the cache and from this one. The stored copy is taken as it is: it
+ * passed the size check when it was first stored, and a host that
+ * re-encodes what it serves had its copy accepted deliberately (see
+ * `storeAfterSizeMismatch`), so re-checking its length here would reject
+ * exactly the copy that host will serve again.
+ */
+async function reuseFromPreviousVersion(
+  cache: Cache,
+  path: string,
+  entry: ResourceEntry,
+  source: ReuseSource | undefined,
+): Promise<boolean> {
+  if (!source) return false;
+  const before = source.manifest[path];
+  if (!before || before.hash !== entry.hash || before.size !== entry.size) {
+    return false;
+  }
+  try {
+    const stored = await source.cache.match(new Request(path));
+    if (!stored) return false;
+    await cache.put(new Request(path), stored);
+    return true;
+  } catch (error) {
+    // A cache that was deleted under us, or a write that failed: fetch it.
+    log.warn(`[SW] Could not reuse the cached ${path}:`, error);
+    return false;
+  }
+}
+
+/**
  * Whether [path] is already in [cache] with the length [entry] records for
  * it, from an earlier attempt at the same install.
  *
@@ -187,6 +232,7 @@ export async function precacheResources(
   manifest: ResourceManifest,
   categories: readonly ResourceCategory[],
   onEach?: (path: string, entry: ResourceEntry) => void | Promise<void>,
+  reuse?: ReuseSource,
 ): Promise<void> {
   const cache = await caches.open(cacheName);
   const entries = Object.entries(manifest).filter(([, entry]) =>
@@ -194,6 +240,7 @@ export async function precacheResources(
   );
 
   const coreFailures: string[] = [];
+  let reused = 0;
 
   await mapWithConcurrency(entries, PRECACHE_CONCURRENCY, async ([path, entry]) => {
     let stored = false;
@@ -203,9 +250,14 @@ export async function precacheResources(
       // next page load tries again. Downloading a 30 MB wasm that is
       // already here is how an install over a flaky connection never
       // finishes at all.
-      stored =
-        (await alreadyPrecached(cache, path, entry)) ||
-        (await fetchIntoCache(cache, path, entry));
+      if (await alreadyPrecached(cache, path, entry)) {
+        stored = true;
+      } else if (await reuseFromPreviousVersion(cache, path, entry, reuse)) {
+        stored = true;
+        reused++;
+      } else {
+        stored = await fetchIntoCache(cache, path, entry);
+      }
     } catch (error) {
       reportIfQuotaExceeded(`precaching ${path}`, error);
       const reason = error instanceof Error ? error.message : String(error);
@@ -230,6 +282,12 @@ export async function precacheResources(
       }
     }
   });
+
+  if (reused > 0 && reuse) {
+    log.info(
+      `[SW] Reused ${reused} unchanged file(s) from v${reuse.version}`,
+    );
+  }
 
   if (coreFailures.length > 0) {
     throw new Error(
@@ -470,7 +528,7 @@ export async function swapCaches(
   }
 
   // Step 3: persist the new manifest only after the content cache is coherent.
-  await saveManifest(manifestCache, manifest);
+  await saveManifest(manifestCache, version, manifest);
 
   // Step 4: drop temp cache.
   await caches.delete(tempCacheName);
@@ -581,24 +639,91 @@ export async function cleanupOrphanedTempCaches(
 async function loadPreviousManifest(
   cache: Cache,
 ): Promise<ResourceManifest | null> {
+  return (await loadPreviousRecord(cache))?.manifest ?? null;
+}
+
+/**
+ * What the last activated version left behind: its manifest, and its own
+ * version when it recorded one.
+ *
+ * Releases before the version was stored wrote the manifest alone, so a
+ * stored object without a `manifest` key *is* the manifest. Reading both
+ * shapes is what keeps the first install after an upgrade from treating a
+ * perfectly good cache as corrupt.
+ */
+export async function loadPreviousRecord(
+  cache: Cache,
+): Promise<{ version?: string; manifest: ResourceManifest } | null> {
   const response = await cache.match('manifest');
   if (!response) return null;
   try {
-    return (await response.json()) as ResourceManifest;
+    const stored = (await response.json()) as
+      | ResourceManifest
+      | { version?: unknown; manifest?: unknown };
+    const manifest = (stored as { manifest?: unknown }).manifest;
+    if (manifest && typeof manifest === 'object') {
+      const version = (stored as { version?: unknown }).version;
+      return {
+        manifest: manifest as ResourceManifest,
+        ...(typeof version === 'string' && version ? { version } : {}),
+      };
+    }
+    return { manifest: stored as ResourceManifest };
   } catch {
     return null;
   }
 }
 
 /**
- * Save the current manifest to the manifest cache.
+ * Save the current manifest, and the version it belongs to, in the
+ * manifest cache. The version is what lets the next install find the
+ * content cache whose unchanged files it can reuse.
  */
 async function saveManifest(
   cache: Cache,
+  version: string,
   manifest: ResourceManifest,
 ): Promise<void> {
-  const response = new Response(JSON.stringify(manifest), {
+  const response = new Response(JSON.stringify({ version, manifest }), {
     headers: { 'Content-Type': 'application/json' },
   });
   await cache.put('manifest', response);
+}
+
+/**
+ * The content cache of the last activated version, when it is another one
+ * and it is still there, with the manifest that describes it.
+ *
+ * Its entries are what a new version's install can copy instead of
+ * downloading: a content cache is named after its version, so every deploy
+ * used to start from an empty one and fetch every Core and Required file
+ * again — an assets-only deploy made every user download the whole
+ * `main.dart.wasm` a second time. Only entries whose hash is unchanged are
+ * copied, so the one guarantee that matters — shell, bootstrap and Dart
+ * code from one deploy — is untouched.
+ *
+ * `undefined` when there is nothing to reuse, which is also what every
+ * failure to look returns: reuse is an optimisation.
+ */
+export async function findReusableSource(
+  prefix: string,
+  version: string,
+): Promise<ReuseSource | undefined> {
+  try {
+    const record = await loadPreviousRecord(
+      await caches.open(getManifestCacheName(prefix)),
+    );
+    if (!record?.version || record.version === version) return undefined;
+    const name = getContentCacheName(prefix, record.version);
+    // `caches.open` would create it; a missing cache means nothing to reuse.
+    if (!(await caches.has(name))) return undefined;
+    return {
+      version: record.version,
+      cache: await caches.open(name),
+      manifest: record.manifest,
+    };
+  } catch (error) {
+    log.warn('[SW] Could not look for reusable cached files:', error);
+    return undefined;
+  }
 }

@@ -1,6 +1,7 @@
 import type { ResourceManifest } from '../shared/types';
 import {
   cleanupOrphanedTempCaches,
+  findReusableSource,
   getManifestCacheName,
   precacheResources,
   getTempCacheName,
@@ -67,6 +68,13 @@ async function handleInstall(
   // `precacheResources` throws if any Core entry fails — that surfaces to
   // `waitUntil` so the SW install is rejected and the old version keeps
   // serving traffic.
+  // What the last activated version cached: every file whose hash this
+  // build did not change can be copied from there instead of downloaded
+  // again. A content cache is named after its version, so without this an
+  // assets-only deploy makes every user fetch the whole `main.dart.wasm` a
+  // second time.
+  const reuse = await findReusableSource(cachePrefix, version);
+
   try {
     await precacheResources(
       tempCacheName,
@@ -82,6 +90,7 @@ async function handleInstall(
           status: 'completed',
         });
       },
+      reuse,
     );
   } catch (error) {
     // The half-populated temp cache is kept on purpose: this install is

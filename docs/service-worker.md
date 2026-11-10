@@ -169,6 +169,16 @@ with the other engine differences.
 4. Leave the new worker in `waiting` until the client explicitly opts in
 5. Notify clients of progress during pre-caching
 
+An install also copies, rather than downloads, every Core and Required
+file whose hash this build did not change: the manifest cache records the
+version its manifest belongs to, so the install can open that version's
+content cache and take the unchanged entries from it. Only the entries
+whose hash **and** size match in both manifests are copied, so the one
+guarantee that matters — shell, bootstrap and Dart code from one deploy —
+is untouched. Without it an assets-only deploy made every user download the
+whole `main.dart.wasm` again, because a content cache is named after its
+version and therefore starts empty.
+
 An install that fails keeps its temp cache. A failed `Core` entry fails the
 whole install, which is retried on the next page load, and re-downloading a
 30 MB wasm for the sake of the one entry a flaky connection dropped is how

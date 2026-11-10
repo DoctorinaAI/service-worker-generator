@@ -103,6 +103,12 @@ Users can override categorization via CLI args or YAML config using glob pattern
 - `{prefix}-temp-{version}` — Temporary cache during install (atomic swap)
 - `{prefix}-manifest` — Previous manifest storage (unversioned)
 
+### Reuse across versions
+A new version's install copies every Core and Required file whose hash the
+build did not change out of the previous version's content cache, found
+through the version stored next to the manifest. Only unchanged entries are
+copied, so a deploy still serves one coherent build.
+
 ### Cache Busting
 All cached resources use `?v={hash}` query parameters to prevent stale responses.
 

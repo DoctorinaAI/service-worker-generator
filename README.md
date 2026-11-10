@@ -519,6 +519,7 @@ cache, and so is everything if the network cannot answer at all. See
 
 - **Atomic updates** — New resources cached in temp cache, then swapped atomically on activate
 - **Manifest diff** — Previous manifest compared to detect changed resources (by MD5 hash)
+- **Reuse across versions** — a new version's install copies the Core and Required files whose hash did not change out of the previous version's cache instead of downloading them, so an assets-only deploy costs the assets
 - **Stale cleanup** — Old versioned caches automatically deleted on activate
 - **Error recovery** — On activate error, all caches cleared (clean slate), `clients.claim()` always called
 

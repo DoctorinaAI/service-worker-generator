@@ -11,8 +11,9 @@ import {
   cleanupOldCaches,
   lazyCacheResponse,
   cleanupOrphanedTempCaches,
+  findReusableSource,
 } from '../cache-manager';
-import type { ResourceManifest } from '../../shared/types';
+import type { ResourceEntry, ResourceManifest } from '../../shared/types';
 import { ResourceCategory } from '../../shared/types';
 import { BODY_STALL_TIMEOUT_MS } from '../../shared/constants';
 import {
@@ -599,8 +600,42 @@ describe('swapCaches', () => {
     expect(manifestCache).toBeDefined();
     const stored = await manifestCache!.match('manifest');
     expect(stored).toBeDefined();
-    const parsed = JSON.parse(await stored!.text()) as ResourceManifest;
-    expect(parsed['x.js'].hash).toBe('h');
+    const parsed = JSON.parse(await stored!.text()) as {
+      version: string;
+      manifest: ResourceManifest;
+    };
+    expect(parsed.manifest['x.js'].hash).toBe('h');
+    // The version travels with it: it is what the next install opens to
+    // find the files this one already cached.
+    expect(parsed.version).toBe('v3');
+  });
+
+  it('reads a manifest stored by a release that saved no version', async () => {
+    // The bare-manifest shape of 0.3.x and earlier. Misreading it would
+    // make the first swap after an upgrade evict nothing and diff against
+    // an empty manifest.
+    const manifestCache = await mockCaches.open('app-manifest');
+    await manifestCache.put(
+      'manifest',
+      new Response(
+        JSON.stringify({
+          'gone.js': {
+            name: 'gone.js',
+            size: 1,
+            hash: 'g',
+            category: ResourceCategory.Optional,
+          },
+        }),
+      ),
+    );
+    const content = await mockCaches.open('app-v3');
+    await content.put(new Request('gone.js'), textResponse('old'));
+    await mockCaches.open('app-temp-v3');
+
+    await swapCaches('app', 'v3', {});
+
+    // Read as a manifest, so the entry that vanished was evicted.
+    expect(await content.match(new Request('gone.js'))).toBeUndefined();
   });
 
   it('is a no-op on outdated eviction when no previous manifest exists', async () => {
@@ -1327,5 +1362,182 @@ describe('cleanupOrphanedTempCaches', () => {
     await cleanupOrphanedTempCaches('app', ['v3']);
     expect(await mockCaches.keys()).toEqual(['app-temp-v3']);
     expect(console.log).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Audit #30, item 2.1: a content cache is named after its version, so every
+ * deploy used to start from an empty one and download every Core and
+ * Required file again — an assets-only deploy made every user fetch the
+ * whole `main.dart.wasm` a second time.
+ */
+describe('reuse across versions', () => {
+  let mockCaches: MockCacheStorage;
+
+  beforeEach(() => {
+    mockCaches = installMockCaches();
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const core = (hash: string, size = 4): ResourceEntry => ({
+    name: 'main.dart.js',
+    size,
+    hash,
+    category: ResourceCategory.Core,
+  });
+
+  /** What a previous version left behind: its cache and its manifest. */
+  async function previousVersion(
+    version: string,
+    manifest: ResourceManifest,
+    bodies: Record<string, string>,
+  ): Promise<void> {
+    const content = await mockCaches.open(`app-${version}`);
+    for (const [path, body] of Object.entries(bodies)) {
+      await content.put(
+        new Request(path),
+        new Response(body, { headers: { 'Content-Length': String(body.length) } }),
+      );
+    }
+    const manifestCache = await mockCaches.open('app-manifest');
+    await manifestCache.put(
+      'manifest',
+      new Response(JSON.stringify({ version, manifest })),
+    );
+  }
+
+  it('copies an unchanged file instead of downloading it', async () => {
+    await previousVersion('v1', { 'main.dart.js': core('h-same') }, {
+      'main.dart.js': 'code',
+    });
+    const spy = installMockFetch(async () => textResponse('from the network'));
+
+    const reuse = await findReusableSource('app', 'v2');
+    await precacheResources(
+      'app-temp-v2',
+      { 'main.dart.js': core('h-same') },
+      [ResourceCategory.Core],
+      undefined,
+      reuse,
+    );
+
+    expect(spy).not.toHaveBeenCalled();
+    const stored = await mockCaches.peek('app-temp-v2')!.match(new Request('main.dart.js'));
+    expect(await stored!.text()).toBe('code');
+  });
+
+  it('downloads a file whose hash changed', async () => {
+    await previousVersion('v1', { 'main.dart.js': core('h-old') }, {
+      'main.dart.js': 'old code',
+    });
+    const spy = installMockFetch(
+      async () => new Response('new!', { headers: { 'Content-Length': '4' } }),
+    );
+
+    const reuse = await findReusableSource('app', 'v2');
+    await precacheResources(
+      'app-temp-v2',
+      { 'main.dart.js': core('h-new') },
+      [ResourceCategory.Core],
+      undefined,
+      reuse,
+    );
+
+    expect(spy).toHaveBeenCalledOnce();
+    const stored = await mockCaches.peek('app-temp-v2')!.match(new Request('main.dart.js'));
+    expect(await stored!.text()).toBe('new!');
+  });
+
+  it('downloads a file whose size changed under the same hash', async () => {
+    // A hash collision is not the point: a manifest edited by hand, or a
+    // generator bug, must not be able to promote the wrong bytes.
+    await previousVersion('v1', { 'main.dart.js': core('h-same', 8) }, {
+      'main.dart.js': 'old code',
+    });
+    const spy = installMockFetch(
+      async () => new Response('new!', { headers: { 'Content-Length': '4' } }),
+    );
+
+    const reuse = await findReusableSource('app', 'v2');
+    await precacheResources(
+      'app-temp-v2',
+      { 'main.dart.js': core('h-same', 4) },
+      [ResourceCategory.Core],
+      undefined,
+      reuse,
+    );
+
+    expect(spy).toHaveBeenCalledOnce();
+  });
+
+  it('reports a reused file as stored, so the counter still fills', async () => {
+    await previousVersion('v1', { 'main.dart.js': core('h-same') }, {
+      'main.dart.js': 'code',
+    });
+    installMockFetch(async () => textResponse('x'));
+    const reported: string[] = [];
+
+    const reuse = await findReusableSource('app', 'v2');
+    await precacheResources(
+      'app-temp-v2',
+      { 'main.dart.js': core('h-same') },
+      [ResourceCategory.Core],
+      (path) => {
+        reported.push(path);
+      },
+      reuse,
+    );
+
+    expect(reported).toEqual(['main.dart.js']);
+  });
+
+  it('finds nothing to reuse when the previous version is the current one', async () => {
+    await previousVersion('v2', { 'main.dart.js': core('h-same') }, {
+      'main.dart.js': 'code',
+    });
+    expect(await findReusableSource('app', 'v2')).toBeUndefined();
+  });
+
+  it('finds nothing to reuse when that version’s cache is gone', async () => {
+    await previousVersion('v1', { 'main.dart.js': core('h-same') }, {
+      'main.dart.js': 'code',
+    });
+    await mockCaches.delete('app-v1');
+
+    expect(await findReusableSource('app', 'v1')).toBeUndefined();
+    // And the lookup must not have created it.
+    expect(mockCaches.peek('app-v1')).toBeUndefined();
+  });
+
+  it('finds nothing to reuse after a release that stored no version', async () => {
+    const manifestCache = await mockCaches.open('app-manifest');
+    await manifestCache.put(
+      'manifest',
+      new Response(JSON.stringify({ 'main.dart.js': core('h-same') })),
+    );
+    expect(await findReusableSource('app', 'v2')).toBeUndefined();
+  });
+
+  it('downloads the file when the previous copy is missing from its cache', async () => {
+    await previousVersion('v1', { 'main.dart.js': core('h-same') }, {});
+    const spy = installMockFetch(
+      async () => new Response('code', { headers: { 'Content-Length': '4' } }),
+    );
+
+    const reuse = await findReusableSource('app', 'v2');
+    await precacheResources(
+      'app-temp-v2',
+      { 'main.dart.js': core('h-same') },
+      [ResourceCategory.Core],
+      undefined,
+      reuse,
+    );
+
+    expect(spy).toHaveBeenCalledOnce();
   });
 });
