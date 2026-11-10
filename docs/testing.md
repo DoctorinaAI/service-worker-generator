@@ -32,6 +32,13 @@ Without it, only Chromium runs. `npm run build:all` matters after any change in
 `packages/sw/src`: without it `sw:generate` embeds the previous worker and the
 tests pass or fail against old code.
 
+Run `dart test --tags=integration` *before* `sw:generate`, not after. Those
+tests copy `example/build/web` into a temporary directory and run the
+generator over the copy, and the generator refuses a build it has already
+processed — so once the command above has run, every one of them fails with
+"This build was already processed" until the next `flutter build web`. The
+workflow does them in that order for the same reason.
+
 ### Writing a test
 
 - **Observe the origin, not the page.** Use `Host` from `e2e/support/host.ts`.
