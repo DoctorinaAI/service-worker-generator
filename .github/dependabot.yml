@@ -40,3 +40,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      # One pull request for the lot, majors included: a major of a
+      # first-party action is a runner bump (Node 20 to 24), not an
+      # interface change, and ungrouped they filled the limit of five and
+      # left `deploy-pages` queued behind them with nothing to say so.
+      actions:
+        patterns:
+          - "*"
