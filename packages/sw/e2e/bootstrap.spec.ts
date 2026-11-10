@@ -47,6 +47,20 @@ test.describe('Bootstrap E2E', () => {
     expect(widget).not.toBeNull();
   });
 
+  test('the progress ring glow is not clipped to the ring', async ({ page }) => {
+    // The arc's drop-shadow reaches past the <svg>, which clips to its
+    // viewport unless told otherwise: the glow was cut off in a straight
+    // line beside and above the ring, in every engine.
+    await page.goto(BASE_URL);
+    await page.waitForSelector('.sw-progress-ring', { timeout: 5000 });
+    const ring = await page.evaluate(() => ({
+      overflow: getComputedStyle(document.querySelector('.sw-progress-ring')!).overflow,
+      glow: getComputedStyle(document.querySelector('.sw-progress-ring-fill')!).filter,
+    }));
+    expect(ring.glow).toContain('drop-shadow');
+    expect(ring.overflow).toBe('visible');
+  });
+
   test('data-config is parsed correctly', async ({ page }) => {
     await page.goto(BASE_URL);
 

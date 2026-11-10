@@ -972,6 +972,20 @@ describe('LoadingWidget accessibility', () => {
     expect(body).toMatch(/overflow-y:\s*auto/);
   });
 
+  it('lets the progress ring glow past the ring', () => {
+    // The arc carries a drop-shadow glow, and an outer <svg> clips to its
+    // viewport unless told otherwise — the glow was cut off in a straight
+    // line beside and above the ring.
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const css = document.head.querySelector('style')!.textContent!;
+    const rule = css.slice(css.indexOf('.sw-progress-ring {'));
+    const body = rule.slice(0, rule.indexOf('}'));
+    expect(body).toMatch(/overflow:\s*visible/);
+    const fill = css.slice(css.indexOf('.sw-progress-ring-fill {'));
+    expect(fill.slice(0, fill.indexOf('}'))).toMatch(/drop-shadow/);
+  });
+
   it('compacts the layout on a short viewport', () => {
     const w = new LoadingWidget(uiConfig());
     w.mount();

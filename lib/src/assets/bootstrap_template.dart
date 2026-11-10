@@ -70,6 +70,10 @@ const String bootstrapTemplate = r'''
         width: 100%;
         height: 100%;
         transform: rotate(-90deg);
+        /* An outer <svg> clips to its viewport by default, and the arc's
+           drop-shadow glow reaches past it: without this the glow was cut
+           off in a straight line beside and above the ring. */
+        overflow: visible;
       }
       .sw-progress-ring-bg {
         fill: none;
