@@ -17,15 +17,15 @@
     "e2e:headed": "playwright test --headed"
   },
   "devDependencies": {
-    "@playwright/test": "^1.59.1",
+    "@playwright/test": "^1.65.0",
     "@types/node": "^22.20.5",
-    "@typescript-eslint/eslint-plugin": "^8.58.2",
+    "@typescript-eslint/eslint-plugin": "^8.72.1",
     "@typescript-eslint/parser": "^8.58.2",
-    "eslint": "^10.2.1",
+    "eslint": "^10.14.0",
     "jsdom": "^29.0.2",
     "typescript": "^6.0.3",
-    "vite": "^8.0.9",
-    "vite-plugin-singlefile": "^2.3.3",
+    "vite": "^8.3.6",
+    "vite-plugin-singlefile": "^2.3.4",
     "vitest": "^4.1.4"
   }
 }
