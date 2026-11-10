@@ -24,6 +24,18 @@
 - **CI**: the E2E job's browser install hit its 5-minute budget and failed the job with nothing wrong in the code — three engines are around 500 MB of download. They are now cached per Playwright version (the revisions are pinned by it), and the step has 15 minutes for a cache miss. (`.github/workflows/checkout.yml`)
 - **CI**: the E2E job failed at random, in Firefox and WebKit, waiting 30 s for a service worker that never took control. The specs were served by `python3 -m http.server`, which answers one request at a time: a browser that opens a speculative connection without sending a request on it blocks the server until that socket times out, and whatever the worker was fetching stalls with it. The suite now starts a small Node server (`packages/sw/e2e/support/serve.mjs`) that answers concurrently — which also makes the suite runnable on Windows, where `python3` is not on PATH. (`packages/sw/playwright.config.ts`, `packages/sw/e2e/support/serve.mjs`, `docs/testing.md`)
 
+- **Generator**: `_flutter.buildConfig` was extracted with a lazy `\{[\s\S]*?\}\s*;`, which stops at the first `}` followed by a `;`. Today's Flutter output happens not to contain one inside the object, but a string value with `};` in it, or a release that writes `Object.freeze({…})`, would have made it silently return the wrong text. It is now found by a string-aware brace scan that also sees through a wrapper call. Audit #30, item 3.7. (`lib/src/flutter_build.dart`)
+- **Generator**: cleanup pruned `canvaskit/webparagraph/`, which Flutter 3.47 ships and an app built with the WebParagraph text layout loads. It is kept now, when the build has it, like the other engine variants. Audit #30, item 3.7. (`lib/src/generator.dart`)
+- **Generator**: `--ignore="*.png"` quietly covered only the top level of the build — `*` does not cross `/` in `package:glob`, unlike a `.gitignore` line. Such a pattern still matches what it always did, and now says so, naming the `**/*.png` form. The documentation says it too. Audit #30, item 3.6. (`lib/src/config.dart`, `README.md`, `docs/configuration.md`)
+
+### Changed
+
+- **Package**: `environment.sdk` was `>=3.11.0`, which kept every Flutter release before 3.41 from installing the package at all, for language features it does not use. The floor is now `>=3.8.0`, and a CI job runs the analyzer and the unit tests on exactly that SDK, so the claim is tested rather than assumed. Audit #30, item 3.9. (`pubspec.yaml`, `.github/workflows/checkout.yml`)
+- **Package**: `dart pub global activate sw` installed a binary called `generate` on `PATH`. It is now `sw`; `dart run sw:generate` and `dart pub global run sw:generate` are unchanged. Audit #30, item 3.9. (`pubspec.yaml`, `README.md`)
+- **Package**: `package:sw/sw.dart` exported every internal — the categorizer, the manifest builder, the injector, `md5`, `pathToUrl`, `cleanup` — so any refactor was a breaking change. It now exports `generate`, `GeneratorConfig`, `ResourceCategory`, `ResourceEntry` and `FlutterBuildInfo`, and carries a library doc comment. The command-line interface is unaffected. Audit #30, item 3.8. (`lib/sw.dart`)
+- **Package**: the pubspec description said nothing about Flutter or what the tool replaces. Audit #30, item 3.9. (`pubspec.yaml`)
+- **CI**: every action is pinned to a commit SHA, the reusable publish workflow that receives the OIDC token included, and Dependabot now watches npm, pub and the actions themselves (one grouped pull request a week for the dev toolchain). Audit #30, item 4.3. (`.github/workflows/*.yml`, `.github/actions/setup/action.yaml`, `.github/dependabot.yml`)
+
 ## 0.3.0 — 2026-10-30
 
 ### Fixed

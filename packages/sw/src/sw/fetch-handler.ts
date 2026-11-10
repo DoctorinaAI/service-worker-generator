@@ -214,7 +214,8 @@ async function networkFirst(
 
   const fallbackToCache = async (): Promise<Response> => {
     if (cached) {
-      await notifyIndex('cached');
+      // Not awaited: this is a navigation, and the document waits for it.
+      keepAlive(event, notifyIndex('cached'));
       return cached;
     }
     return new Response('Offline', {
@@ -365,14 +366,21 @@ async function cacheFirst(
     cache = await caches.open(cacheName);
     const cached = retired ? undefined : await cache.match(new Request(resourceKey));
     if (cached) {
-      await progress.report({
-        key: resourceKey,
-        name: entry.name,
-        url: request.url,
-        size: entry.size,
-        loaded: entry.size,
-        status: 'cached',
-      });
+      // Not awaited: `report` is a `clients.matchAll` round trip and a
+      // broadcast to every open tab, and this is the path every font and
+      // image takes on every load. The page gets the file; the telemetry
+      // follows under `waitUntil`.
+      keepAlive(
+        event,
+        progress.report({
+          key: resourceKey,
+          name: entry.name,
+          url: request.url,
+          size: entry.size,
+          loaded: entry.size,
+          status: 'cached',
+        }),
+      );
       return cached;
     }
   } catch (error) {
@@ -395,7 +403,7 @@ async function cacheFirst(
       `[SW] ${resourceKey}: ${reason} while a newer build is installing; ` +
         "answering from this version's cache",
     );
-    await progress.report({
+    void progress.report({
       key: resourceKey,
       name: entry.name,
       url: request.url,
@@ -407,14 +415,19 @@ async function cacheFirst(
   };
 
   try {
-    await progress.report({
-      key: resourceKey,
-      name: entry.name,
-      url: request.url,
-      size: entry.size,
-      loaded: 0,
-      status: 'loading',
-    });
+    // Fire-and-forget, as above: awaiting it would hold the fetch that is
+    // the point of this request behind a broadcast.
+    keepAlive(
+      event,
+      progress.report({
+        key: resourceKey,
+        name: entry.name,
+        url: request.url,
+        size: entry.size,
+        loaded: 0,
+        status: 'loading',
+      }),
+    );
 
     // A retired worker asks for the page's own URL: `fetchRefill` would ask
     // for `?v={hash}` of the build *this* worker was generated for, and a
@@ -447,27 +460,33 @@ async function cacheFirst(
         );
       }
 
-      await progress.report({
-        key: resourceKey,
-        name: entry.name,
-        url: request.url,
-        size: entry.size,
-        loaded: entry.size,
-        status: 'completed',
-      });
+      keepAlive(
+        event,
+        progress.report({
+          key: resourceKey,
+          name: entry.name,
+          url: request.url,
+          size: entry.size,
+          loaded: entry.size,
+          status: 'completed',
+        }),
+      );
     } else {
       // Non-OK response is still a user-visible failure: emit an error
       // progress event so the bootstrap UI can surface it instead of
       // hanging on 'loading'.
-      await progress.report({
-        key: resourceKey,
-        name: entry.name,
-        url: request.url,
-        size: entry.size,
-        loaded: 0,
-        status: 'error',
-        error: `HTTP ${response.status}`,
-      });
+      keepAlive(
+        event,
+        progress.report({
+          key: resourceKey,
+          name: entry.name,
+          url: request.url,
+          size: entry.size,
+          loaded: 0,
+          status: 'error',
+          error: `HTTP ${response.status}`,
+        }),
+      );
     }
 
     return response;
@@ -478,15 +497,18 @@ async function cacheFirst(
       );
       if (stale) return stale;
     }
-    await progress.report({
-      key: resourceKey,
-      name: entry.name,
-      url: request.url,
-      size: entry.size,
-      loaded: 0,
-      status: 'error',
-      error: error instanceof Error ? error.message : String(error),
-    });
+    keepAlive(
+      event,
+      progress.report({
+        key: resourceKey,
+        name: entry.name,
+        url: request.url,
+        size: entry.size,
+        loaded: 0,
+        status: 'error',
+        error: error instanceof Error ? error.message : String(error),
+      }),
+    );
     return new Response('Network error', {
       status: 503,
       headers: { 'Content-Type': 'text/plain' },

@@ -101,7 +101,20 @@ async function runPipelineWork(
   //     the fetch handler are outside it. Counting them against that total
   //     is what produced `Loaded 5 of 4 resources`.
   const completedKeys = new Set<string>();
+  /**
+   * Bytes reported for each counted resource, the terminal ones pinned at
+   * their full size.
+   *
+   * The percentage is rendered from these and the message from the count:
+   * the pre-cached set is one or two multi-megabyte files next to a handful
+   * of small ones, so counting files moves the ring in two jumps while
+   * counting bytes moves it as the download goes. The count is still what
+   * the message says, because "Loaded 3 of 5 resources" is something a
+   * user can read.
+   */
+  const loadedBytes = new Map<string, number>();
   let totalResourcesCount = 0;
+  let totalResourcesSize = 0;
   let foreignVersion: string | null = null;
   let sawOwnVersion = false;
   const cleanupSWListener: (() => void) | null =
@@ -131,16 +144,24 @@ async function runPipelineWork(
           // ever becoming possible again.
           if (!totalResourcesCount && msg.resourcesCount) {
             totalResourcesCount = msg.resourcesCount;
+            totalResourcesSize = msg.resourcesSize;
           }
           if (!totalResourcesCount) return;
           if (!msg.counted || !msg.resourceKey) return;
 
-          if (
+          const done =
             msg.status === 'completed' ||
             msg.status === 'cached' ||
-            msg.status === 'updated'
-          ) {
+            msg.status === 'updated';
+          if (done) {
             completedKeys.add(msg.resourceKey);
+            // Whatever the last beat said, a finished resource is all of it.
+            loadedBytes.set(msg.resourceKey, msg.resourceSize);
+          } else if (msg.status === 'loading' && msg.loaded > 0) {
+            // Only forwards: a second worker, or a retry of the same file,
+            // must not walk the ring backwards.
+            const before = loadedBytes.get(msg.resourceKey) ?? 0;
+            if (msg.loaded > before) loadedBytes.set(msg.resourceKey, msg.loaded);
           }
 
           // Within one worker `completedKeys` is a subset of the counted
@@ -149,8 +170,19 @@ async function runPipelineWork(
           // `--version` report different counted sets under one identity,
           // and their union can outrun the latched total. The number it
           // guards is rendered straight to the user.
-          const done = Math.min(completedKeys.size, totalResourcesCount);
-          const downloadPercent = (done / totalResourcesCount) * 100;
+          const count = Math.min(completedKeys.size, totalResourcesCount);
+          // Bytes when the worker said how many there are in total, which
+          // every release since the protocol gained `resourcesSize` does;
+          // the count is the fallback, and the clamp is there for the same
+          // reason as above.
+          let downloadPercent: number;
+          if (totalResourcesSize > 0) {
+            let bytes = 0;
+            for (const loaded of loadedBytes.values()) bytes += loaded;
+            downloadPercent = Math.min(100, (bytes / totalResourcesSize) * 100);
+          } else {
+            downloadPercent = (count / totalResourcesCount) * 100;
+          }
           const internalPercent =
             STAGE_PROGRESS.canvaskit +
             (downloadPercent / 100) *
@@ -159,7 +191,7 @@ async function runPipelineWork(
           updateProgress(
             'assets',
             internalPercent,
-            `Loaded ${done} of ${totalResourcesCount} resources`,
+            `Loaded ${count} of ${totalResourcesCount} resources`,
           );
         })
       : null;

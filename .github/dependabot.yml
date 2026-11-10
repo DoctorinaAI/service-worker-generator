@@ -1,0 +1,38 @@
+# Audit #30, item 4.3: nothing watched the dependencies, and the alerts on
+# the default branch had nowhere to land. The runtime of both artifacts has
+# no dependencies at all — the worker and the bootstrap are plain browser
+# code — so everything below is build and test tooling.
+version: 2
+updates:
+  # The TypeScript toolchain (Vite, Vitest, ESLint, Playwright): the
+  # workspace root is where package-lock.json lives.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      # One pull request for the lot: they move together, and reviewing
+      # fifteen separate bumps of the same toolchain is how they stop being
+      # reviewed at all.
+      dev-tooling:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  # The generator's own dependencies (args, glob, yaml, crypto, path) and
+  # its test tooling.
+  - package-ecosystem: pub
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # The actions the workflows run, which hold the publish token.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

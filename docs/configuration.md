@@ -49,6 +49,12 @@ with status 64 and names the option and the pattern.
 
 These are additive — they extend the default patterns, not replace them.
 
+**`*` does not cross `/`.** These are `package:glob` patterns, not
+`.gitignore` lines: `--ignore="*.png"` matches `favicon.png` and nothing
+under `assets/`. Write `**/*.png` for every directory, or
+`"{*.png,**/*.png}"` for both. A pattern of that shape is warned about so
+it cannot quietly do nothing.
+
 Patterns are matched in a fixed order: **core → required → ignore →
 optional**, and the first match wins. A pattern that already matches a
 built-in higher-priority default therefore cannot demote a file:

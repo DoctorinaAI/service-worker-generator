@@ -54,6 +54,9 @@ on the next unrelated build:
 dart pub global activate sw 0.4.0
 ```
 
+That puts an `sw` command on `PATH`; `dart pub global run sw:generate` works
+the same way without it.
+
 Note that a pre-release is not matched by a plain caret constraint — `0.5.0-dev`
 sorts *before* `0.5.0`, so it falls outside `^0.4.0`. Pin a pre-release
 exactly, or write `^0.5.0-dev` to accept it now and the release later.
@@ -364,6 +367,8 @@ no-glob: "sw.js; bootstrap.js; **/*.map; assets/NOTICES"
 ```
 
 Glob options also take a YAML list (`glob: ["**.js", "assets/**"]`). Plain values are used as written, so `version: 1.10` stays `1.10`.
+
+These are `package:glob` patterns: `*` does not cross `/`, so `*.png` means the top level only and `**/*.png` means every directory. A pattern of the first shape is warned about.
 
 Priority: CLI arguments > YAML config > environment variables > defaults.
 

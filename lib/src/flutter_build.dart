@@ -41,12 +41,9 @@ FlutterBuildInfo extractFlutterBuildInfo(io.Directory buildDir) {
 
   final content = bootstrapFile.readAsStringSync();
 
-  // Extract _flutter.buildConfig = {...};
-  final configMatch = RegExp(
-    r'_flutter\.buildConfig\s*=\s*(\{[\s\S]*?\})\s*;',
-  ).firstMatch(content);
+  final configJson = extractBuildConfigLiteral(content);
 
-  if (configMatch == null) {
+  if (configJson == null) {
     throw StateError(
       'Could not find _flutter.buildConfig in ${bootstrapFile.path}. '
       'The file may not come from "flutter build web", or this Flutter '
@@ -54,8 +51,6 @@ FlutterBuildInfo extractFlutterBuildInfo(io.Directory buildDir) {
       'Re-run "flutter build web" and try again.',
     );
   }
-
-  final configJson = configMatch.group(1)!;
 
   try {
     final config = jsonDecode(configJson) as Map<String, dynamic>;
@@ -78,6 +73,67 @@ FlutterBuildInfo extractFlutterBuildInfo(io.Directory buildDir) {
       'Failed to parse buildConfig JSON in ${bootstrapFile.path}: $e',
     );
   }
+}
+
+/// A single backslash, the escape character inside a JavaScript string.
+const String _backslash = r'\';
+
+/// The object literal assigned to `_flutter.buildConfig` in [content], or
+/// `null` when there is none.
+///
+/// Found by scanning braces rather than by a regular expression. The
+/// pattern this replaces (`\{[\s\S]*?\}\s*;`) stopped at the first `}`
+/// followed by a `;`, which today's output happens not to contain inside
+/// the object — a string value with a `};` in it, or a future release that
+/// writes `Object.freeze({...})` or appends a statement on the same line,
+/// and extraction silently returns the wrong text.
+///
+/// Any wrapper the assignment is written with (`Object.freeze(`,
+/// `JSON.parse(`) is skipped: only whitespace, identifier characters, dots
+/// and an opening parenthesis may stand between the `=` and the literal.
+/// Braces inside strings are ignored, escapes included.
+String? extractBuildConfigLiteral(String content) {
+  final marker = RegExp(r'_flutter\.buildConfig\s*=\s*').firstMatch(content);
+  if (marker == null) return null;
+
+  // Walk to the literal, refusing anything that is not a wrapper call.
+  final preamble = RegExp(r'[\s\w.(]');
+  var start = marker.end;
+  while (start < content.length && content[start] != '{') {
+    if (!preamble.hasMatch(content[start])) return null;
+    start++;
+  }
+  if (start >= content.length) return null;
+
+  var depth = 0;
+  var inString = false;
+  var escaped = false;
+  String? quote;
+  for (var i = start; i < content.length; i++) {
+    final char = content[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char == _backslash) {
+        escaped = true;
+      } else if (char == quote) {
+        inString = false;
+      }
+      continue;
+    }
+    switch (char) {
+      case '"' || "'":
+        inString = true;
+        quote = char;
+      case '{':
+        depth++;
+      case '}':
+        depth--;
+        if (depth == 0) return content.substring(start, i + 1);
+    }
+  }
+  // Unbalanced: a truncated file.
+  return null;
 }
 
 /// Determine which renderers are configured in the builds.

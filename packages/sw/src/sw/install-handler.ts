@@ -91,6 +91,19 @@ async function handleInstall(
         });
       },
       reuse,
+      // Byte-level beats for the file being downloaded, so the loading
+      // ring moves during the download that dominates a cold load instead
+      // of jumping once per file. Throttled inside `precacheResources`.
+      (path, entry, loaded) => {
+        void progress.report({
+          key: path,
+          name: entry.name,
+          url: path,
+          size: entry.size,
+          loaded,
+          status: 'loading',
+        });
+      },
     );
   } catch (error) {
     // The half-populated temp cache is kept on purpose: this install is

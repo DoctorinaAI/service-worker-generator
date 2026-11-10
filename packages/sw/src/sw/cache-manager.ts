@@ -6,6 +6,7 @@ import {
   MANIFEST_CACHE_SUFFIX,
   MAX_RETRY_ATTEMPTS,
   PRECACHE_CONCURRENCY,
+  PROGRESS_THROTTLE_MS,
   SWAP_CONCURRENCY,
   TEMP_CACHE_SUFFIX,
 } from '../shared/constants';
@@ -143,6 +144,23 @@ async function alreadyPrecached(
 }
 
 /**
+ * Wrap [report] so it is called at most every `PROGRESS_THROTTLE_MS`, and
+ * `undefined` when there is nothing to report to.
+ */
+function throttled(
+  report: ((loaded: number) => void) | undefined,
+): ((loaded: number) => void) | undefined {
+  if (!report) return undefined;
+  let last = 0;
+  return (loaded: number): void => {
+    const now = Date.now();
+    if (now - last < PROGRESS_THROTTLE_MS) return;
+    last = now;
+    report(loaded);
+  };
+}
+
+/**
  * Fetch [path] by its hash-busted URL and store it under its manifest key.
  *
  * Returns `true` once stored; throws the reason otherwise — a
@@ -153,6 +171,7 @@ async function fetchIntoCache(
   cache: Cache,
   path: string,
   entry: ResourceEntry,
+  onBytes?: (loaded: number) => void,
 ): Promise<boolean> {
   const url = cacheBustUrl(path, entry.hash);
   const request = new Request(url, { cache: 'reload' });
@@ -206,6 +225,7 @@ async function fetchIntoCache(
       onMismatch: (error) => {
         mismatch = error;
       },
+      onBytes: throttled(onBytes),
     });
     await cache.put(new Request(path), await replayableResponse(guarded));
   } catch (error) {
@@ -233,6 +253,7 @@ export async function precacheResources(
   categories: readonly ResourceCategory[],
   onEach?: (path: string, entry: ResourceEntry) => void | Promise<void>,
   reuse?: ReuseSource,
+  onBytes?: (path: string, entry: ResourceEntry, loaded: number) => void,
 ): Promise<void> {
   const cache = await caches.open(cacheName);
   const entries = Object.entries(manifest).filter(([, entry]) =>
@@ -256,7 +277,12 @@ export async function precacheResources(
         stored = true;
         reused++;
       } else {
-        stored = await fetchIntoCache(cache, path, entry);
+        stored = await fetchIntoCache(
+          cache,
+          path,
+          entry,
+          onBytes && ((loaded) => onBytes(path, entry, loaded)),
+        );
       }
     } catch (error) {
       reportIfQuotaExceeded(`precaching ${path}`, error);

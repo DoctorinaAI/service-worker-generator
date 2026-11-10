@@ -13,6 +13,20 @@ export const CANVASKIT_CDN_BASE = 'https://www.gstatic.com/flutter-canvaskit';
 /** Local fallback path for CanvasKit */
 export const CANVASKIT_LOCAL_PATH = 'canvaskit';
 
+/**
+ * How long the CanvasKit CDN probe waits, once, before the engine is
+ * loaded from the copy the build ships.
+ *
+ * The probe is one byte of the variant's `.js` with `cache: 'no-store'`,
+ * and it blocks the engine download behind it. Two attempts of an 8 s
+ * timeout plus backoff — what this used to be — is up to ~17 s of
+ * "Loading rendering engine" on a network where `gstatic.com` is blocked,
+ * on the first load of every tab session. A CDN that cannot answer one
+ * byte within this is not the faster source it was chosen for, and the
+ * local directory is same-origin and cached after the first load.
+ */
+export const CANVASKIT_PROBE_TIMEOUT_MS = 3_000;
+
 /** Default fetch timeout in milliseconds */
 export const FETCH_TIMEOUT_MS = 10_000;
 
@@ -145,6 +159,18 @@ export const RETRY_AFTER_MAX_MS = 5_000;
  * not a serial walk over hundreds of entries.
  */
 export const SWAP_CONCURRENCY = 4;
+
+/**
+ * Smallest gap between two byte-level `sw-progress` messages for one
+ * resource.
+ *
+ * The pre-cached set is dominated by one or two multi-megabyte files, and
+ * without byte counts the ring does not move for the length of their
+ * download. Each message is a `clients.matchAll` round trip and a
+ * broadcast to every open tab, so they are throttled per resource: four a
+ * second is a smooth ring and a cost that does not scale with chunk size.
+ */
+export const PROGRESS_THROTTLE_MS = 250;
 
 /** Max parallel fetches during SW install precache. Keeps us under HTTP/2
  * multiplexing limits and spares memory on large manifests. */

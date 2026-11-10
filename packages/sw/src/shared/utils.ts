@@ -241,6 +241,13 @@ export interface BodyGuardOptions {
    * `TypeError` for a body that errored, losing the sizes and the type.
    */
   onMismatch?: (error: BodySizeMismatchError) => void;
+  /**
+   * Called with the running byte count as the body streams, so a caller
+   * can report real progress for the download that dominates a cold load.
+   * Called per chunk — throttle in the callback if it does anything
+   * expensive — and never after the body ends.
+   */
+  onBytes?: (received: number) => void;
 }
 
 function isByteCount(n: unknown): n is number {
@@ -293,6 +300,9 @@ export function declaredBodyLength(response: Response): number | undefined {
  * cut: only silence longer than `idleMs` is. A body longer than expected is
  * failed as soon as it crosses the limit; a shorter one when it ends.
  *
+ * `onBytes` is called with the running count as it goes, which is what lets
+ * the loading ring move during a multi-megabyte download.
+ *
  * Whenever the body is wrapped, the result is a rebuilt `Response` with the
  * original status, statusText and headers. A rebuilt response carries no
  * `redirected` flag, which is what lets a redirected shell be replayed for
@@ -318,7 +328,9 @@ export function guardBody(
   const expected = isByteCount(options.expectedBytes)
     ? options.expectedBytes
     : undefined;
-  if (idleMs <= 0 && expected === undefined) return response;
+  if (idleMs <= 0 && expected === undefined && !options.onBytes) {
+    return response;
+  }
   const mismatch = (received: number): BodySizeMismatchError => {
     const error = new BodySizeMismatchError(label, expected!, received);
     try {
@@ -377,6 +389,13 @@ export function guardBody(
           throw mismatch(received);
         }
         arm(controller);
+        if (options.onBytes) {
+          try {
+            options.onBytes(received);
+          } catch {
+            // Telemetry must not break the transfer it is watching.
+          }
+        }
         controller.enqueue(chunk);
       },
       flush() {

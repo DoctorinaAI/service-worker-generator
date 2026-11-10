@@ -193,6 +193,7 @@ class GeneratorConfig {
             'not a valid glob pattern: ${e.message}',
           );
         }
+        _warnSegmentOnlyGlob(pattern, source);
       }
       return globs;
     }
@@ -600,6 +601,26 @@ void _checkLogLevel(String level, String option, [String where = '']) {
   throw FormatException(
     '$option="$level"$where is not a log level. Use one of '
     '${_logLevels.join(", ")}.',
+  );
+}
+
+/// Warn about a pattern that only matches the top level of the build.
+///
+/// `*` does not cross a `/` in `package:glob`, so `*.png` matches
+/// `favicon.png` and nothing under `assets/` — while the user who wrote it
+/// almost certainly meant every PNG. The pattern is left alone (changing
+/// what it matches would change what existing configurations categorise);
+/// it is the silence that was the problem.
+void _warnSegmentOnlyGlob(String pattern, _Source source) {
+  // Only the plain `*.ext` shape, which is the one that reads like
+  // `.gitignore`. Anything with a `/` or a `**` was written by someone who
+  // knows what the separator does, and a bare `*` says "the files here".
+  if (!RegExp(r'^\*[^*/]+$').hasMatch(pattern)) return;
+  io.stderr.writeln(
+    'Warning: ${source.option}="$pattern"${source.where} matches only the '
+    'top level of the build directory: "*" does not cross "/". Write '
+    '"**/$pattern" to match it in every directory, or '
+    '"{$pattern,**/$pattern}" for both.',
   );
 }
 

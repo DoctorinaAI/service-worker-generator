@@ -120,6 +120,45 @@ describe('createInstallHandler', () => {
     expect(skipWaitingSpy).not.toHaveBeenCalled();
   });
 
+  it('reports byte-level beats while a file downloads', async () => {
+    // Audit #30, item 2.7: without them the ring does not move during the
+    // download that dominates a cold load.
+    const chunks = [new Uint8Array(4), new Uint8Array(4)];
+    installMockFetch(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              for (const chunk of chunks) controller.enqueue(chunk);
+              controller.close();
+            },
+          }),
+        ),
+    );
+    const manifest: ResourceManifest = {
+      'main.dart.js': {
+        name: 'main.dart.js',
+        size: 8,
+        hash: 'h-core',
+        category: ResourceCategory.Core,
+      },
+    };
+    const beats: number[] = [];
+    const reporter = createProgressReporter('v5', manifest);
+    vi.spyOn(reporter, 'report').mockImplementation(async (update) => {
+      if (update.status === 'loading' && update.key) beats.push(update.loaded);
+    });
+
+    const handler = createInstallHandler('app', 'v5', manifest, reporter);
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    // The first chunk's running total; the second is inside the throttle
+    // window, and the completion is reported by `onEach`.
+    expect(beats[0]).toBe(4);
+  });
+
   it('resumes an install instead of downloading what it already has', async () => {
     const manifest: ResourceManifest = {
       'main.dart.js': {

@@ -967,6 +967,63 @@ describe('runPipeline — SW progress counter', () => {
     expect(reportsIn(warn)).toHaveLength(0);
   });
 
+  /**
+   * Audit #30, item 2.7: the pre-cached set is one or two multi-megabyte
+   * files next to a handful of small ones, so a ring driven by file counts
+   * does not move during the download that dominates a cold load.
+   */
+  describe('byte-level progress', () => {
+    it('moves the ring while one file downloads', () => {
+      const { api, send } = startAndCapture();
+      send({ resourceKey: 'main.dart.wasm', status: 'loading', resourceSize: 300, loaded: 150 });
+      const half = api.progress.percent;
+      send({ resourceKey: 'main.dart.wasm', status: 'loading', resourceSize: 300, loaded: 300 });
+
+      expect(api.progress.percent).toBeGreaterThan(half);
+      // The message still counts whole files: nothing has finished yet.
+      expect(api.progress.message).toBe('Loaded 0 of 4 resources');
+    });
+
+    it('pins a finished resource at its full size', () => {
+      const { api, send } = startAndCapture();
+      // A beat, then the completion: the percentage must not fall back to
+      // the beat's number.
+      send({ resourceKey: 'main.dart.wasm', status: 'loading', resourceSize: 400, loaded: 10 });
+      send({ resourceKey: 'main.dart.wasm', status: 'completed', resourceSize: 400, loaded: 400 });
+      const after = api.progress.percent;
+      send({ resourceKey: 'main.dart.wasm', status: 'loading', resourceSize: 400, loaded: 20 });
+
+      expect(api.progress.percent).toBe(after);
+      expect(api.progress.message).toBe('Loaded 1 of 4 resources');
+    });
+
+    it('never renders more than the reported total of bytes', () => {
+      const { api, send } = startAndCapture();
+      // resourcesSize is 400 in the fixture; four resources of 100 that
+      // each claim 300 would otherwise overrun it.
+      for (const key of ['a', 'b', 'c', 'd']) {
+        send({ resourceKey: key, status: 'loading', resourceSize: 300, loaded: 300 });
+      }
+      expect(api.progress.percent).toBeLessThanOrEqual(90);
+    });
+
+    it('falls back to counting files when the worker reports no total size', () => {
+      // A worker from a release whose protocol had no `resourcesSize`.
+      const { api, send } = startAndCapture();
+      send({ resourceKey: 'main.dart.wasm', resourcesSize: 0 });
+      expect(api.progress.message).toBe('Loaded 1 of 4 resources');
+      expect(api.progress.percent).toBeGreaterThan(0);
+    });
+
+    it('ignores a beat that would walk the ring backwards', () => {
+      const { api, send } = startAndCapture();
+      send({ resourceKey: 'main.dart.wasm', status: 'loading', resourceSize: 300, loaded: 200 });
+      const ahead = api.progress.percent;
+      send({ resourceKey: 'main.dart.wasm', status: 'loading', resourceSize: 300, loaded: 50 });
+      expect(api.progress.percent).toBe(ahead);
+    });
+  });
+
   it('does not count in-flight or failed resources', () => {
     const { api, send } = startAndCapture();
     send({ resourceKey: 'main.dart.wasm', status: 'loading', loaded: 0 });

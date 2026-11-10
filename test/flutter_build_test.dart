@@ -210,4 +210,62 @@ _flutter.buildConfig = {"engineRevision":"rev123","builds":[{"compileTarget":"da
       expect(renderers, hasLength(1));
     });
   });
+
+  /// Audit #30, item 3.7: the literal used to be found with a lazy
+  /// `\{[\s\S]*?\}\s*;`, which stops at the first `}` followed by a `;`.
+  /// Today's output happens not to contain one inside the object; a future
+  /// release, or a string value, easily could.
+  group('extractBuildConfigLiteral', () {
+    test('takes the whole object, nested braces included', () {
+      const source =
+          '_flutter.buildConfig = {"a":{"b":{"c":1}},"d":2};\nmore();';
+      expect(extractBuildConfigLiteral(source), '{"a":{"b":{"c":1}},"d":2}');
+    });
+
+    test('is not cut short by a "};" inside a string', () {
+      const source =
+          '_flutter.buildConfig = {"note":"a }; in a string","x":1};';
+      expect(
+        extractBuildConfigLiteral(source),
+        '{"note":"a }; in a string","x":1}',
+      );
+    });
+
+    test('is not cut short by an escaped quote before a brace', () {
+      const source = r'_flutter.buildConfig = {"q":"\"};","x":1};';
+      expect(extractBuildConfigLiteral(source), r'{"q":"\"};","x":1}');
+    });
+
+    test('sees through a wrapper call', () {
+      const source = '_flutter.buildConfig = Object.freeze({"x":1});';
+      expect(extractBuildConfigLiteral(source), '{"x":1}');
+    });
+
+    test('tolerates whitespace and newlines around the assignment', () {
+      const source = '_flutter.buildConfig =\n  {\n  "x": 1\n};';
+      expect(extractBuildConfigLiteral(source), '{\n  "x": 1\n}');
+    });
+
+    test('returns null when there is no buildConfig', () {
+      expect(extractBuildConfigLiteral('_flutter.loader.load();'), isNull);
+    });
+
+    test('returns null for a truncated object', () {
+      expect(
+        extractBuildConfigLiteral('_flutter.buildConfig = {"x":1'),
+        isNull,
+      );
+    });
+
+    test('returns null when something other than a wrapper precedes it', () {
+      // A future release that computes the config: there is no literal to
+      // read, and guessing one would be worse than saying so.
+      expect(
+        extractBuildConfigLiteral(
+          '_flutter.buildConfig = makeIt() || {"x":1};',
+        ),
+        isNull,
+      );
+    });
+  });
 }

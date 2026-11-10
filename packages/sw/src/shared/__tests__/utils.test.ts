@@ -701,3 +701,45 @@ describe('isRetriableStatus / retryAfterDelay', () => {
     expect(retryAfterDelay(new Response('', { status: 503 }), 5_000)).toBeNull();
   });
 });
+
+describe('guardBody — byte reporting', () => {
+  /** A body delivered in [chunks], as a streaming response. */
+  function streaming(chunks: readonly number[]): Response {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const size of chunks) controller.enqueue(new Uint8Array(size));
+        controller.close();
+      },
+    });
+    return new Response(stream);
+  }
+
+  it('reports the running count as the body streams', async () => {
+    const seen: number[] = [];
+    const guarded = guardBody(streaming([10, 20, 30]), {
+      onBytes: (loaded) => seen.push(loaded),
+    });
+    await guarded.arrayBuffer();
+
+    // Running totals, not chunk sizes: what the ring renders.
+    expect(seen).toEqual([10, 30, 60]);
+  });
+
+  it('does not let a reporter that throws break the transfer', async () => {
+    const guarded = guardBody(streaming([5, 5]), {
+      onBytes: () => {
+        throw new Error('telemetry is down');
+      },
+    });
+    expect((await guarded.arrayBuffer()).byteLength).toBe(10);
+  });
+
+  it('reports nothing for a body it is not watching', async () => {
+    const seen: number[] = [];
+    // No idleMs, no expectedBytes and no onBytes: the response passes
+    // through untouched.
+    const response = streaming([1]);
+    expect(guardBody(response, {})).toBe(response);
+    expect(seen).toEqual([]);
+  });
+});
