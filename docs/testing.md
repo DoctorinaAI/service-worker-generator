@@ -21,6 +21,12 @@ npx -w packages/sw playwright install chromium firefox webkit
 npm -w packages/sw run e2e:all
 ```
 
+The specs are served by `e2e/support/serve.mjs`, which Playwright starts
+itself — Node, so it answers requests concurrently and runs on Windows. A
+single-threaded static server (`python3 -m http.server`, as this used to be)
+stalls for 30 s whenever a browser opens a speculative connection without
+sending a request, which failed the app-shell specs in CI at random.
+
 `SW_E2E_BROWSERS` picks the engines: `all`, or a list such as `firefox,webkit`.
 Without it, only Chromium runs. `npm run build:all` matters after any change in
 `packages/sw/src`: without it `sw:generate` embeds the previous worker and the
