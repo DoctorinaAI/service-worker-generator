@@ -14,7 +14,11 @@ const enabled: readonly (typeof all)[number][] = requested.includes('all')
 export default defineConfig({
   testDir: './e2e',
   timeout: 30_000,
-  retries: 0,
+  // WebKit on a CI runner takes its time activating a worker, and two of
+  // ten runs of one unchanged tree failed in `settle` waiting for one, on a
+  // different spec each time. A retry marks those flaky instead of failing
+  // the run, which keeps them visible without blocking a release on them.
+  retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'list',
   use: {
     headless: true,

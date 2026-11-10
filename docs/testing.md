@@ -78,6 +78,7 @@ nothing reports progress), and a host that serves a stale `bootstrap.js`.
 | WebKit | `page.route` does not intercept the CanvasKit CDN probe, so a test that "blocks" the CDN that way sees it answer anyway. | `canvaskit-fallback.spec.ts` deploys an engine revision the CDN does not have instead of intercepting |
 | Firefox | With navigation preload on, a refused connection fails the navigation although the worker catches the rejection and answers from cache. `setOffline` does not show this. | Pinned by `firefoxRefusesNavigation` in `origin-faults.spec.ts` |
 | WebKit | `context.setOffline(true)` fails the navigation with an internal error. A real outage works. | `test.skip` in `app-shell.spec.ts` |
+| WebKit | Activating a worker on a CI runner sometimes takes longer than the 30 s a spec allows, so `settle` times out — two of ten runs of one unchanged tree, on a different spec each time. | `retries: 2` under `CI`, which reports them as flaky rather than failing the run |
 
 Playwright's Firefox and WebKit are patched builds, and on Linux its WebKit is
 not Safari. A pass there is not a pass on an iPhone.
