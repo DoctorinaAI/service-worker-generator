@@ -195,7 +195,8 @@ jobs:
   e2e:
     name: "E2E (Flutter + Playwright)"
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # The steps inside have their own budgets, which now add up past 20.
+    timeout-minutes: 30
     needs: [typescript]
     steps:
       - name: 📦 Checkout repository
@@ -237,9 +238,23 @@ jobs:
       - name: 🧰 Run Dart CLI on example build
         run: dart run sw:generate --input=example/build/web
 
+      # Three engines are ~500 MB of download, which has taken longer than
+      # the step's budget on a slow runner and failed the job with nothing
+      # wrong in the code. Cached per Playwright version — the browser
+      # revisions are pinned by it — and given room to download when the
+      # cache misses.
+      - name: 🎭 Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
       - name: 🎭 Install Playwright browsers
         working-directory: packages/sw
-        timeout-minutes: 5
+        timeout-minutes: 15
+        # `--with-deps` installs the system libraries the engines need, which
+        # the cache does not carry; on a hit the browsers themselves are
+        # already in place and only those packages are installed.
         run: npx playwright install --with-deps chromium firefox webkit
 
       - name: 🧪 Run Playwright E2E
