@@ -7,6 +7,7 @@ import {
 } from './cache-manager';
 import { readableVersions, workerVersion } from './registration';
 import { COUNTED_CATEGORIES, type ProgressReporter } from './progress';
+import { log } from '../shared/logger';
 
 /**
  * Handle the SW install event.
@@ -43,7 +44,7 @@ async function handleInstall(
   try {
     await caches.open(getManifestCacheName(cachePrefix));
   } catch (error) {
-    console.warn('[SW] Could not open the manifest cache:', error);
+    log.warn('[SW] Could not open the manifest cache:', error);
   }
 
   await removeOrphanedTempCaches(cachePrefix, version);
@@ -106,7 +107,7 @@ async function removeOrphanedTempCaches(
 ): Promise<void> {
   try {
     if (workerVersion('waiting') === null) {
-      console.warn(
+      log.warn(
         '[SW] Waiting worker has no readable version; keeping all temp caches',
       );
       return;
@@ -116,6 +117,6 @@ async function removeOrphanedTempCaches(
       ...readableVersions(['installing', 'waiting', 'active']),
     ]);
   } catch (error) {
-    console.warn('[SW] Orphaned temp cache cleanup failed:', error);
+    log.warn('[SW] Orphaned temp cache cleanup failed:', error);
   }
 }

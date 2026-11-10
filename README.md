@@ -43,7 +43,7 @@ Or add as a dev dependency:
 
 ```yaml
 dev_dependencies:
-  sw: ^0.3.0
+  sw: ^0.4.0
 ```
 
 Pin the exact version in CI. `sw.js` and `bootstrap.js` are the app's boot
@@ -51,12 +51,12 @@ path, so a template change should arrive through a reviewed bump rather than
 on the next unrelated build:
 
 ```shell
-dart pub global activate sw 0.3.1
+dart pub global activate sw 0.4.0
 ```
 
-Note that a pre-release is not matched by a plain caret constraint — `0.4.0-dev`
-sorts *before* `0.4.0`, so it falls outside `^0.3.0`. Pin a pre-release
-exactly, or write `^0.4.0-dev` to accept it now and the release later.
+Note that a pre-release is not matched by a plain caret constraint — `0.5.0-dev`
+sorts *before* `0.5.0`, so it falls outside `^0.4.0`. Pin a pre-release
+exactly, or write `^0.5.0-dev` to accept it now and the release later.
 
 ## Quick Start
 
@@ -237,6 +237,7 @@ Do not keep Flutter's `<script>{{flutter_bootstrap_js}}</script>`: `flutter buil
 | `showPercentage` | boolean | `true`      | Show numeric percentage below status text      |
 | `minProgress`    | number  | `0`         | Minimum progress value for the bootstrap range |
 | `maxProgress`    | number  | `90`        | Maximum progress value (Dart manages the rest) |
+| `logLevel`       | string  | `--log-level` | `"silent"`, `"error"`, `"warn"` or `"info"`: how much reaches the console, overriding the generated default |
 
 ## Local Development
 
@@ -301,7 +302,7 @@ mv build/web/index.prod.html build/web/index.html
 # 3. Generate sw.js + bootstrap.js, inject {{sw_version}} into index.html,
 #    and auto-remove flutter_bootstrap.js / flutter_service_worker.js / flutter.js
 #    (flutter.js is inlined into bootstrap.js, so it's dropped from the output).
-dart pub global activate sw 0.3.1
+dart pub global activate sw 0.4.0
 dart pub global run sw:generate --version="$(git rev-parse --short=8 HEAD)"
 ```
 
@@ -335,6 +336,7 @@ After this sequence, `build/web/` contains exactly the artifacts that should shi
 | `--color`            |       | Loading widget accent color           | `#25D366`         |
 | `--min-progress`     |       | Minimum progress value                | `0`               |
 | `--max-progress`     |       | Maximum progress value                | `90`              |
+| `--log-level`        |       | Console output of `sw.js` and `bootstrap.js`: `silent`, `error`, `warn`, `info` | `info`            |
 
 **Several apps on one origin.** Caches belong to the origin, not to a path,
 so give each app its own `--prefix`. The default `app-cache` is shared by
@@ -378,7 +380,7 @@ Priority: CLI arguments > YAML config > environment variables > defaults.
 | `SW_TITLE`   | `--title`   |
 | `SW_COLOR`   | `--color`   |
 
-Every option has one; [docs/configuration.md](docs/configuration.md#environment-variables) lists them all, including `SW_KEEP_MAPS` and `SW_NO_CLEANUP`.
+Every option has one; [docs/configuration.md](docs/configuration.md#environment-variables) lists them all, including `SW_KEEP_MAPS`, `SW_NO_CLEANUP` and `SW_LOG_LEVEL`.
 
 A configuration error (an unknown option, an invalid value, a bad glob, an output name with a directory) exits with status 64 and names its source: `--max-progress="lots"`, `SW_MIN_PROGRESS="ten" (environment)` or `max-progress="lots" (in sw.yaml)`.
 
@@ -504,6 +506,15 @@ of its text while its layout, buttons and images stay in place.
 | Optional           | Lazy cache    | Cached on first fetch for repeat visits         |
 | Ignore             | Pass-through  | Not cached, always from network                 |
 
+While a newer build's worker is installing or waiting, the worker in control
+stops answering Core and Required requests from its cache and stops writing
+it: that cache holds the previous build's code, while the page asking is
+already the new build's `index.html`. So the first load after a deploy runs
+the new code, without waiting for the new worker to finish installing.
+Lazily cached files (fonts, images, the engine) are still served from the
+cache, and so is everything if the network cannot answer at all. See
+[docs/service-worker.md](docs/service-worker.md#a-newer-build-is-pending).
+
 ### Cache Management
 
 - **Atomic updates** — New resources cached in temp cache, then swapped atomically on activate
@@ -521,7 +532,9 @@ of its text while its layout, buttons and images stay in place.
   A page that already has a controller boots with it straight away
 - **Engine change after a deploy**: when the new build runs on a different Flutter
   engine, the first load waits (up to 60s) for the new worker and switches to it,
-  so the previous build's cached Dart code never meets the new engine
+  so the previous build's cached Dart code never meets the new engine. On the same
+  engine it boots at once — with the new build's code, which the worker in control
+  now fetches instead of serving its own cache
 - **SW step budget**: 10s for the whole registration step; the app boots uncached
   rather than waiting on a blocked service worker job queue
 - **Error recovery**: Always calls `self.clients.claim()` even on errors

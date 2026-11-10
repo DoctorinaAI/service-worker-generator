@@ -14,6 +14,7 @@ interface SWConfig {
   version: string;            // hash of the manifest unless --version is given
   manifest: ResourceManifest; // path → { name, size, hash, category }
   engineRevision?: string;    // Flutter engine revision, reported by getVersion
+  logLevel?: LogLevel;        // --log-level; absent means "info"
 }
 ```
 
@@ -58,6 +59,35 @@ exists.
 | Optional | — | Cache on first fetch | `?v={hash}` |
 | Ignore | — | Pass-through | — |
 
+### A newer build is pending
+
+A worker whose registration holds an `installing` or a `waiting` worker is
+serving a page that is no longer its own build: `index.html` and
+`bootstrap.js` are network-first and never cached, so they are the new
+build's, while this worker's cache holds the previous build's code. While
+that is true, it stops using and filling its cache for the pre-cached set:
+
+- `Core` and `Required` requests go to the network, with the page's own URL
+  rather than `?v={hash}` — that hash names the copy being replaced, and a
+  CDN that keys on the whole URL would serve exactly that.
+- Nothing is written to this version's content cache, the app shell
+  included: the new shell next to the previous build's code is the one pair
+  that cannot boot, and the new worker's install stores the matching one.
+- `Optional` files (fonts, images, the engine) are still served from the
+  cache. They are not what decides which build is running, and a tab that
+  has been open since before the deploy keeps them.
+- If the network cannot answer — offline, or an origin mid-deploy — the
+  cached copy is served after all, with a warning. Old code beats no code.
+
+Only the browser creates those workers, and only for a `sw.js` whose bytes
+differ from the one it has, so the state is read from the registration on
+every fetch rather than remembered: a worker is terminated between events.
+
+The previous behaviour was to serve the cache: the first load after a deploy
+ran the previous build's `main.dart.js` inside the new build's page until
+the next load handed over to the new worker (#40), and writing the new bytes
+into the old cache failed the body size check (#36).
+
 ### Special Cases
 - Navigations (`/`, `index.html`, and any SPA route): network-first, falling back to the pre-cached `index.html`
 - Only `/` and `/index.html` may *write* that cached shell. Another
@@ -70,6 +100,12 @@ exists.
   See `RESERVED_PATH_PREFIXES`
 - `bootstrap.js`, `sw.js`: Never cached (always fetch fresh)
 - Non-GET requests: Pass-through
+- A *navigation* among the three cases above is still answered — with the
+  navigation preload response if there is one, otherwise the request on the
+  network, untouched: no retries, no cache, no shell fallback. A fetch event
+  that ends without consuming `preloadResponse` throws that response away
+  and logs "The service worker navigation preload request was cancelled
+  before 'preloadResponse' settled" (#37)
 
 > `index.html`, `bootstrap.js` and `sw.js` also require `Cache-Control: no-cache` at the HTTP layer. See [Server Configuration](../README.md#server-configuration) for the required headers.
 

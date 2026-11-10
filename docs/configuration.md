@@ -74,7 +74,32 @@ manifest entirely.
 | `--keep-maps` | `false` | Keep `.js.map`, `.js.symbols` and `.wasm.map` files (removed by default) |
 | `--no-cleanup` | `false` | Leave the input tree alone: keep Flutter's files and leave `{{sw_version}}` unsubstituted (otherwise it is replaced with the HTML-escaped version) |
 | `--comments` | `false` | Reserved: accepted, but has no effect on the output yet |
+| `--log-level` | `info` | How much the generated `sw.js` and `bootstrap.js` print on the browser console: `silent`, `error`, `warn` or `info` |
 | `--config` | `sw.yaml` | Path to YAML config file |
+
+### Console output
+
+`--log-level` is baked into both artifacts, so a production deployment can
+be quiet without any change to the page:
+
+| Level | What reaches the console |
+|-------|--------------------------|
+| `info` | Everything: the version banner, a line per pipeline stage, the progress bar, the worker's manifest summary, plus every warning and error |
+| `warn` | Warnings and errors only — a quota that ran out, a file the host serves in another size, a configuration value that had to be corrected |
+| `error` | Errors only: what broke |
+| `silent` | Nothing at all |
+
+The level is matched case-insensitively; an unknown one exits with status 64
+and names where it came from. A page can override the baked-in level per
+deployment through the bootstrap's `data-config` (see
+[bootstrap-pipeline.md](bootstrap-pipeline.md)):
+
+```html
+<script defer data-sw-bootstrap src="bootstrap.js"
+  data-config='{"logLevel":"warn"}'></script>
+```
+
+It changes nothing but the output: no code path depends on the level.
 
 ## YAML Config File
 
@@ -106,6 +131,7 @@ max-progress: 90
 # Behavior
 keep-maps: false
 no-cleanup: false
+log-level: info
 ```
 
 Glob options also accept a YAML list, joined with `;` like the CLI form:
@@ -151,6 +177,7 @@ dart run sw:generate --config=config/sw-production.yaml
 | `SW_KEEP_MAPS` | `--keep-maps` (`true`/`false`) |
 | `SW_NO_CLEANUP` | `--no-cleanup` (`true`/`false`) |
 | `SW_COMMENTS` | `--comments` (`true`/`false`) |
+| `SW_LOG_LEVEL` | `--log-level` |
 
 An invalid value exits with status 64 and names where it came from:
 `--max-progress="lots"`, `SW_MIN_PROGRESS="ten" (environment)` or

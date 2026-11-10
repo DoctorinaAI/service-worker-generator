@@ -19,7 +19,10 @@ import type { SWProgressMessage } from '../../shared/types';
 
 // Mock all side-effecty modules so runPipeline runs synchronously-as-possible
 // and we can observe calls without performing real registration or fetches.
-vi.mock('../sw-registration', () => ({
+vi.mock('../sw-registration', async (importOriginal) => ({
+  // `controllerVersion` stays real: it only reads
+  // `navigator.serviceWorker.controller`, which these tests set up.
+  ...(await importOriginal<typeof import('../sw-registration')>()),
   registerServiceWorker: vi.fn(async () => null),
   listenForSWMessages: vi.fn(() => () => undefined),
   reloadIfForeignController: vi.fn(async () => false),
@@ -737,9 +740,13 @@ describe('runPipeline — SW progress counter', () => {
   function startAndCapture(): {
     api: BootstrapAPI;
     send: (msg: Partial<SWProgressMessage>) => void;
+    /** The teardown the pipeline got back from `listenForSWMessages`. */
+    stopped: ReturnType<typeof vi.fn>;
   } {
     const listen = vi.mocked(listenForSWMessages);
     listen.mockClear();
+    const stopped = vi.fn();
+    listen.mockReturnValueOnce(stopped);
     const api = runPipeline(resolved());
     const callback = listen.mock.calls[0]![0] as (data: unknown) => void;
     const send = (msg: Partial<SWProgressMessage>): void =>
@@ -758,7 +765,7 @@ describe('runPipeline — SW progress counter', () => {
         counted: true,
         ...msg,
       } satisfies SWProgressMessage);
-    return { api, send };
+    return { api, send, stopped };
   }
 
   it('counts pre-cached resources up to the reported total', () => {
@@ -830,20 +837,99 @@ describe('runPipeline — SW progress counter', () => {
     );
   });
 
+  /** Pretend the page is controlled by the worker registered as [version]. */
+  function withController(version: string | null): void {
+    Object.defineProperty(navigator, 'serviceWorker', {
+      value: {
+        controller:
+          version === null
+            ? null
+            : { scriptURL: `http://localhost/sw.js?v=${version}` },
+      },
+      configurable: true,
+    });
+  }
+
+  /** The app's first frame, which is what ends the listening. */
+  const firstFrame = (): boolean =>
+    window.dispatchEvent(new Event('flutter-first-frame'));
+
+  const reportsIn = (warn: { mock: { calls: unknown[][] } }): string[] =>
+    warn.mock.calls
+      .map((call) => String(call[0]))
+      .filter((message) => message.includes('No sw-progress'));
+
   it('reports at teardown when every message came from another build', async () => {
+    // A `bootstrap.js` from the HTTP cache: an old bootstrap beside a new
+    // worker, which stays in control for the whole load.
+    withController('v0');
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const { api, send } = startAndCapture();
     send({ resourceKey: 'main.dart.wasm', swVersion: 'v0', resourcesCount: 9 });
     send({ resourceKey: 'manifest.json', swVersion: 'v0', resourcesCount: 9 });
     await settle();
+    firstFrame();
 
     // Nothing was countable, so the counter never rendered...
     expect(api.progress.message).not.toContain('resources');
     // ...and the reason is said once, after it is knowable.
-    const messages = warn.mock.calls.map((call) => String(call[0]));
-    const reports = messages.filter((m) => m.includes('No sw-progress'));
+    const reports = reportsIn(warn);
     expect(reports).toHaveLength(1);
     expect(reports[0]).toContain('v0');
+  });
+
+  it('keeps counting resources that arrive after the entry point is loaded', async () => {
+    // flutter.js settles `load()` as soon as the entry point is fetched and
+    // runs `onEntrypointLoaded` after that, so the engine's own files are
+    // reported after the pipeline's work has returned. Tearing the listener
+    // down there froze the counter where install left it (#39).
+    withController('v1');
+    const { api, send, stopped } = startAndCapture();
+    send({ resourceKey: 'main.dart.wasm' });
+    await settle();
+
+    expect(stopped).not.toHaveBeenCalled();
+    send({ resourceKey: 'manifest.json' });
+    expect(api.progress.message).toBe('Loaded 2 of 4 resources');
+  });
+
+  it('stops listening once the app has its first frame', async () => {
+    withController('v1');
+    const { stopped } = startAndCapture();
+    await settle();
+    firstFrame();
+
+    expect(stopped).toHaveBeenCalledOnce();
+    // The event can only fire once, but a second frame must not double the
+    // teardown either.
+    firstFrame();
+    expect(stopped).toHaveBeenCalledOnce();
+  });
+
+  it('stays quiet when this build’s worker took control during the load', async () => {
+    // The #39 report: the waiting worker was handed control at bootstrap,
+    // so the messages from before the handover are the outgoing worker's —
+    // and the page is being served by exactly the build it was built with.
+    withController('v1');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { send } = startAndCapture();
+    send({ resourceKey: 'index.html', swVersion: 'v0', resourcesCount: 9 });
+    await settle();
+    firstFrame();
+
+    expect(reportsIn(warn)).toHaveLength(0);
+  });
+
+  it('stays quiet while the app is still loading', async () => {
+    withController('v0');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { send } = startAndCapture();
+    send({ resourceKey: 'main.dart.wasm', swVersion: 'v0', resourcesCount: 9 });
+    await settle();
+
+    // No first frame yet: the load may still be about to hear from its own
+    // worker, so there is nothing to diagnose.
+    expect(reportsIn(warn)).toHaveLength(0);
   });
 
   it('does not count in-flight or failed resources', () => {

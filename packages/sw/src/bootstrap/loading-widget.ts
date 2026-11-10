@@ -4,6 +4,7 @@ import { RESET_TIMEOUT_MS, STALLED_TIMEOUT_MS } from '../shared/constants';
 import { withTimeout } from '../shared/utils';
 import { ownCacheNames } from '../shared/cache-ownership';
 import { FOREIGN_RELOAD_KEY } from './sw-registration';
+import { log } from '../shared/logger';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PROGRESS_RING_RADIUS = 65;
@@ -286,7 +287,7 @@ export class LoadingWidget {
     this.clearStallTimer();
     if (!this.disposed && this.currentPercent < 100) {
       this.stallTimer = setTimeout(() => {
-        console.warn('[Bootstrap] Loading appears stalled');
+        log.warn('[Bootstrap] Loading appears stalled');
         this.showReloadOverlay();
       }, STALLED_TIMEOUT_MS);
     }
@@ -384,7 +385,7 @@ export class LoadingWidget {
         // way to tell, so every cache goes, as before.
         const doomed = prefix ? ownCacheNames(prefix, names) : names;
         await Promise.all(doomed.map((n) => caches.delete(n)));
-        console.log(
+        log.info(
           `[Bootstrap] Reset: deleted ${doomed.length} cache(s), kept ` +
             `${names.length - doomed.length}` +
             (prefix ? ` (prefix "${prefix}")` : ' (no prefix known, deleted all)'),
@@ -403,7 +404,7 @@ export class LoadingWidget {
       // wedged us in the first place.
       sessionStorage.removeItem(FOREIGN_RELOAD_KEY);
     } catch (e) {
-      console.error('[Bootstrap] Reset error:', e);
+      log.error('[Bootstrap] Reset error:', e);
     }
   }
 

@@ -11,6 +11,7 @@
 
 import type { BuildConfig } from '../shared/types';
 import { findBootstrapScript, parseDataConfig, resolveConfig } from './config';
+import { setLogLevel } from '../shared/logger';
 import { logVersionBanner } from './console-logger';
 import { installGlobalAPI } from './api';
 import { runPipeline } from './pipeline';
@@ -19,6 +20,10 @@ import { runPipeline } from './pipeline';
 // why there is no runtime validation here.
 const buildConfig: BuildConfig =
   "__INJECT_BOOTSTRAP_CONFIG__" as unknown as BuildConfig;
+
+// Before the first line anything here prints. A page may override it in
+// `data-config`, which `resolveConfig` applies as soon as it is parsed.
+setLogLevel(buildConfig.logLevel);
 
 // Initialize when the DOM is ready
 function init(): void {

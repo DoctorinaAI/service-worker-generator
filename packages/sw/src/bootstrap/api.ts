@@ -2,6 +2,7 @@ import type { ProgressState, BootstrapPhase } from '../shared/types';
 import type { LoadingWidget } from './loading-widget';
 import { logProgress } from './console-logger';
 import { activateWaitingSW } from './sw-registration';
+import { log } from '../shared/logger';
 
 type ProgressCallback = (state: ProgressState) => void;
 type UpdateHandler = () => void | Promise<void>;
@@ -56,7 +57,7 @@ export class BootstrapAPI {
       try {
         cb(this._state);
       } catch (e) {
-        console.error('[Bootstrap] Subscriber error:', e);
+        log.error('[Bootstrap] Subscriber error:', e);
       }
     }
   }
@@ -94,7 +95,7 @@ export class BootstrapAPI {
     try {
       fn();
     } catch (e) {
-      console.error(`[Bootstrap] Loading widget ${step} failed:`, e);
+      log.error(`[Bootstrap] Loading widget ${step} failed:`, e);
     }
   }
 
@@ -128,14 +129,14 @@ export class BootstrapAPI {
         const result = h();
         if (result && typeof (result as PromiseLike<void>).then === 'function') {
           (result as Promise<void>).catch((error) =>
-            console.error(
+            log.error(
               '[Bootstrap] onUpdateAvailable async handler rejected:',
               error,
             ),
           );
         }
       } catch (error) {
-        console.error('[Bootstrap] onUpdateAvailable handler threw:', error);
+        log.error('[Bootstrap] onUpdateAvailable handler threw:', error);
       }
     }
   }

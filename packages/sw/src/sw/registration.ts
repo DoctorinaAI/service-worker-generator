@@ -29,6 +29,28 @@ export function workerVersion(slot: WorkerSlot): string | null | undefined {
 }
 
 /**
+ * Whether another worker is installing or waiting in this registration —
+ * a newer build of the app is already on the origin.
+ *
+ * The browser only creates a worker for a `sw.js` whose bytes differ from
+ * the one it has, and every build injects its own manifest into that
+ * script, so a worker in either slot means the files this worker has
+ * cached are no longer the files the origin serves. Read on every fetch
+ * rather than remembered: a worker is terminated between events, and the
+ * registration is the one piece of state that survives that.
+ *
+ * `true` as well when the slot holds a worker whose version cannot be
+ * read: the cache is then bypassed, which costs a download and never
+ * correctness.
+ */
+export function hasPendingWorker(): boolean {
+  return (
+    workerVersion('installing') !== undefined ||
+    workerVersion('waiting') !== undefined
+  );
+}
+
+/**
  * Versions of the workers in [slots], or `null` when one of them is there
  * but its version cannot be read. Callers that delete temp caches must
  * then keep them all: one of them belongs to that worker.

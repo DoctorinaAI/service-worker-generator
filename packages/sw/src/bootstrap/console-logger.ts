@@ -1,4 +1,5 @@
 import type { BuildConfig } from '../shared/types';
+import { log } from '../shared/logger';
 
 const STYLE_HEADER = 'color: #25D366; font-weight: bold; font-size: 14px;';
 const STYLE_LABEL = 'color: #888; font-weight: normal;';
@@ -15,7 +16,7 @@ export function logVersionBanner(buildConfig: BuildConfig): void {
   const target =
     buildConfig.builds.find((b) => b.compileTarget)?.compileTarget ?? 'unknown';
 
-  console.log(
+  log.info(
     '%c\u250C\u2500 Service Worker Bootstrap %c\n' +
       '%cEngine:   %c%s%c\n' +
       '%cSW:      %c%s%c\n' +
@@ -48,7 +49,7 @@ export function logVersionBanner(buildConfig: BuildConfig): void {
  * Log a pipeline phase transition.
  */
 export function logPhase(phase: string, message: string): void {
-  console.log(`%c[${phase}]%c ${message}`, STYLE_PHASE, STYLE_INFO);
+  log.info(`%c[${phase}]%c ${message}`, STYLE_PHASE, STYLE_INFO);
 }
 
 /**
@@ -56,7 +57,7 @@ export function logPhase(phase: string, message: string): void {
  */
 export function logProgress(percent: number, message: string): void {
   const bar = progressBar(percent, 20);
-  console.log(
+  log.info(
     `%c${bar} ${Math.round(percent)}%%%c ${message}`,
     STYLE_PHASE,
     STYLE_INFO,

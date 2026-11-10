@@ -1,3 +1,5 @@
+import type { LogLevel } from './logger';
+
 /**
  * Resource category determining caching behavior.
  */
@@ -35,6 +37,11 @@ export type ResourceManifest = Record<string, ResourceEntry>;
  * Service Worker configuration injected at generation time.
  */
 export interface SWConfig {
+  /**
+   * How much the worker says on the console (`--log-level`). Omitted for
+   * the default, `info`; see `shared/logger.ts`.
+   */
+  logLevel?: LogLevel;
   /** Cache name prefix, e.g., "my-app" */
   cachePrefix: string;
   /** Cache version string, e.g., timestamp */
@@ -53,6 +60,11 @@ export interface SWConfig {
  * Bootstrap configuration from data-config attribute.
  */
 export interface BootstrapConfig {
+  /**
+   * How much the bootstrap says on the console, overriding the level the
+   * generator baked in: "silent", "error", "warn" or "info".
+   */
+  logLevel?: LogLevel;
   /** Path to logo image */
   logo?: string;
   /** Title text for loading widget */
@@ -73,6 +85,11 @@ export interface BootstrapConfig {
  * Build-time configuration injected into bootstrap.js.
  */
 export interface BuildConfig {
+  /**
+   * How much the bootstrap says on the console (`--log-level`). Omitted
+   * for the default, `info`; a page can override it through `data-config`.
+   */
+  logLevel?: LogLevel;
   /** Flutter engine revision hash */
   engineRevision: string;
   /** SW version string */

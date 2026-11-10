@@ -165,18 +165,52 @@ describe('navigation handling — app-shell integrity', () => {
   it.each([
     '/__/auth/handler?providerId=google.com',
     '/__/auth/iframe?apiKey=abc',
-  ])('leaves the host-reserved navigation %s alone', (path) => {
+  ])('leaves the host-reserved navigation %s alone', async (path) => {
     // Firebase Hosting serves `/__/*` itself and excludes it from the SPA
     // rewrite; Firebase Auth puts its handler and its iframe there when
     // `authDomain` is the app's own domain. Answering those from the app's
     // cache — or running them through `fetchWithRetry`, which downgrades a
     // navigation request's mode — breaks sign-in.
-    installMockFetch(async () => textResponse(AUTH_PAGE));
+    //
+    // They are answered, not ignored: a navigation left unanswered throws
+    // away the navigation preload response the browser already asked for,
+    // and logs that it was cancelled. What comes back is the origin's own
+    // page, fetched with the request itself, and the caches stay untouched.
+    const fetchSpy = installMockFetch(async () => textResponse(AUTH_PAGE));
 
     const event = makeEvent(`${ORIGIN}${path}`, { mode: 'navigate' });
     handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
 
-    expect(event.respondWith).not.toHaveBeenCalled();
+    expect(await (await event._responded!).text()).toBe(AUTH_PAGE);
+    // The request itself, with no init: an init would downgrade a
+    // navigation's mode to `same-origin`.
+    expect(fetchSpy).toHaveBeenCalledExactlyOnceWith(event.request);
+    expect(await shellInCache(mockCaches)).toBe(SHELL);
+  });
+
+  it('answers a reserved navigation with the navigation preload response', async () => {
+    const fetchSpy = installMockFetch(async () => textResponse('network'));
+
+    const event = makeEvent(`${ORIGIN}/__/auth/handler`, {
+      mode: 'navigate',
+      preload: textResponse(AUTH_PAGE),
+    });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+
+    expect(await (await event._responded!).text()).toBe(AUTH_PAGE);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('answers a navigation to the worker script itself from the network', async () => {
+    // `sw.js` and `bootstrap.js` are never intercepted, but typing one into
+    // the address bar is still a navigation whose preload must be consumed.
+    installMockFetch(async () => textResponse('self'));
+
+    const event = makeEvent(`${ORIGIN}/sw.js`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+
+    expect(await (await event._responded!).text()).toBe('self');
+    expect(await shellInCache(mockCaches)).toBe(SHELL);
   });
 
   it('keeps the cached shell when a same-origin non-shell page is navigated to', async () => {
@@ -397,7 +431,10 @@ describe('navigation handling — app served from a subpath', () => {
     const event = makeEvent(`${ORIGIN}/app/__/auth/handler`, { mode: 'navigate' });
     handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
 
-    expect(event.respondWith).not.toHaveBeenCalled();
+    // Answered with the origin's own page and nothing else — see the
+    // reserved-prefix cases above for why it is answered at all.
+    expect(await (await event._responded!).text()).toBe(AUTH_PAGE);
+    expect(await shellInCache(mockCaches)).toBeNull();
   });
 
   it('treats the scope root as a request for the shell', async () => {

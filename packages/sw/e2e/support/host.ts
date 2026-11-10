@@ -116,9 +116,13 @@ export class Host {
 
   /**
    * Deploy the example build with [marker] in its Dart code. [suffix] makes
-   * it a new version; [engine] replaces its engine revision.
+   * it a new version; [engine] replaces its engine revision; [logLevel] is
+   * injected into both artifacts as `--log-level` would have.
    */
-  deploy(marker: string, options: { suffix?: string; engine?: string } = {}): void {
+  deploy(
+    marker: string,
+    options: { suffix?: string; engine?: string; logLevel?: string } = {},
+  ): void {
     fs.rmSync(this.root, { recursive: true, force: true });
     fs.cpSync(WEB_ROOT, this.root, { recursive: true });
 
@@ -142,7 +146,21 @@ export class Host {
       ),
     );
 
-    const { suffix, engine } = options;
+    const { suffix, engine, logLevel } = options;
+    if (logLevel) {
+      // Where the generator puts it: the first key of each injected config.
+      // Editing the built artifact keeps the test on the real bundle rather
+      // than on a second copy of the logger's rules.
+      edit('sw.js', (js) =>
+        js.replace('{"cachePrefix":', `{"logLevel":${JSON.stringify(logLevel)},"cachePrefix":`),
+      );
+      edit('bootstrap.js', (js) =>
+        js.replace(
+          '{"engineRevision":',
+          `{"logLevel":${JSON.stringify(logLevel)},"engineRevision":`,
+        ),
+      );
+    }
     if (suffix) {
       edit('sw.js', (js) => js.replace(/"version":"([^"]+)"/, `"version":"$1${suffix}"`));
       edit('bootstrap.js', (js) =>

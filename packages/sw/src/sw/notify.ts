@@ -1,4 +1,5 @@
 import type { SWProgressMessage } from '../shared/types';
+import { log } from '../shared/logger';
 
 /**
  * Send a progress notification to all connected clients.
@@ -19,7 +20,7 @@ export async function notifyClients(
     try {
       client.postMessage(message);
     } catch (error) {
-      console.warn('[SW] postMessage failed for client:', error);
+      log.warn('[SW] postMessage failed for client:', error);
     }
   }
 }

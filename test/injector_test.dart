@@ -311,4 +311,57 @@ void main() {
       expect((json['uiDefaults'] as Map<String, dynamic>)['title'], title);
     });
   });
+
+  // Issue #38: the level has to reach both artifacts, and the default must
+  // not add a field to either of them.
+  group('log level injection', () {
+    test('the worker carries a level other than the default', () {
+      final result = injectSWConfig(
+        template: '"__INJECT_SW_CONFIG__"',
+        cachePrefix: 'app',
+        version: 'v1',
+        manifest: const {},
+        logLevel: 'silent',
+      );
+      expect(result, contains('"logLevel":"silent"'));
+    });
+
+    test('the worker says nothing about the default level', () {
+      final result = injectSWConfig(
+        template: '"__INJECT_SW_CONFIG__"',
+        cachePrefix: 'app',
+        version: 'v1',
+        manifest: const {},
+      );
+      expect(result, isNot(contains('logLevel')));
+    });
+
+    test('the bootstrap carries a level other than the default', () {
+      final result = injectBootstrapConfig(
+        template: '"__INJECT_BOOTSTRAP_CONFIG__"',
+        engineRevision: 'rev',
+        swVersion: 'v1',
+        swFilename: 'sw.js',
+        builds: const [],
+        config: const GeneratorConfig(
+          inputDir: 'build/web',
+          version: 'v1',
+          logLevel: 'error',
+        ),
+      );
+      expect(result, contains('"logLevel":"error"'));
+    });
+
+    test('the bootstrap says nothing about the default level', () {
+      final result = injectBootstrapConfig(
+        template: '"__INJECT_BOOTSTRAP_CONFIG__"',
+        engineRevision: 'rev',
+        swVersion: 'v1',
+        swFilename: 'sw.js',
+        builds: const [],
+        config: const GeneratorConfig(inputDir: 'build/web', version: 'v1'),
+      );
+      expect(result, isNot(contains('logLevel')));
+    });
+  });
 }

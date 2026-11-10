@@ -300,6 +300,96 @@ max-progress: 80
       });
     });
 
+    // Issue #38: the generated artifacts must be able to keep quiet in
+    // production, and the setting has to travel through every channel the
+    // other options do.
+    group('log level', () {
+      test('defaults to info', () async {
+        final out = await captureOutput(() => GeneratorConfig.parse(const []));
+        expect(out.result.logLevel, 'info');
+        expect(out.stderr, isEmpty);
+      });
+
+      test('is taken from the CLI', () async {
+        final out = await captureOutput(
+          () => GeneratorConfig.parse(const ['--log-level=silent']),
+        );
+        expect(out.result.logLevel, 'silent');
+        expect(out.stderr, isEmpty);
+      });
+
+      test('is normalised to one spelling', () async {
+        final out = await captureOutput(
+          () => GeneratorConfig.parse(const ['--log-level=WARN']),
+        );
+        expect(out.result.logLevel, 'warn');
+      });
+
+      test('is read from the YAML config', () async {
+        final out = await parseWith('log-level: error\n');
+        expect(out.result.logLevel, 'error');
+        expect(out.stderr, isEmpty);
+      });
+
+      test('a CLI value wins over the YAML one', () async {
+        final out = await parseWith('log-level: silent\n', const [
+          '--log-level=info',
+        ]);
+        expect(out.result.logLevel, 'info');
+      });
+
+      test('an unknown level from the CLI fails, naming the flag', () {
+        expect(
+          () => GeneratorConfig.parse(const ['--log-level=quiet']),
+          throwsA(
+            isA<FormatException>().having(
+              (e) => e.message,
+              'message',
+              allOf(
+                contains('--log-level="quiet"'),
+                contains('silent, error, warn, info'),
+              ),
+            ),
+          ),
+        );
+      });
+
+      test('an unknown level in the YAML fails, naming the file', () async {
+        await expectLater(
+          parseWith('log-level: quiet\n'),
+          throwsA(
+            isA<FormatException>().having(
+              (e) => e.message,
+              'message',
+              allOf(
+                contains('log-level="quiet"'),
+                contains('sw.yaml'),
+                contains('silent, error, warn, info'),
+              ),
+            ),
+          ),
+        );
+      });
+
+      test('validate() rejects a level built in code', () {
+        const config = GeneratorConfig(
+          inputDir: 'build/web',
+          version: '',
+          logLevel: 'quiet',
+        );
+        expect(
+          config.validate,
+          throwsA(
+            isA<FormatException>().having(
+              (e) => e.message,
+              'message',
+              contains('--log-level="quiet"'),
+            ),
+          ),
+        );
+      });
+    });
+
     group('color', () {
       for (final ok in ['#fff', '#A1b2C3', '#11223344']) {
         test('accepts $ok silently', () async {
