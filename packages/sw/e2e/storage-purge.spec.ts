@@ -112,10 +112,15 @@ test.describe('storage purge', () => {
     await page.reload();
 
     await expect.poll(() => markerOf(page), { timeout: 30_000 }).toBe('a');
-    // Both by hash: without the retry, the second would be the plain fallback,
+    // All by hash: without the retry, the second would be the plain fallback,
     // which can be answered with another build's file.
+    //
+    // At least two, not exactly: Firefox 159 sends the worker two fetch
+    // events for the script on a reload, from two clients 50 ms apart. The
+    // one that met the 503 retries it a second later while the other has
+    // refilled the cache already — three requests, every one by hash.
     const refills = host.seen('/main.dart.js');
-    expect(refills).toHaveLength(2);
+    expect(refills.length).toBeGreaterThanOrEqual(2);
     expect(refills.every((r) => r.url.includes('v='))).toBe(true);
   });
 });

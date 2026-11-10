@@ -250,6 +250,33 @@ export async function cachedText(page: Page, key: string): Promise<string | null
 }
 
 /** Load [page] and wait until the worker controls it with the shell stored. */
+/**
+ * Start [url]'s origin from nothing: no registration, no caches.
+ *
+ * Opening the page to get at its storage also runs its `bootstrap.js`,
+ * which registers the worker and starts an install. Unregistering in the
+ * middle of that install did not end it: the next `register()` on the scope
+ * takes the registration back, install and all, and that install had
+ * written into caches deleted under it — `settle` then waited for a shell
+ * that never arrived. So the install is let finish before anything is
+ * removed, and the page is left, so nothing it does afterwards touches the
+ * clean slate.
+ */
+export async function clearSiteData(page: Page, url: string): Promise<void> {
+  await page.goto(url);
+  await page.evaluate(async () => {
+    if (!('serviceWorker' in navigator)) return;
+    await Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise((resolve) => setTimeout(resolve, 30_000)),
+    ]);
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(registrations.map((r) => r.unregister()));
+    await Promise.all((await caches.keys()).map((name) => caches.delete(name)));
+  });
+  await page.goto('about:blank');
+}
+
 export async function settle(page: Page, url: string): Promise<void> {
   await page.goto(url);
   await expect.poll(() => controllerUrl(page), { timeout: 30_000 }).not.toBeNull();

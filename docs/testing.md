@@ -32,6 +32,13 @@ Without it, only Chromium runs. `npm run build:all` matters after any change in
 `packages/sw/src`: without it `sw:generate` embeds the previous worker and the
 tests pass or fail against old code.
 
+Run `dart test --tags=integration` *before* `sw:generate`, not after. Those
+tests copy `example/build/web` into a temporary directory and run the
+generator over the copy, and the generator refuses a build it has already
+processed — so once the command above has run, every one of them fails with
+"This build was already processed" until the next `flutter build web`. The
+workflow does them in that order for the same reason.
+
 ### Writing a test
 
 - **Observe the origin, not the page.** Use `Host` from `e2e/support/host.ts`.
@@ -75,6 +82,7 @@ nothing reports progress), and a host that serves a stale `bootstrap.js`.
 
 | Engine | Behaviour | In the suite |
 |---|---|---|
+| Firefox 159 | `page.reload()` sends the worker two fetch events for `main.dart.js`, from two clients about 50 ms apart, so two cache misses refill it side by side. | `storage-purge.spec.ts` counts at least two refills by hash, not exactly two |
 | WebKit | `page.route` does not intercept the CanvasKit CDN probe, so a test that "blocks" the CDN that way sees it answer anyway. | `canvaskit-fallback.spec.ts` deploys an engine revision the CDN does not have instead of intercepting |
 | Firefox | With navigation preload on, a refused connection fails the navigation although the worker catches the rejection and answers from cache. `setOffline` does not show this. | Pinned by `firefoxRefusesNavigation` in `origin-faults.spec.ts` |
 | WebKit | `preloadResponse` never settles for a navigation the worker already answered, Safari included. A wait on it under `waitUntil` keeps the worker busy for good, and a newer build cannot activate. | `a navigation answered from the shell does not hold the next build back` in `origin-faults.spec.ts`; the wait is bounded by `LATE_SHELL_TIMEOUT_MS` |
