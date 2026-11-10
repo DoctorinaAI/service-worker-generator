@@ -34,9 +34,10 @@ test.describe('the CanvasKit CDN', () => {
     });
 
     await page.goto(host.origin);
-    await expect.poll(() => markerOf(page), { timeout: 30_000 }).toBe('a');
-
-    expect(fromCdn.length).toBeGreaterThan(0);
+    // Polled, not asserted once: `__buildMarker` is a top-level statement
+    // in `main.dart.js`, so it is set when that script *loads* — before
+    // the engine it then asks for has been fetched.
+    await expect.poll(() => fromCdn.length, { timeout: 30_000 }).toBeGreaterThan(0);
   });
 
   test('falls back to the local engine when it is blocked', async ({ page }) => {
@@ -49,12 +50,19 @@ test.describe('the CanvasKit CDN', () => {
     // The app still boots, on the engine the build ships. Counted at the
     // origin, not on the page: a request the worker answers is not
     // reported to `page.on('request')` in every engine (WebKit does not),
-    // while the origin sees it in all of them.
+    // while the origin sees it in all of them. Polled, because the marker
+    // is set when `main.dart.js` loads, which is before the engine is
+    // fetched.
     await expect.poll(() => markerOf(page), { timeout: 30_000 }).toBe('a');
-    const local = host.requests.filter((request) =>
-      request.pathname.startsWith('/canvaskit/'),
-    );
-    expect(local.length).toBeGreaterThan(0);
+    await expect
+      .poll(
+        () =>
+          host.requests.filter((request) =>
+            request.pathname.startsWith('/canvaskit/'),
+          ).length,
+        { timeout: 30_000 },
+      )
+      .toBeGreaterThan(0);
   });
 
   test('is not probed again after it failed once in the session', async ({
@@ -68,11 +76,14 @@ test.describe('the CanvasKit CDN', () => {
     });
 
     await page.goto(host.origin);
+    await expect.poll(() => probes, { timeout: 30_000 }).toBeGreaterThan(0);
     await expect.poll(() => markerOf(page), { timeout: 30_000 }).toBe('a');
     const afterFirst = probes;
 
     await page.reload();
     await expect.poll(() => markerOf(page), { timeout: 30_000 }).toBe('a');
+    // Long enough for a second probe to have been made, had there been one.
+    await page.waitForTimeout(2_000);
 
     // The session flag is what spares the second load the wait: the probe
     // costs up to a 3 s deadline where gstatic.com is blocked.
