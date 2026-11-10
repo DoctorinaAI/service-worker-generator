@@ -63,4 +63,40 @@ describe('format', () => {
   it('is a no-op for a string without placeholders', () => {
     expect(format('Обновить', { done: 1 })).toBe('Обновить');
   });
+
+  it('does not fill a placeholder from what every object inherits', () => {
+    // `'constructor' in values` is true for any object, so an override
+    // naming one rendered a function's source onto the loading screen.
+    expect(format('Loaded {constructor}', { done: 1 })).toBe(
+      'Loaded {constructor}',
+    );
+    expect(format('{toString} {hasOwnProperty}', {})).toBe(
+      '{toString} {hasOwnProperty}',
+    );
+  });
+
+  it('does not accept an override named after an inherited member', () => {
+    // The key check used `in`, which accepts `toString` and `constructor`
+    // as if they were strings the screen shows; the resolved table then
+    // carried a label nothing renders and lost its own `toString`.
+    const resolved = resolveStrings({ toString: 'nope', constructor: 'nope' });
+    expect(typeof resolved.toString).toBe('function');
+    expect(String({ ...resolved })).toBe('[object Object]');
+    expect(resolved).toEqual({ ...DEFAULT_STRINGS });
+  });
+});
+
+describe('without Object.hasOwn', () => {
+  // Safari before 15.4. The counter threw on every message, and a page
+  // with any `strings` override never started.
+  it('still resolves and formats', () => {
+    const own = Object.hasOwn;
+    try {
+      delete (Object as { hasOwn?: unknown }).hasOwn;
+      expect(resolveStrings({ reload: 'Обновить' }).reload).toBe('Обновить');
+      expect(format('{done} of {total}', { done: 1, total: 2 })).toBe('1 of 2');
+    } finally {
+      Object.hasOwn = own;
+    }
+  });
 });

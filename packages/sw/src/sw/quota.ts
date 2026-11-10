@@ -24,6 +24,25 @@ export function isQuotaExceeded(error: unknown): boolean {
 }
 
 /**
+ * Whether [error] is a quota error, or was caused by one.
+ *
+ * An aggregate — the one a failed precache throws, which names every Core
+ * entry that failed — carries the first quota error as its `cause`.
+ * Without walking it, the one phase where running out of storage is most
+ * likely reported itself as an ordinary failure.
+ */
+export function causedByQuota(error: unknown): boolean {
+  let current = error;
+  // A `cause` chain is written by hand here, so three links is generous;
+  // the bound also makes a cycle impossible to loop on.
+  for (let depth = 0; depth < 3 && current !== undefined && current !== null; depth++) {
+    if (isQuotaExceeded(current)) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
  * If [error] is a `QuotaExceededError`, log it as such — naming [context],
  * e.g. `precaching main.dart.wasm` — and, when the browser exposes it, the
  * origin's storage usage and quota.

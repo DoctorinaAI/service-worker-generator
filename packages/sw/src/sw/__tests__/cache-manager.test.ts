@@ -15,14 +15,17 @@ import {
 } from '../cache-manager';
 import type { ResourceEntry, ResourceManifest } from '../../shared/types';
 import { ResourceCategory } from '../../shared/types';
-import { BODY_STALL_TIMEOUT_MS } from '../../shared/constants';
+import {
+  BODY_STALL_TIMEOUT_MS,
+  PRECACHE_CONCURRENCY,
+} from '../../shared/constants';
 import {
   installMockCaches,
   installMockFetch,
   textResponse,
   type MockCacheStorage,
 } from '../../__tests__/helpers';
-import { resetQuotaReportThrottle } from '../quota';
+import { causedByQuota, resetQuotaReportThrottle } from '../quota';
 
 describe('cache naming', () => {
   describe('getContentCacheName', () => {
@@ -1139,6 +1142,78 @@ describe('precacheResources — audit #30', () => {
     const stored = await mockCaches.peek('temp-v1')!.match('index.html');
     expect(stored!.redirected).toBe(false);
     expect(await stored!.text()).toBe('<html></html>');
+  });
+
+  /**
+   * A device near its quota used to download the whole build on every
+   * page load, forever: the install is retried on each one, every entry
+   * after the first quota error was still fetched in full, and the error
+   * the page was told about looked like an ordinary network failure.
+   */
+  describe('out of storage', () => {
+    /** More Core entries than the precache runs at once. */
+    const manyCore = (n: number): ResourceManifest =>
+      Object.fromEntries(
+        Array.from({ length: n }, (_, i) => [
+          `part${i}.dart.js`,
+          {
+            name: `part${i}.dart.js`,
+            size: 10,
+            hash: `h${i}`,
+            category: ResourceCategory.Core,
+          },
+        ]),
+      );
+
+    it('stops downloading once storage has run out', async () => {
+      const spy = installMockFetch(async () => new Response(body(10)));
+      const cache = await caches.open('temp-v1');
+      vi.spyOn(cache, 'put').mockRejectedValue(
+        new DOMException('full', 'QuotaExceededError'),
+      );
+
+      await expect(
+        precacheResources('temp-v1', manyCore(40), [ResourceCategory.Core]),
+      ).rejects.toThrow(/Precache failed/);
+
+      // The batch that was already in flight when the first write failed,
+      // and nothing after it — not all forty.
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(PRECACHE_CONCURRENCY * 2);
+    });
+
+    it('still fails the install for every Core entry it skipped', async () => {
+      installMockFetch(async () => new Response(body(10)));
+      const cache = await caches.open('temp-v1');
+      vi.spyOn(cache, 'put').mockRejectedValue(
+        new DOMException('full', 'QuotaExceededError'),
+      );
+
+      // Activating a cache that is missing the files the app is made of
+      // would be worse than not activating at all.
+      await expect(
+        precacheResources('temp-v1', manyCore(40), [ResourceCategory.Core]),
+      ).rejects.toThrow(/40 Core resource\(s\)/);
+    });
+
+    it('carries the quota error as the cause of the aggregate', async () => {
+      // `reportLifecycle` reads it to tell the page "out of storage",
+      // which a user can act on, from a network failure, which they
+      // cannot. The aggregate's own name is just `Error`.
+      installMockFetch(async () => new Response(body(10)));
+      const cache = await caches.open('temp-v1');
+      vi.spyOn(cache, 'put').mockRejectedValue(
+        new DOMException('full', 'QuotaExceededError'),
+      );
+
+      const error = await precacheResources('temp-v1', core(10), [
+        ResourceCategory.Core,
+      ]).catch((e: unknown) => e);
+
+      expect((error as { cause?: { name?: string } }).cause?.name).toBe(
+        'QuotaExceededError',
+      );
+      expect(causedByQuota(error)).toBe(true);
+    });
   });
 
   it('logs a quota error distinctly, with the storage estimate', async () => {

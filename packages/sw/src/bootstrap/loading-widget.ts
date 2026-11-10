@@ -43,6 +43,13 @@ export class LoadingWidget {
   private stallBudgetMs: number = STALLED_TIMEOUT_MS;
   private currentPercent = 0;
   private disposed = false;
+  /**
+   * Set by [showError]. A failure is the end of this load, so nothing
+   * that arrives afterwards may undo the error screen.
+   */
+  private errored = false;
+  /** The animated ellipsis after the status line; gone on the error screen. */
+  private dots: HTMLElement | null = null;
 
   /**
    * @param config - Widget appearance and progress range.
@@ -120,7 +127,12 @@ export class LoadingWidget {
     if (this.disposed) return;
 
     // Only allow forward progress
+    const before = this.currentPercent;
     this.currentPercent = Math.max(this.currentPercent, Math.min(percent, 100));
+    // The load is moving again, so the stalled overlay is a lie: it used
+    // to stay up — blurred logo, pulsing reload button — for the rest of
+    // the load once a single slow stretch had raised it.
+    if (this.currentPercent > before) this.hideReloadOverlay();
 
     if (this.progressCircle) {
       const offset =
@@ -162,6 +174,11 @@ export class LoadingWidget {
     this.statusText.style.color = this.errorColor;
     this.statusContainer?.setAttribute('role', 'alert');
     this.statusContainer?.setAttribute('aria-live', 'assertive');
+    this.errored = true;
+    // Nothing is loading any more: no ellipsis that says otherwise, and no
+    // stall timer to report a stall on a screen that reported a failure.
+    this.clearStallTimer();
+    if (this.dots) this.dots.hidden = true;
     this.showReloadOverlay();
   }
 
@@ -372,9 +389,14 @@ export class LoadingWidget {
     statusContainer.setAttribute('aria-live', 'polite');
     this.statusContainer = statusContainer;
     this.statusText = document.createElement('span');
-    this.statusText.textContent = 'Initializing';
+    // From the string table, not a literal: this is the label the user
+    // reads until the pipeline's first stage update lands, and on a
+    // pipeline that throws before that it is the only label they get.
+    this.statusText.textContent = this.text('starting');
     const dots = document.createElement('span');
     dots.className = 'sw-loading-dots';
+    dots.setAttribute('aria-hidden', 'true');
+    this.dots = dots;
     statusContainer.appendChild(this.statusText);
     statusContainer.appendChild(dots);
     container.appendChild(statusContainer);
@@ -393,6 +415,19 @@ export class LoadingWidget {
   private showReloadOverlay(): void {
     this.logoContainer?.classList.add('is-stalled');
     this.labelReloadButton();
+  }
+
+  /**
+   * Take the stalled overlay back down.
+   *
+   * Only progress does this, never a message: a stage label changing while
+   * the ring stands still is exactly the stall the overlay is reporting.
+   * The error screen raises it again and nothing moves after that, so this
+   * cannot hide a failure.
+   */
+  private hideReloadOverlay(): void {
+    if (this.errored) return;
+    this.logoContainer?.classList.remove('is-stalled');
   }
 
   private resetStallTimer(): void {
@@ -641,6 +676,10 @@ export class LoadingWidget {
         width: 100%;
         height: 100%;
         transform: rotate(-90deg);
+        /* An outer <svg> clips to its viewport by default, and the arc's
+           drop-shadow glow reaches past it: without this the glow was cut
+           off in a straight line beside and above the ring. */
+        overflow: visible;
       }
       .sw-progress-ring-bg {
         fill: none;
@@ -731,12 +770,17 @@ export class LoadingWidget {
         cursor: pointer;
         opacity: 0;
         pointer-events: none;
+        /* Not just transparent: an invisible button still took keyboard
+           focus, with an invisible focus ring, and Enter reloaded the page
+           mid-download. Screen readers listed it too. */
+        visibility: hidden;
         transform: translate(-50%, -50%) scale(0.6);
         box-shadow:
           0 10px 28px rgba(0, 0, 0, 0.28),
           0 0 0 0 ${colorAlpha};
         transition:
           opacity 0.35s ease,
+          visibility 0.35s,
           transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1),
           box-shadow 0.3s ease,
           background-color 0.3s ease;
@@ -744,6 +788,7 @@ export class LoadingWidget {
       .sw-logo-container.is-stalled .sw-reload-overlay {
         opacity: 1;
         pointer-events: auto;
+        visibility: visible;
         transform: translate(-50%, -50%) scale(1);
         animation: sw-reload-pulse 2.2s ease-out infinite;
       }

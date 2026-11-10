@@ -100,6 +100,11 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
   handlers, where an error reporter can pick it up
 - `subscribe` consumers see `phase: 'error'`, so a page can tell that loading
   failed rather than guessing from a percentage that stopped moving
+- That state is terminal: a later progress update — and the worker keeps
+  narrating its own install to every client it has, controlled or not —
+  neither replaces the sentence on screen nor the `error` phase a reporter
+  reads. It used to overwrite both, leaving a resource counter in error red
+  and no trace of the failure in `Bootstrap.progress`
 - The overlay button reloads on its first click and clears the caching layer
   only on the next one: the failure is far more often a connection that
   dropped than a cache gone bad, and the reset throws away a download the user
@@ -108,11 +113,20 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
 - Colours are contrast-checked against the widget's own background: the accent
   is a brand colour, not a ratio, so the title and the error line are darkened
   or lightened until they reach 4.5:1 (3:1 for the button's icon)
+- An accent that is not a usable CSS colour falls back to the default, with
+  a warning: `data-config` is untyped JSON, and a number or a value
+  carrying a `;` or a `}` would take the widget's whole stylesheet with it
+  — leaving the page with no loading screen and no error screen either
 
 ### Stall Detection
 - Timer starts on widget creation
 - Resets on every progress update
 - After 30 seconds without progress: show "Reset Cache" button with tooltip
+- The overlay comes back down as soon as the ring moves again. It used to
+  stay up for the rest of the load, so one slow stretch on a mobile link
+  left a blurred logo and a pulsing button over a download that was going
+  fine. A label that changes while the ring stands still does not count:
+  that is the stall being reported
 - 120 seconds instead, when the page is not being served by this build's
   worker (a first visit whose activation did not land in time, a failed
   registration, Firefox's private mode, iOS Lockdown Mode). Progress between
@@ -146,15 +160,46 @@ interface BootstrapAPI {
    * Returns an unsubscribe function.
    */
   subscribe(callback: (state: ProgressState) => void): () => void;
+
+  /**
+   * Loading failed. Called once, with the `error` state, whose `detail`
+   * carries the raw reason. Returns an unsubscribe function.
+   */
+  onError(handler: (state: ProgressState) => void | Promise<void>): () => void;
+
+  /**
+   * The service worker failed at something the page cannot see: an
+   * install, a cache swap that ran out of storage, a refused cache write.
+   * Returns an unsubscribe function.
+   */
+  onWorkerFailure(
+    handler: (message: SWLifecycleMessage) => void | Promise<void>,
+  ): () => void;
+
+  /**
+   * A newer build has installed and is waiting. Lives past `dispose()`.
+   * Returns an unsubscribe function.
+   */
+  onUpdateAvailable(handler: () => void | Promise<void>): () => void;
+
+  /**
+   * Activate the waiting build and, unless [reload] is `false`, reload.
+   * Resolves `false` when nothing is waiting.
+   */
+  applyUpdate(reload?: boolean): Promise<boolean>;
 }
 
 interface ProgressState {
-  /** Current pipeline phase name */
-  phase: 'init' | 'sw' | 'canvaskit' | 'assets' | 'dart-entry' | 'dart-init';
+  /** Current pipeline phase name; `error` once loading has failed. */
+  phase:
+    | 'init' | 'sw' | 'canvaskit' | 'assets' | 'dart-entry' | 'dart-init'
+    | 'error';
   /** Progress percentage (0-100) */
   percent: number;
   /** Human-readable status message */
   message: string;
+  /** The raw reason, when `phase` is `error`; never shown to the user. */
+  detail?: string;
 }
 ```
 
@@ -258,6 +303,6 @@ the shell; replace it in `web/index.html` with
 - Log which source was used
 
 ### SW Registration Fallback
-- Timeout: 4s
+- Timeout: 10s for the whole stage (`SW_BOOTSTRAP_TIMEOUT_MS`)
 - On timeout: continue without SW (app loads normally, no caching)
 - On error: log warning, continue without SW

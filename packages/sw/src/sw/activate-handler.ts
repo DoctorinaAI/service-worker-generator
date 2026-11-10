@@ -82,6 +82,10 @@ async function handleActivate(
         // whose prefix is a shorter start of ours would otherwise treat our
         // pending temp caches as its own until our next install.
         log.error('[SW] Cache swap failed, dropping this version\'s caches:', error);
+        // Reported like the quota case above: the app now runs from the
+        // network on every load, and the page — where anything that
+        // collects errors lives — has no other way to find that out.
+        await reportLifecycle(version, 'activate', 'failed', error);
         await Promise.all([
           drop([
             getContentCacheName(cachePrefix, version),

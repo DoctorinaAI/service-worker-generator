@@ -225,6 +225,50 @@ describe('resolveConfig — runtime validation', () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
+  // `data-config` is untyped JSON, and everything downstream treats the
+  // accent as a string: the contrast correction calls `.trim()` on it, and
+  // a stylesheet that throws leaves the page with no loading screen and no
+  // error screen either.
+  it.each([
+    ['a number', 16711680],
+    ['a boolean', true],
+    ['an array', ['#fff']],
+    ['an object', { r: 255 }],
+  ])('falls back to the default accent for %s', (_why, value) => {
+    expect(ui({ color: value }).color).toBe('#25D366');
+    expect(warnSpy).toHaveBeenCalled();
+  });
+
+  it('treats a null accent as one that was never set', () => {
+    expect(ui({ color: null }).color).toBe('#25D366');
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  // The accent is interpolated into the widget's stylesheet, where a `;`
+  // or a `}` ends the declaration and corrupts every rule after it.
+  it.each([
+    '#fff; } .sw-overlay { display: none',
+    'red;',
+    '} * { display: none }',
+    '#fff /* comment',
+    '</style><script>x</script>',
+    // An unclosed function or string swallows the rest of the stylesheet,
+    // the hidden reload button's rule among it.
+    'rgb(37, 211, 102',
+    'rgb(37, 211, 102))',
+    "red'",
+    'url("x',
+    'red\\',
+  ])('refuses the CSS-breaking accent %s', (value) => {
+    expect(ui({ color: value }).color).toBe('#25D366');
+    expect(warnSpy).toHaveBeenCalled();
+  });
+
+  it('still accepts the colour functions a page may legitimately pass', () => {
+    expect(ui({ color: 'rgb(37 211 102)' }).color).toBe('rgb(37 211 102)');
+    expect(ui({ color: 'var(--brand)' }).color).toBe('var(--brand)');
+  });
+
   it('falls back to the defaults for non-numeric progress bounds', () => {
     const r = ui({ minProgress: 'abc', maxProgress: null });
     expect(r.minProgress).toBe(DEFAULT_MIN_PROGRESS);

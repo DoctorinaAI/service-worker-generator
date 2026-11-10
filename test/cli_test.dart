@@ -10,6 +10,12 @@ import 'package:test/test.dart';
 /// are checked here. The child sees none of the caller's `SW_*` variables.
 void main() {
   late io.Directory dir;
+  // Resolved once, when the suite loads. The working directory is
+  // process-wide, and `dart test` runs suites as isolates of one process:
+  // a relative path read while another suite has changed it
+  // (`config_test.dart` does, to find an implicit `sw.yaml`) is wrong.
+  final packageRoot = io.Directory.current.path;
+  final script = p.join(packageRoot, 'bin', 'generate.dart');
 
   setUp(() {
     dir = io.Directory.systemTemp.createTempSync('sw_cli_test');
@@ -40,11 +46,14 @@ _flutter.buildConfig = {"engineRevision":"abc123","builds":[{"compileTarget":"da
     return io.Process.run(
       io.Platform.resolvedExecutable,
       [
-        'bin/generate.dart',
-        // Never pick up an sw.yaml from the working directory.
-        '--config=${p.join(dir.path, 'absent.yaml')}',
+        script,
+        // Never pick up an sw.yaml from the working directory. An *empty*
+        // file, not an absent one: a `--config` the caller names has to
+        // exist, or the run exits 64.
+        '--config=${_emptyConfig(dir).path}',
         ...args,
       ],
+      workingDirectory: packageRoot,
       environment: environment,
       includeParentEnvironment: false,
     );
@@ -172,7 +181,7 @@ _flutter.buildConfig = {"engineRevision":"abc123","builds":[{"compileTarget":"da
   test('an absent implicit sw.yaml is silent', () async {
     final result = await io.Process.run(
       io.Platform.resolvedExecutable,
-      [p.absolute('bin/generate.dart'), '--input=${dir.path}'],
+      [script, '--input=${dir.path}'],
       workingDirectory: dir.path,
       environment: {
         for (final e in io.Platform.environment.entries)
@@ -286,4 +295,15 @@ _flutter.buildConfig = {"engineRevision":"abc123","builds":[{"compileTarget":"da
       );
     });
   });
+}
+
+/// An empty YAML config inside [dir], created on first use.
+///
+/// The CLI tests must not read an `sw.yaml` from the working directory, and
+/// a `--config` that names a file which does not exist is a usage error —
+/// so the isolation is a file that exists and says nothing.
+io.File _emptyConfig(io.Directory dir) {
+  final file = io.File(p.join(dir.path, 'empty.yaml'));
+  if (!file.existsSync()) file.writeAsStringSync('');
+  return file;
 }

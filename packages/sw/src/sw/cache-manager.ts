@@ -79,6 +79,37 @@ export interface ReuseSource {
 }
 
 /**
+ * Header the install records the manifest hash in, on every copy it
+ * stores. A stored body cannot be hashed again without reading it whole,
+ * and the URL it was fetched by — which carries the hash — is not what it
+ * is stored under, so the hash has to travel with the response.
+ */
+const HASH_HEADER = 'x-sw-hash';
+
+/**
+ * [response] with [hash] recorded on it.
+ *
+ * The body is passed through as a stream, never buffered: these are the
+ * largest files the app ships. A response the environment refuses to
+ * rebuild is stored as it is — one entry that gets re-fetched on a resumed
+ * install, rather than an install that fails.
+ */
+function stamped(response: Response, hash: string): Response {
+  try {
+    const headers = new Headers(response.headers);
+    headers.set(HASH_HEADER, hash);
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  } catch (error) {
+    log.warn('[SW] Could not record the hash of a cached response:', error);
+    return response;
+  }
+}
+
+/**
  * Copy [path] from a previous version's cache when that version had the
  * very same file, and report whether it was.
  *
@@ -103,7 +134,7 @@ async function reuseFromPreviousVersion(
   try {
     const stored = await source.cache.match(new Request(path));
     if (!stored) return false;
-    await cache.put(new Request(path), stored);
+    await cache.put(new Request(path), stamped(stored, entry.hash));
     return true;
   } catch (error) {
     // A cache that was deleted under us, or a write that failed: fetch it.
@@ -113,28 +144,40 @@ async function reuseFromPreviousVersion(
 }
 
 /**
- * Whether [path] is already in [cache] with the length [entry] records for
- * it, from an earlier attempt at the same install.
+ * Whether [path] is already in [cache] as the file [entry] describes,
+ * from an earlier attempt at the same install.
  *
- * Only a stored copy whose declared length matches is accepted. A build
- * generated with an explicit `--version` that was deployed twice shares a
- * temp cache name with the previous one, so "there is something under this
- * key" is not enough; and a copy stored by this version's own precache
- * already passed the streaming size check. A re-encoded response declares
- * the encoded length (`declaredBodyLength` returns nothing for those), so
- * it is re-fetched, which is the safe answer.
+ * The stored copy has to carry this entry's hash. A build generated with
+ * an explicit `--version` that is deployed twice shares a temp cache name
+ * with the previous one, so "there is something under this key" is not
+ * enough — and neither is its length: an edit that leaves a file the same
+ * size, which is most edits to a JS bundle, would pass. Keeping the
+ * previous deploy's file there is the one outcome worse than downloading
+ * it again, because the swap then pairs it with this build's other files.
+ *
+ * The hash is all that is checked. A copy only ever carries it once its
+ * body has been stored whole: `cache.put` streams through the size guard
+ * and stores nothing when that guard fails, and a re-encoded copy whose
+ * size cannot match was accepted deliberately (`storeAfterSizeMismatch`).
+ * Comparing `Content-Length` as well turned every copy from a host that
+ * compresses — the header then counts encoded bytes, or is absent — into a
+ * re-download, which is most hosts and exactly the large files a resumed
+ * install exists to keep.
+ *
+ * A copy with no hash on it — written by a worker from before this record
+ * existed — is re-fetched, which is the safe answer.
  */
 async function alreadyPrecached(
   cache: Cache,
   path: string,
   entry: ResourceEntry,
 ): Promise<boolean> {
-  const expected = expectedBodySize(path, entry);
-  if (expected === undefined) return false;
+  // Not the shell: it is network-first, and rewritten by navigations.
+  if (expectedBodySize(path, entry) === undefined) return false;
   try {
     const present = await cache.match(new Request(path));
     if (!present) return false;
-    if (declaredBodyLength(present) !== expected) return false;
+    if (present.headers.get(HASH_HEADER) !== entry.hash) return false;
     log.info(`[SW] ${path} is already precached, keeping it`);
     return true;
   } catch {
@@ -227,11 +270,14 @@ async function fetchIntoCache(
       },
       onBytes: throttled(onBytes),
     });
-    await cache.put(new Request(path), await replayableResponse(guarded));
+    await cache.put(
+      new Request(path),
+      stamped(await replayableResponse(guarded), entry.hash),
+    );
   } catch (error) {
     if (error instanceof BodySizeMismatchError) mismatch = error;
     if (!mismatch) throw error;
-    if (!(await storeAfterSizeMismatch(cache, path, url, mismatch))) {
+    if (!(await storeAfterSizeMismatch(cache, path, url, entry.hash, mismatch))) {
       throw mismatch;
     }
   }
@@ -262,10 +308,26 @@ export async function precacheResources(
 
   const coreFailures: string[] = [];
   let reused = 0;
+  /**
+   * The first out-of-storage error, if there was one. Nothing after it can
+   * be stored either, so the remaining entries are not downloaded: a
+   * device near its quota would otherwise download the whole build —
+   * tens of megabytes — on every page load, forever, since the install is
+   * retried on each one. Core entries left unreached are still counted as
+   * failures, so the install fails rather than activating a cache that is
+   * missing the files the app is made of.
+   */
+  let quotaError: unknown;
 
   await mapWithConcurrency(entries, PRECACHE_CONCURRENCY, async ([path, entry]) => {
     let stored = false;
     try {
+      if (quotaError !== undefined) {
+        if (entry.category === ResourceCategory.Core) {
+          coreFailures.push(`${path} (not attempted: out of storage)`);
+        }
+        return;
+      }
       // An earlier attempt at this very install may have stored this entry
       // already: a failed `Core` entry fails the whole install, and the
       // next page load tries again. Downloading a 30 MB wasm that is
@@ -285,7 +347,9 @@ export async function precacheResources(
         );
       }
     } catch (error) {
-      reportIfQuotaExceeded(`precaching ${path}`, error);
+      if (reportIfQuotaExceeded(`precaching ${path}`, error)) {
+        quotaError ??= error;
+      }
       const reason = error instanceof Error ? error.message : String(error);
       const msg = `[SW] Precache failed for ${path}: ${reason}`;
       if (entry.category === ResourceCategory.Core) {
@@ -316,11 +380,20 @@ export async function precacheResources(
   }
 
   if (coreFailures.length > 0) {
+    // The quota error travels as the `cause`: the aggregate's own name is
+    // `Error`, and whoever reports this failure to the page has to be able
+    // to tell "out of storage" — which the user can act on — from a
+    // network or host problem, which they cannot.
     throw new Error(
       `Precache failed for ${coreFailures.length} Core resource(s): ` +
         coreFailures.join(', '),
+      quotaError === undefined ? undefined : { cause: quotaError },
     );
   }
+  // A quota error that cost no Core entry is not fatal, as documented: the
+  // files left out are `Required` ones the fetch handler refills from the
+  // network. Failing here instead would leave a device near its quota on
+  // its old build for good.
 }
 
 /**
@@ -350,6 +423,7 @@ async function storeAfterSizeMismatch(
   cache: Cache,
   path: string,
   url: string,
+  hash: string,
   first: BodySizeMismatchError,
 ): Promise<boolean> {
   const response = await fetchWithRetry(
@@ -409,11 +483,14 @@ async function storeAfterSizeMismatch(
   }
   await cache.put(
     new Request(path),
-    new Response(body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    }),
+    stamped(
+      new Response(body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      }),
+      hash,
+    ),
   );
   return true;
 }

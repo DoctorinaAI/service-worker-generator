@@ -159,6 +159,13 @@ Specify a custom config path:
 dart run sw:generate --config=config/sw-production.yaml
 ```
 
+A file named this way is a requirement: if it does not exist, is not a
+mapping, or does not parse, the run exits with status 64 rather than
+continuing on defaults. A typo in that path would otherwise deploy with the
+prefix, categories and branding of an app nobody configured. The default
+`sw.yaml` stays optional — absent, it is simply not used; unparseable, it
+warns and the run continues on CLI args, environment and defaults.
+
 ## Environment Variables
 
 | Variable | Maps to |
@@ -188,6 +195,19 @@ dart run sw:generate --config=config/sw-production.yaml
 An invalid value exits with status 64 and names where it came from:
 `--max-progress="lots"`, `SW_MIN_PROGRESS="ten" (environment)` or
 `max-progress="lots" (in sw.yaml)`.
+
+Two names are checked for more than their shape:
+
+- `--output` / `--bootstrap-output` must be a plain file name that the run
+  will not then delete. `flutter_service_worker.js`, `flutter_bootstrap.js`
+  and `flutter.js` are removed from the build after generation, so writing
+  an output under one of those names used to succeed, report "Done!" and
+  leave nothing behind; `index.html` and `main.dart.*` belong to the build
+  itself.
+- `--prefix` must be a plain name — not empty, no surrounding whitespace,
+  no path separator. It names every cache the worker keeps *and* scopes the
+  loading screen's "clear the cache and reload", which with an empty prefix
+  cleared every cache on the origin, including another app's.
 
 ## Default Categorization Rules
 

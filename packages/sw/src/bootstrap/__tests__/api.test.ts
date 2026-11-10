@@ -199,6 +199,17 @@ describe('BootstrapAPI', () => {
       expect(api.progress.percent).toBe(0);
     });
 
+    it('prints nothing once the load has failed', () => {
+      // A progress line after the error read as a load that went on.
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      api.error('failed');
+      logSpy.mockClear();
+      api.updateAndLog('dart-entry', 95, 'late progress');
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(api.progress.phase).toBe('error');
+      errorSpy.mockRestore();
+    });
+
     it('logs only when percent advances or message changes', () => {
       api.updateAndLog('sw', 30, 'same');
       const afterFirst = logSpy.mock.calls.length;
@@ -207,6 +218,56 @@ describe('BootstrapAPI', () => {
 
       api.updateAndLog('sw', 30, 'changed');
       expect(logSpy.mock.calls.length).toBeGreaterThan(afterFirst);
+    });
+  });
+
+  /**
+   * The worker reports to every client it has, controlled or not, and it
+   * keeps pre-caching long after a page has given up. Those messages used
+   * to overwrite the error screen with a resource counter in error red —
+   * and `Bootstrap.progress`, which an error reporter reads, lost the
+   * failure it was subscribed for.
+   */
+  describe('a failure is the end of the load', () => {
+    beforeEach(() => {
+      vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    });
+
+    afterEach(() => vi.restoreAllMocks());
+
+    it('keeps the error state when a late progress message arrives', () => {
+      api.error('The application could not be loaded', 'Import #3');
+      widget.updateProgress.mockClear();
+
+      api.update('assets', 60, 'Loaded 4 of 5 resources');
+
+      expect(api.progress).toMatchObject({
+        phase: 'error',
+        message: 'The application could not be loaded',
+        detail: 'Import #3',
+      });
+      expect(widget.updateProgress).not.toHaveBeenCalled();
+    });
+
+    it('keeps it against updateLoadingProgress as well', () => {
+      api.error('failed');
+      api.updateAndLog('dart-init', 95, 'Signing in…');
+
+      expect(api.progress.phase).toBe('error');
+      expect(api.progress.message).toBe('failed');
+    });
+
+    it('tells a late subscriber about the error, not about the progress', () => {
+      api.error('failed', 'why');
+      api.update('assets', 60, 'Loaded 4 of 5 resources');
+
+      const seen: string[] = [];
+      api.subscribe((state) => seen.push(state.phase));
+      api.update('assets', 70, 'Loaded 5 of 5 resources');
+
+      expect(seen).toEqual([]);
+      expect(api.progress.phase).toBe('error');
     });
   });
 });

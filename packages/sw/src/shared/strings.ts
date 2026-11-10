@@ -63,7 +63,7 @@ export function resolveStrings(overrides: unknown): Strings {
   const resolved: Strings = { ...DEFAULT_STRINGS };
   if (!overrides || typeof overrides !== 'object') return resolved;
   for (const [key, value] of Object.entries(overrides)) {
-    if (!(key in DEFAULT_STRINGS)) continue;
+    if (!hasOwn(DEFAULT_STRINGS, key)) continue;
     if (typeof value !== 'string' || value === '') continue;
     resolved[key as StringKey] = value;
   }
@@ -79,7 +79,19 @@ export function format(
   template: string,
   values: Readonly<Record<string, string | number>>,
 ): string {
+  // `hasOwn`, not `in`: `in` also finds what every object inherits, so a
+  // `{constructor}` in an override rendered a function's source into the
+  // loading screen instead of staying the visible placeholder it is.
   return template.replace(/\{(\w+)\}/g, (match, name: string) =>
-    name in values ? String(values[name]) : match,
+    hasOwn(values, name) ? String(values[name]) : match,
   );
+}
+
+/**
+ * `Object.hasOwn`, which Safari only has from 15.4: there the loading
+ * screen's counter threw on every message, and a page with any `strings`
+ * override never started at all.
+ */
+function hasOwn(object: object, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(object, key);
 }

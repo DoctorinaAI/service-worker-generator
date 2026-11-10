@@ -174,12 +174,15 @@ describe('createInstallHandler', () => {
         category: ResourceCategory.Required,
       },
     };
-    // What a previous attempt stored: the big one, with the length a
-    // response carries, so it can be told from another build's copy.
+    // What a previous attempt stored: the big one, carrying the hash and
+    // the length of the file it is, so it can be told from another
+    // build's copy of the same path.
     const temp = await mockCaches.open('app-temp-v3');
     await temp.put(
       new Request('main.dart.js'),
-      new Response('core', { headers: { 'Content-Length': '4' } }),
+      new Response('core', {
+        headers: { 'Content-Length': '4', 'x-sw-hash': 'h-core' },
+      }),
     );
     const spy = installMockFetch(
       async () => new Response('ok', { headers: { 'Content-Length': '2' } }),
@@ -200,6 +203,43 @@ describe('createInstallHandler', () => {
     expect(fetched.some((url) => url.includes('manifest.json'))).toBe(true);
     expect(fetched.some((url) => url.includes('main.dart.js'))).toBe(false);
     // And the one that was already there is still the one that is stored.
+    const stored = await temp.match(new Request('main.dart.js'));
+    expect(await stored!.text()).toBe('core');
+  });
+
+  it('keeps a stored copy from a host that compresses', async () => {
+    // The stored response keeps the network's headers: on a host that
+    // gzips, `Content-Length` counts encoded bytes or is absent, so a
+    // length check rejected every copy and a resumed install downloaded
+    // everything again — the case resuming exists for.
+    const manifest: ResourceManifest = {
+      'main.dart.js': {
+        name: 'main.dart.js',
+        size: 4,
+        hash: 'h-core',
+        category: ResourceCategory.Core,
+      },
+    };
+    const temp = await mockCaches.open('app-temp-v6');
+    await temp.put(
+      new Request('main.dart.js'),
+      new Response('core', {
+        headers: { 'Content-Encoding': 'br', 'Content-Length': '3', 'x-sw-hash': 'h-core' },
+      }),
+    );
+    const spy = installMockFetch(async () => textResponse('fetched'));
+
+    const handler = createInstallHandler(
+      'app',
+      'v6',
+      manifest,
+      createProgressReporter('v6', manifest),
+    );
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    expect(spy).not.toHaveBeenCalled();
     const stored = await temp.match(new Request('main.dart.js'));
     expect(await stored!.text()).toBe('core');
   });
@@ -237,6 +277,48 @@ describe('createInstallHandler', () => {
     expect(spy).toHaveBeenCalledOnce();
     const stored = await temp.match(new Request('main.dart.js'));
     expect(await stored!.text()).toBe('newcore');
+  });
+
+  it('re-fetches an entry another build left at the very same length', async () => {
+    // The length is not enough to tell two builds apart: most edits to a
+    // JS bundle leave its size alone. Under a pinned `--version` the temp
+    // cache name is shared, so keeping that copy would swap the previous
+    // deploy's code in beside this deploy's other files — the mix that
+    // cannot boot.
+    const manifest: ResourceManifest = {
+      'main.dart.js': {
+        name: 'main.dart.js',
+        size: 4,
+        hash: 'h-new',
+        category: ResourceCategory.Core,
+      },
+    };
+    const temp = await mockCaches.open('app-temp-v5');
+    await temp.put(
+      new Request('main.dart.js'),
+      new Response('oldc', {
+        headers: { 'Content-Length': '4', 'x-sw-hash': 'h-old' },
+      }),
+    );
+    const spy = installMockFetch(
+      async () => new Response('newc', { headers: { 'Content-Length': '4' } }),
+    );
+
+    const handler = createInstallHandler(
+      'app',
+      'v5',
+      manifest,
+      createProgressReporter('v5', manifest),
+    );
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    expect(spy).toHaveBeenCalledOnce();
+    const stored = await temp.match(new Request('main.dart.js'));
+    expect(await stored!.text()).toBe('newc');
+    // And the copy it stored can be recognised by the next attempt.
+    expect(stored!.headers.get('x-sw-hash')).toBe('h-new');
   });
 
   it('tolerates Required/Optional failures and still completes install without auto-activating', async () => {

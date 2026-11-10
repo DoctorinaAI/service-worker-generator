@@ -305,13 +305,16 @@ const UPDATE_WAIT_KEEPALIVE_MS = STALLED_TIMEOUT_MS / 3;
  * Make the first load after a deploy run on one build, when the Flutter
  * engine changed.
  *
- * Until a new worker takes over, the previous one controls the page and
- * serves the previous build's `main.dart.*` from its cache, while
- * `index.html` and this `bootstrap.js` are already the new build's — and
- * this bootstrap loads CanvasKit or skwasm for the new engine revision.
- * On the same engine that mix runs (flutter.js and the engine only change
- * with the Flutter SDK), so the page boots with its controller at once and
- * the new worker takes over on the next load. On a different engine it
+ * Until a new worker takes over, the previous one controls the page.
+ * `index.html` and this `bootstrap.js` are already the new build's, and
+ * the previous worker hands the new build's `main.dart.*` through from the
+ * network once it sees the new worker pending — but only once it does: a
+ * request that reaches it before the new worker exists gets the previous
+ * build's copy from its cache. Meanwhile this bootstrap loads CanvasKit or
+ * skwasm for the new engine revision. On the same engine that is harmless
+ * (flutter.js and the engine only change with the Flutter SDK), so the page
+ * boots with its controller at once and the new worker takes over on the
+ * next load. On a different engine it
  * fails in the engine itself (`WebAssembly.instantiate(): Import #N`), so
  * this waits for the new worker to install, hands control to it before
  * any app file is requested, and reloads once if the handover is lost.

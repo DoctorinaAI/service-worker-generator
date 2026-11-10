@@ -214,6 +214,46 @@ describe('LoadingWidget showError', () => {
     w.dispose();
     expect(() => w.showError('late')).not.toThrow();
   });
+
+  it('stops looking like it is still loading', () => {
+    // The ellipsis kept animating after "could not be loaded", and the
+    // stall timer of the last update still fired on the error screen.
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const w = new LoadingWidget(uiConfig());
+      w.mount();
+      w.updateProgress(40, 'loading');
+      w.showError('something broke');
+
+      expect((document.querySelector('.sw-loading-dots') as HTMLElement).hidden).toBe(true);
+      vi.advanceTimersByTime(10 * 60_000);
+      expect(warn).not.toHaveBeenCalledWith('[Bootstrap] Loading appears stalled');
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('LoadingWidget reload button', () => {
+  afterEach(cleanup);
+
+  it('is out of reach until it is shown', () => {
+    // Transparent was not enough: an invisible button took keyboard focus,
+    // and Enter reloaded the page mid-download.
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const css = document.querySelector('style')!.textContent!;
+    const rule = (selector: string): string => {
+      const start = css.indexOf(`${selector} {`);
+      return css.slice(start, css.indexOf('}', start));
+    };
+    expect(rule('      .sw-reload-overlay')).toContain('visibility: hidden');
+    expect(rule('.sw-logo-container.is-stalled .sw-reload-overlay')).toContain(
+      'visibility: visible',
+    );
+  });
 });
 
 describe('LoadingWidget stall detection', () => {
@@ -280,6 +320,55 @@ describe('LoadingWidget stall detection', () => {
     vi.advanceTimersByTime(2_000);
 
     expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('takes the overlay back down once the load moves again', () => {
+    // It used to stay up for the rest of the load: a single slow stretch
+    // on a mobile link left a blurred logo and a pulsing reload button
+    // over a download that was going fine.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    vi.advanceTimersByTime(STALLED_TIMEOUT_MS + 1);
+    const logo = document.querySelector('.sw-logo-container');
+    expect(logo?.classList.contains('is-stalled')).toBe(true);
+
+    w.updateProgress(42, 'Loading application');
+    expect(logo?.classList.contains('is-stalled')).toBe(false);
+
+    // And it comes back if the new silence outlasts the budget too.
+    vi.advanceTimersByTime(STALLED_TIMEOUT_MS + 1);
+    expect(logo?.classList.contains('is-stalled')).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('keeps the overlay up when only the label changes', () => {
+    // A stage label moving while the ring stands still is the stall.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    w.updateProgress(42, 'Loading application');
+    vi.advanceTimersByTime(STALLED_TIMEOUT_MS + 1);
+    const logo = document.querySelector('.sw-logo-container');
+    expect(logo?.classList.contains('is-stalled')).toBe(true);
+
+    w.updateProgress(42, 'Initializing Flutter engine');
+    expect(logo?.classList.contains('is-stalled')).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('leaves the error overlay up', () => {
+    // Nothing moves after a failure, and the API makes the error state
+    // terminal, but the widget must not undo its own error screen.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    w.showError('something broke');
+    w.updateProgress(99, 'Loaded 5 of 5 resources');
+
+    const logo = document.querySelector('.sw-logo-container');
+    expect(logo?.classList.contains('is-stalled')).toBe(true);
     warn.mockRestore();
   });
 
@@ -506,6 +595,31 @@ describe('LoadingWidget reset action', () => {
         document.querySelector('.sw-status span:first-child')?.textContent,
       ).toBe('Нет сети');
       online.mockRestore();
+    });
+
+    // The label the user reads before the pipeline's first stage update,
+    // and the only one they get from a pipeline that throws before it.
+    // It used to be the literal `Initializing`, which an app in another
+    // language could not replace — the very thing the string table exists
+    // to fix (audit #30, item 5.1).
+    it('takes even the pre-pipeline status from the string table', () => {
+      const w = new LoadingWidget(
+        uiConfig({ strings: { ...DEFAULT_STRINGS, starting: 'Запуск' } }),
+      );
+      w.mount();
+
+      expect(
+        document.querySelector('.sw-status span:first-child')?.textContent,
+      ).toBe('Запуск');
+    });
+
+    it('falls back to the default wording for that status', () => {
+      const w = new LoadingWidget(uiConfig());
+      w.mount();
+
+      expect(
+        document.querySelector('.sw-status span:first-child')?.textContent,
+      ).toBe(DEFAULT_STRINGS.starting);
     });
   });
 
@@ -896,6 +1010,20 @@ describe('LoadingWidget accessibility', () => {
     expect(body).toMatch(/box-sizing:\s*border-box/);
     expect(body).toMatch(/justify-content:\s*safe\s+center/);
     expect(body).toMatch(/overflow-y:\s*auto/);
+  });
+
+  it('lets the progress ring glow past the ring', () => {
+    // The arc carries a drop-shadow glow, and an outer <svg> clips to its
+    // viewport unless told otherwise — the glow was cut off in a straight
+    // line beside and above the ring.
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const css = document.head.querySelector('style')!.textContent!;
+    const rule = css.slice(css.indexOf('.sw-progress-ring {'));
+    const body = rule.slice(0, rule.indexOf('}'));
+    expect(body).toMatch(/overflow:\s*visible/);
+    const fill = css.slice(css.indexOf('.sw-progress-ring-fill {'));
+    expect(fill.slice(0, fill.indexOf('}'))).toMatch(/drop-shadow/);
   });
 
   it('compacts the layout on a short viewport', () => {

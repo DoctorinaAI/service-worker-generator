@@ -24,6 +24,11 @@
  * that way deserves the same contrast correction as a hex one.
  */
 function channels(color: string): [number, number, number] | null {
+  // Defensive: `data-config` is untyped JSON, and a value that is not a
+  // string at all must not throw from inside a stylesheet getter. The
+  // config layer already substitutes the default for one, so reaching
+  // this would be a new path, not a known one.
+  if (typeof color !== 'string') return null;
   const hex = color.trim();
   const rgb = /^rgba?\(([^)]+)\)$/i.exec(hex);
   if (rgb) {

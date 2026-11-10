@@ -30,7 +30,11 @@ export class FlutterLoaderMissingError extends Error {
  * calls `onEntrypointLoaded` without awaiting it, so such a failure (for
  * example a blocked `canvaskit.wasm`) never rejects the returned promise.
  * The error is still rethrown, so flutter.js and the console see it as
- * before.
+ * before. A failure of `runApp()` — Dart's `main` throwing before the
+ * first frame — goes the same way, for the same reason.
+ *
+ * [messages] are what the loading screen says during the last two stages,
+ * resolved from `data-config.strings`.
  */
 export async function loadFlutterApp(
   canvasKitBaseUrl: string,
@@ -38,6 +42,10 @@ export async function loadFlutterApp(
   builds: FlutterBuildEntry[],
   onProgress: (percent: number, message: string) => void,
   onEngineError?: (error: unknown) => void,
+  messages: { initializing: string; running: string } = {
+    initializing: 'Initializing Flutter engine',
+    running: 'Starting application',
+  },
 ): Promise<void> {
   // FlutterLoader.load() reads _flutter.buildConfig to pick the compatible
   // build, so seed it before invoking the loader.
@@ -59,7 +67,7 @@ export async function loadFlutterApp(
     onEntrypointLoaded: async (
       engineInitializer: FlutterEngineInitializer,
     ) => {
-      onProgress(STAGE_PROGRESS.dartEntryLoaded, 'Initializing Flutter engine');
+      onProgress(STAGE_PROGRESS.dartEntryLoaded, messages.initializing);
       logPhase('Flutter', 'Entry point loaded, initializing engine');
 
       // Disable pointer events during init
@@ -70,22 +78,30 @@ export async function loadFlutterApp(
         flutterView.style.pointerEvents = 'none';
       }
 
-      let appRunner: FlutterAppRunner;
-      try {
-        appRunner = await engineInitializer.initializeEngine();
-      } catch (error) {
-        logPhase('Flutter', 'Engine initialization failed');
+      const fail = (phase: string, error: unknown): never => {
+        logPhase('Flutter', phase);
         try {
           onEngineError?.(error);
         } catch (handlerError) {
           log.error('[Bootstrap] Engine error handler threw:', handlerError);
         }
         throw error;
+      };
+
+      let appRunner: FlutterAppRunner;
+      try {
+        appRunner = await engineInitializer.initializeEngine();
+      } catch (error) {
+        return fail('Engine initialization failed', error);
       }
-      onProgress(STAGE_PROGRESS.dartEntry, 'Starting application');
+      onProgress(STAGE_PROGRESS.dartEntry, messages.running);
       logPhase('Flutter', 'Engine initialized, running app');
 
-      await appRunner.runApp();
+      try {
+        await appRunner.runApp();
+      } catch (error) {
+        return fail('App failed to start', error);
+      }
       logPhase('Flutter', 'App started');
     },
   });

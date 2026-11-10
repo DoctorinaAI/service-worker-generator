@@ -9,6 +9,7 @@ import {
 import { readableVersions, workerVersion } from './registration';
 import { COUNTED_CATEGORIES, type ProgressReporter } from './progress';
 import { reportLifecycle } from './lifecycle';
+import { causedByQuota } from './quota';
 import { log } from '../shared/logger';
 
 /**
@@ -118,7 +119,27 @@ async function handleInstall(
     // then — the swap only runs on activate, which a failed install never
     // reaches — and it is removed with the version, by the orphan cleanup
     // at the start of the next install or by `cleanupOldCaches`.
+    //
+    // Out of storage is the exception: those megabytes are what the
+    // version actually serving the app now needs for its own lazy writes,
+    // and nothing will ever activate this cache — what it is missing is
+    // exactly what there was no room for. Dropping it gives the retry the
+    // room to get further than this one did.
+    if (causedByQuota(error)) await dropTempCache(tempCacheName);
     throw error;
+  }
+}
+
+/**
+ * Remove the temp cache this install was filling. Best-effort: a failure
+ * here is logged and never replaces the install failure being reported.
+ */
+async function dropTempCache(tempCacheName: string): Promise<void> {
+  try {
+    await caches.delete(tempCacheName);
+    log.warn(`[SW] Dropped ${tempCacheName} after running out of storage`);
+  } catch (error) {
+    log.warn(`[SW] Could not drop ${tempCacheName}:`, error);
   }
 }
 

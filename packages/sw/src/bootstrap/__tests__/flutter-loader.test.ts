@@ -154,6 +154,51 @@ describe('loadFlutterApp', () => {
     await expect(inner).rejects.toBe(failure);
   });
 
+  it('reports a failure of the app itself to onEngineError', async () => {
+    // Dart's `main` throwing before the first frame: flutter.js discards
+    // this promise too, so the screen sat at "Starting application".
+    const failure = new Error('main threw');
+    const initializeEngine = vi.fn(async () => ({
+      runApp: async () => {
+        throw failure;
+      },
+    }));
+    let inner: Promise<void> | undefined;
+    installLoader(async (opts: unknown) => {
+      const { onEntrypointLoaded } = opts as {
+        onEntrypointLoaded: (init: unknown) => Promise<void>;
+      };
+      inner = onEntrypointLoaded({ initializeEngine });
+      inner.catch(() => undefined);
+    });
+    const onEngineError = vi.fn();
+
+    await loadFlutterApp('/cdn/', 'rev', [{}], vi.fn(), onEngineError);
+    await inner?.catch(() => undefined);
+
+    expect(onEngineError).toHaveBeenCalledWith(failure);
+    await expect(inner).rejects.toBe(failure);
+  });
+
+  it('says what the page asked it to say', async () => {
+    const onProgress = vi.fn();
+    installLoader(async (opts: unknown) => {
+      const { onEntrypointLoaded } = opts as {
+        onEntrypointLoaded: (init: unknown) => Promise<void>;
+      };
+      await onEntrypointLoaded({
+        initializeEngine: async () => ({ runApp: async () => undefined }),
+      });
+    });
+
+    await loadFlutterApp('/cdn/', 'rev', [{}], onProgress, undefined, {
+      initializing: 'Движок',
+      running: 'Запуск',
+    });
+
+    expect(onProgress.mock.calls.map((call) => call[1])).toEqual(['Движок', 'Запуск']);
+  });
+
   it('keeps working without an onEngineError callback', async () => {
     const initializeEngine = vi.fn(async () => {
       throw new Error('x');

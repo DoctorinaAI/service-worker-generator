@@ -47,7 +47,32 @@ if (OriginalRequest && !(globalThis as { __swRequestPatched?: boolean }).__swReq
 export class MockCache implements Cache {
   private store = new Map<string, Response>();
 
+  /**
+   * Rejects where a real `Cache` rejects, so a write the browser would
+   * refuse cannot pass here. Per the Service Worker spec, `put` throws a
+   * `TypeError` for a non-GET request, a 206 (a partial body is not a
+   * resource), a `Vary: *` response (nothing could ever match it), a
+   * network error or an opaque redirect, and a body already consumed —
+   * `clone()` covers the last one on its own.
+   */
   async put(request: RequestInfo | URL, response: Response): Promise<void> {
+    const method = request instanceof Request ? request.method : 'GET';
+    if (method !== 'GET') {
+      throw new TypeError(`Cache.put: request method ${method} is unsupported`);
+    }
+    if (response.status === 206) {
+      throw new TypeError('Cache.put: partial response (status 206)');
+    }
+    if (response.type === 'error' || response.type === 'opaqueredirect') {
+      throw new TypeError(`Cache.put: response type ${response.type}`);
+    }
+    if (
+      (response.headers.get('vary') ?? '')
+        .split(',')
+        .some((field) => field.trim() === '*')
+    ) {
+      throw new TypeError('Cache.put: response has "Vary: *"');
+    }
     this.store.set(toKey(request), response.clone());
   }
 

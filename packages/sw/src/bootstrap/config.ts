@@ -35,12 +35,20 @@ export function parseDataConfig(
   if (!scriptElement) return {};
   const raw = scriptElement.dataset.config;
   if (!raw) return {};
+  let parsed: unknown;
   try {
-    return JSON.parse(raw) as BootstrapConfig;
+    parsed = JSON.parse(raw);
   } catch {
     log.warn('[Bootstrap] Invalid data-config JSON, using defaults');
     return {};
   }
+  // Valid JSON that is not an object — `null`, a number, an array — would
+  // throw on the first property read and take the whole bootstrap with it.
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    log.warn('[Bootstrap] data-config is not a JSON object, using defaults');
+    return {};
+  }
+  return parsed as BootstrapConfig;
 }
 
 /**
@@ -82,7 +90,7 @@ export function resolveConfig(
       logo: userConfig.logo ?? d.logo ?? '',
       title: userConfig.title ?? d.title ?? '',
       theme: userConfig.theme ?? d.theme ?? 'auto',
-      color: userConfig.color ?? d.color ?? '#25D366',
+      color: userConfig.color ?? d.color ?? DEFAULT_COLOR,
       showPercentage:
         userConfig.showPercentage ?? d.showPercentage ?? true,
       minProgress:
@@ -94,6 +102,33 @@ export function resolveConfig(
 }
 
 const THEMES: ReadonlySet<string> = new Set(['light', 'dark', 'auto']);
+/** The brand green the widget falls back to. */
+const DEFAULT_COLOR = '#25D366';
+/**
+ * Characters that would end the CSS declaration a colour is written into,
+ * or start a comment inside it. Quotes and backslashes too: an unclosed
+ * string or an escape swallows the rest of the stylesheet. Parentheses are
+ * allowed — `rgb()`, `hsl()` and `var()` are colours a page may
+ * legitimately pass — but only balanced; see `isUnsafeColor`.
+ */
+const CSS_UNSAFE = /[;{}"'\\]|\/\*|<|>/;
+
+/**
+ * Whether [color] cannot be written into the widget's stylesheet as is.
+ *
+ * An unclosed `(` — `rgb(37, 211, 102` with its parenthesis lost — makes
+ * the rest of the stylesheet part of one function, so every rule after the
+ * ring's went with it, the hidden reload button among them.
+ */
+function isUnsafeColor(color: string): boolean {
+  if (CSS_UNSAFE.test(color)) return true;
+  let depth = 0;
+  for (const char of color) {
+    if (char === '(') depth++;
+    else if (char === ')' && --depth < 0) return true;
+  }
+  return depth !== 0;
+}
 const HEX_SHORT = /^#([0-9a-f])([0-9a-f])([0-9a-f])([0-9a-f])?$/i;
 const HEX_6 = /^#[0-9a-f]{6}$/i;
 const HEX_8 = /^#[0-9a-f]{8}$/i;
@@ -165,10 +200,27 @@ function normalizeUi(ui: ResolvedUi): ResolvedUi {
   let color = ui.color;
   if (typeof raw.color === 'string' && HEX_SHORT.test(raw.color)) {
     color = expandShortHex(raw.color);
-  } else if (
-    typeof raw.color !== 'string' ||
-    !(HEX_6.test(raw.color) || HEX_8.test(raw.color))
-  ) {
+  } else if (typeof raw.color !== 'string') {
+    // Not a string at all — `{"color": 16711680}` is a common mistake in
+    // `data-config`, which is untyped JSON. Everything downstream treats
+    // it as one: the contrast correction calls `.trim()` on it and throws,
+    // and a stylesheet that throws leaves the page with no loading screen
+    // and no error screen either.
+    color = DEFAULT_COLOR;
+    warnConfig(
+      `color ${JSON.stringify(raw.color)} is not a string, using ${DEFAULT_COLOR}`,
+    );
+  } else if (isUnsafeColor(raw.color)) {
+    // The value is interpolated into the widget's stylesheet. One
+    // carrying `;` or `}` closes the declaration and corrupts every rule
+    // after it — a loading screen that renders as unstyled text, from a
+    // single stray character.
+    color = DEFAULT_COLOR;
+    warnConfig(
+      `color ${JSON.stringify(raw.color)} is not a usable CSS colour, ` +
+        `using ${DEFAULT_COLOR}`,
+    );
+  } else if (!(HEX_6.test(raw.color) || HEX_8.test(raw.color))) {
     warnConfig(
       `color ${JSON.stringify(raw.color)} is not #rgb, #rrggbb or #rrggbbaa; ` +
         'glow and pulse effects may not render',

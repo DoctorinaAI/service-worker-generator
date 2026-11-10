@@ -30,8 +30,8 @@ A complete **Flutter Web bootstrap replacement** that generates an optimized Ser
 
 ## Requirements
 
-- **Dart SDK**: >= 3.11.0
-- **Flutter**: >= 3.41.0
+- **Dart SDK**: >= 3.8.0
+- **Flutter**: >= 3.32.0 (the release that ships Dart 3.8)
 
 ## Installation
 
@@ -617,7 +617,7 @@ Users install only the Dart package — no Node.js required. The TypeScript sour
 
 ### Prerequisites
 
-- **Dart SDK** >= 3.11.0
+- **Dart SDK** >= 3.8.0 (the package); the example app needs >= 3.11.0
 - **Node.js** >= 18 (for TypeScript development only)
 - **Flutter** >= 3.41.0 (for example app)
 

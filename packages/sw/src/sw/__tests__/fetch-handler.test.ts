@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { handleFetch } from '../fetch-handler';
+import { handleFetch, resetCodeSourceLatch } from '../fetch-handler';
 import { createProgressReporter, type ProgressReporter } from '../progress';
 import { notifyClients } from '../notify';
 import type { ResourceManifest, SWProgressMessage } from '../../shared/types';
@@ -49,13 +49,19 @@ function makeEvent(
   if (options.method) baseInit.method = options.method;
   if (options.headers) baseInit.headers = options.headers;
   const baseRequest = new Request(url, baseInit);
-  const requestLike = new Proxy(baseRequest, {
-    get(target, prop) {
-      if (prop === 'mode' && options.mode) return options.mode;
-      const value = Reflect.get(target, prop);
-      return typeof value === 'function' ? value.bind(target) : value;
-    },
-  });
+  // Only when a mode has to be faked: a `Proxy` is not a `Request` as far
+  // as the platform is concerned (rebuilding one throws on its private
+  // state), and code under test is allowed to rebuild the request it is
+  // given, as a real worker's `event.request` can be.
+  const requestLike = options.mode
+    ? new Proxy(baseRequest, {
+        get(target, prop) {
+          if (prop === 'mode') return options.mode;
+          const value = Reflect.get(target, prop);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      })
+    : baseRequest;
   const extended: Promise<unknown>[] = [];
   const event: FakeFetchEvent = {
     request: requestLike as Request,
@@ -308,13 +314,61 @@ describe('networkFirst (via handleFetch navigate)', () => {
     await cache.put(new Request('index.html'), textResponse('good-cache'));
     installMockFetch(async () => textResponse('bad-gateway', 502));
 
-    const event = makeEvent(`${ORIGIN}/main.dart.js`, { mode: 'navigate' });
+    const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
     handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
     const response = await event._responded!;
     expect(await response.text()).toBe('good-cache');
 
     const stored = await cache.match(new Request('index.html'));
     expect(await stored!.text()).toBe('good-cache');
+  });
+
+  it('answers an error on one of the app’s routes with the shell', async () => {
+    const cache = await mockCaches.open('app-v1');
+    await cache.put(new Request('index.html'), textResponse('good-cache'));
+    installMockFetch(async () => textResponse('not found', 404));
+
+    const event = makeEvent(`${ORIGIN}/chat/42`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    expect(await (await event._responded!).text()).toBe('good-cache');
+  });
+
+  it('keeps the origin’s error page for a file the app links to', async () => {
+    // The shell is not what `/report.pdf` is, whether the origin is slow
+    // or answers with an error.
+    const cache = await mockCaches.open('app-v1');
+    await cache.put(new Request('index.html'), textResponse('good-cache'));
+    installMockFetch(async () => textResponse('no such report', 404));
+
+    const event = makeEvent(`${ORIGIN}/report.pdf`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    const response = await event._responded!;
+    expect(response.status).toBe(404);
+    expect(await response.text()).toBe('no such report');
+  });
+
+  it.each([401, 407])('lets a %i challenge through to the browser', async (status) => {
+    // Answering it with the shell hid the credentials prompt of a site
+    // behind HTTP auth, and the app then failed on `bootstrap.js`.
+    const cache = await mockCaches.open('app-v1');
+    await cache.put(new Request('index.html'), textResponse('good-cache'));
+    installMockFetch(async () => textResponse('log in', status));
+
+    const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    expect((await event._responded!).status).toBe(status);
+  });
+
+  it('keeps the origin’s error page when there is no shell to give', async () => {
+    // Not a synthetic "Offline": the origin did answer.
+    await mockCaches.open('app-v1');
+    installMockFetch(async () => textResponse('server error page', 500));
+
+    const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    const response = await event._responded!;
+    expect(response.status).toBe(500);
+    expect(await response.text()).toBe('server error page');
   });
 
   it('returns a 503 response when neither network nor cache has the page', async () => {
@@ -867,6 +921,9 @@ describe('handleFetch — a newer build is pending', () => {
 
   beforeEach(() => {
     mockCaches = installMockCaches();
+    // Each test is its own worker: the latch that keeps one load on one
+    // build is module state in the worker, and it outlives a test.
+    resetCodeSourceLatch();
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   });
 
@@ -937,6 +994,35 @@ describe('handleFetch — a newer build is pending', () => {
     expect((spy.mock.calls[0]![0] as Request).url).not.toContain('v=h-main');
   });
 
+  it('revalidates that request, so the HTTP cache cannot answer it', async () => {
+    // The URL carries no hash to make it unique. On a host that sends no
+    // `Cache-Control` for `main.dart.js` the browser's own cache is free
+    // to answer it from a heuristically fresh copy — the build being
+    // replaced — and the bypass would serve exactly what it avoids.
+    const spy = installMockFetch(async () => textResponse('build-b'));
+    await mockCaches.open('app-v1');
+    withPendingWorker('installing');
+
+    const event = makeEvent(`${ORIGIN}/main.dart.js`);
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    await event._settled();
+
+    expect((spy.mock.calls[0]![0] as Request).cache).toBe('no-cache');
+  });
+
+  it('leaves a non-retired refill on the page’s own cache mode', async () => {
+    const spy = installMockFetch(async () => textResponse('fresh'));
+    await mockCaches.open('app-v1');
+
+    const event = makeEvent(`${ORIGIN}/main.dart.js`);
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    await event._settled();
+
+    // `fetchRefill` asks by hash instead, which is unique by construction.
+    expect((spy.mock.calls[0]![0] as Request).url).toContain('v=h-main');
+    expect((spy.mock.calls[0]![0] as Request).cache).not.toBe('no-cache');
+  });
+
   it('serves a Required file from the network as well', async () => {
     const cache = await mockCaches.open('app-v1');
     await cache.put(new Request('AssetManifest.json'), textResponse('old'));
@@ -964,6 +1050,27 @@ describe('handleFetch — a newer build is pending', () => {
 
     expect(await (await event._responded!).text()).toBe('cached-logo');
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('does not write an Optional file into this version’s cache', async () => {
+    // Its bytes may be the newer build's, which do not have the size this
+    // manifest records: the write failed and every changed asset was
+    // reported to the page as a worker failure, on every first load after
+    // a deploy.
+    const cache = await mockCaches.open('app-v1');
+    installMockFetch(async () => textResponse('a different size'));
+    withPendingWorker('waiting');
+
+    const event = makeEvent(`${ORIGIN}/logo.png`);
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    await event._settled();
+
+    expect(await (await event._responded!).text()).toBe('a different size');
+    expect(await cache.match(new Request('logo.png'))).toBeUndefined();
+    expect(console.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('Cache write failed'),
+      expect.anything(),
+    );
   });
 
   it('treats a pending worker with an unreadable version as pending', async () => {
@@ -1041,5 +1148,228 @@ describe('handleFetch — a newer build is pending', () => {
 
     expect(await (await event._responded!).text()).toBe('build-a');
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Half of one build and half of another is the one combination that
+   * cannot boot: the engine refuses it with
+   * `WebAssembly.instantiate(): Import #N`, and there is nothing to retry.
+   * Each of these used to produce exactly that mix.
+   */
+  describe('one build per load', () => {
+    /** Serve one code entry from the network, as a retired worker does. */
+    async function serveNewBuild(): Promise<void> {
+      installMockFetch(async () => textResponse('build-b'));
+      withPendingWorker('installing');
+      const first = makeEvent(`${ORIGIN}/main.dart.js`);
+      handleFetch(first as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await first._settled();
+      expect(await (await first._responded!).text()).toBe('build-b');
+    }
+
+    it('fails a file rather than answering it from the older build', async () => {
+      instantTimers();
+      const cache = await mockCaches.open('app-v1');
+      await cache.put(new Request('main.dart.js'), textResponse('build-a'));
+      await cache.put(new Request('AssetManifest.json'), textResponse('old'));
+      await serveNewBuild();
+
+      // The link drops before the next code file.
+      installMockFetch(async () => {
+        throw new TypeError('Failed to fetch');
+      });
+      const second = makeEvent(`${ORIGIN}/AssetManifest.json`);
+      handleFetch(second as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await second._settled();
+
+      const response = await second._responded!;
+      expect(response.status).toBe(503);
+      expect(await response.text()).not.toBe('old');
+    });
+
+    it('keeps going to the network when the newer worker disappears', async () => {
+      // A failed install (a 404 is final) makes the pending worker
+      // `redundant`, and the bypass used to be re-decided per request.
+      const cache = await mockCaches.open('app-v1');
+      await cache.put(new Request('main.dart.js'), textResponse('build-a'));
+      await cache.put(new Request('AssetManifest.json'), textResponse('old'));
+      await serveNewBuild();
+
+      restoreRegistration?.();
+      restoreRegistration = undefined;
+      const spy = installMockFetch(async () => textResponse('new-manifest'));
+
+      const second = makeEvent(`${ORIGIN}/AssetManifest.json`);
+      handleFetch(second as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await second._settled();
+
+      expect(await (await second._responded!).text()).toBe('new-manifest');
+      expect(spy).toHaveBeenCalled();
+    });
+
+    it('keeps answering from the cache once a file had to come from it', async () => {
+      // The reverse order: the origin is mid-deploy for the first code
+      // file, so the page gets this build's copy — and then the next file
+      // must be this build's too, not the newer one the origin now has.
+      instantTimers();
+      const cache = await mockCaches.open('app-v1');
+      await cache.put(new Request('main.dart.js'), textResponse('build-a'));
+      await cache.put(new Request('AssetManifest.json'), textResponse('old'));
+      installMockFetch(async () => textResponse('mid-deploy', 503));
+      withPendingWorker('installing');
+
+      const first = makeEvent(`${ORIGIN}/main.dart.js`);
+      handleFetch(first as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await first._settled();
+      expect(await (await first._responded!).text()).toBe('build-a');
+
+      const spy = installMockFetch(async () => textResponse('new-manifest'));
+      const second = makeEvent(`${ORIGIN}/AssetManifest.json`);
+      handleFetch(second as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await second._settled();
+
+      expect(await (await second._responded!).text()).toBe('old');
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('does not mix when two code files race and one falls back', async () => {
+      // `main.dart.mjs` and `main.dart.wasm` are fetched side by side. The
+      // one that fails is answered from this cache; the other, already on
+      // the network, must not then hand the page the newer build's half.
+      instantTimers();
+      const cache = await mockCaches.open('app-v1');
+      await cache.put(new Request('main.dart.js'), textResponse('build-a'));
+      await cache.put(new Request('AssetManifest.json'), textResponse('old'));
+      let answer!: () => void;
+      const held = new Promise<void>((resolve) => {
+        answer = resolve;
+      });
+      installMockFetch(async (request) => {
+        if (request.url.includes('AssetManifest.json')) {
+          await held;
+          return textResponse('new-manifest');
+        }
+        throw new TypeError('Failed to fetch');
+      });
+      withPendingWorker('installing');
+
+      const slow = makeEvent(`${ORIGIN}/AssetManifest.json`);
+      handleFetch(slow as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      const failing = makeEvent(`${ORIGIN}/main.dart.js`);
+      handleFetch(failing as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await failing._settled();
+      expect(await (await failing._responded!).text()).toBe('build-a');
+
+      answer();
+      await slow._settled();
+      expect(await (await slow._responded!).text()).toBe('old');
+    });
+
+    it('decides again for a newer worker that replaced the pending one', async () => {
+      // An outage latched this worker onto its cache, and the newer
+      // build's install failed in it. Its retry is a different worker,
+      // and a healthy network must not keep loading the previous build.
+      instantTimers();
+      const cache = await mockCaches.open('app-v1');
+      await cache.put(new Request('main.dart.js'), textResponse('build-a'));
+      await cache.put(new Request('AssetManifest.json'), textResponse('old'));
+      installMockFetch(async () => textResponse('mid-deploy', 503));
+      withPendingWorker('installing');
+      const first = makeEvent(`${ORIGIN}/main.dart.js`);
+      handleFetch(first as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await first._settled();
+      expect(await (await first._responded!).text()).toBe('build-a');
+
+      restoreRegistration?.();
+      withPendingWorker('installing', `${ORIGIN}/sw.js?v=v2&retry`);
+      installMockFetch(async () => textResponse('new-manifest'));
+      const second = makeEvent(`${ORIGIN}/AssetManifest.json`);
+      handleFetch(second as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await second._settled();
+      expect(await (await second._responded!).text()).toBe('new-manifest');
+    });
+
+    it('does not take an HTML page for the newer build’s code', async () => {
+      // A host that rewrites unknown paths to the shell answers a file
+      // whose upload has not finished with `200 text/html`.
+      const cache = await mockCaches.open('app-v1');
+      await cache.put(new Request('main.dart.js'), textResponse('build-a'));
+      await cache.put(new Request('AssetManifest.json'), textResponse('old'));
+      installMockFetch(
+        async () =>
+          new Response('<html>shell</html>', {
+            status: 200,
+            headers: { 'Content-Type': 'text/html; charset=utf-8' },
+          }),
+      );
+      withPendingWorker('installing');
+
+      const first = makeEvent(`${ORIGIN}/main.dart.js`);
+      handleFetch(first as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await first._settled();
+      expect(await (await first._responded!).text()).toBe('build-a');
+
+      // And it did not decide that this load runs the newer build.
+      installMockFetch(async () => {
+        throw new TypeError('Failed to fetch');
+      });
+      instantTimers();
+      const second = makeEvent(`${ORIGIN}/AssetManifest.json`);
+      handleFetch(second as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await second._settled();
+      expect(await (await second._responded!).text()).toBe('old');
+    });
+
+    it('takes the newer build’s Optional files once it runs its code', async () => {
+      // New code beside the previous build's icon font or translations is
+      // missing glyphs and keys for the whole load.
+      const cache = await mockCaches.open('app-v1');
+      await cache.put(new Request('logo.png'), textResponse('logo-a'));
+      await serveNewBuild();
+
+      installMockFetch(async () => textResponse('logo-b'));
+      const event = makeEvent(`${ORIGIN}/logo.png`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await event._settled();
+
+      expect(await (await event._responded!).text()).toBe('logo-b');
+      // And this version's cache keeps its own copy.
+      expect(await (await cache.match(new Request('logo.png')))!.text()).toBe('logo-a');
+    });
+
+    it('still answers an Optional file from the cache when offline', async () => {
+      // Not linked against anything: the previous build's image beats none.
+      instantTimers();
+      const cache = await mockCaches.open('app-v1');
+      await cache.put(new Request('logo.png'), textResponse('logo-a'));
+      await serveNewBuild();
+
+      installMockFetch(async () => {
+        throw new TypeError('Failed to fetch');
+      });
+      const event = makeEvent(`${ORIGIN}/logo.png`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await event._settled();
+
+      expect(await (await event._responded!).text()).toBe('logo-a');
+    });
+
+    it('still answers from the cache when the network answered nothing', async () => {
+      // A fully offline load never sets the latch, so the stale copy is
+      // still what a page that cannot reach the origin gets.
+      instantTimers();
+      const cache = await mockCaches.open('app-v1');
+      await cache.put(new Request('main.dart.js'), textResponse('build-a'));
+      installMockFetch(async () => {
+        throw new TypeError('Failed to fetch');
+      });
+      withPendingWorker('installing');
+
+      const event = makeEvent(`${ORIGIN}/main.dart.js`);
+      handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+      await event._settled();
+
+      expect(await (await event._responded!).text()).toBe('build-a');
+    });
   });
 });
