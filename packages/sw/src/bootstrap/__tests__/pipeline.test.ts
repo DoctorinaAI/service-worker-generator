@@ -16,6 +16,7 @@ import { LoadingWidget } from '../loading-widget';
 import { CANVASKIT_CDN_BASE, CANVASKIT_LOCAL_PATH } from '../../shared/constants';
 import { FlutterLoaderMissingError, loadFlutterApp } from '../flutter-loader';
 import type { SWProgressMessage } from '../../shared/types';
+import { DEFAULT_STRINGS } from '../../shared/strings';
 
 // Mock all side-effecty modules so runPipeline runs synchronously-as-possible
 // and we can observe calls without performing real registration or fetches.
@@ -64,6 +65,7 @@ function resolved(): ResolvedConfig {
       showPercentage: false,
       minProgress: 0,
       maxProgress: 90,
+      strings: { ...DEFAULT_STRINGS },
     },
   };
 }
@@ -190,8 +192,12 @@ describe('runPipeline', () => {
     const errSpy = vi.spyOn(api, 'error');
     for (let i = 0; i < 40; i++) await Promise.resolve();
     expect(errSpy).toHaveBeenCalled();
-    const msg = errSpy.mock.calls[0][0];
-    expect(String(msg)).toMatch(/No compatible Flutter build/);
+    // The user reads a sentence; the reason travels beside it (audit #30,
+    // item 5.2).
+    expect(errSpy.mock.calls[0][0]).toBe(DEFAULT_STRINGS.failed);
+    expect(String(errSpy.mock.calls[0][1])).toMatch(/No compatible Flutter build/);
+    expect(api.progress.phase).toBe('error');
+    expect(api.progress.detail).toMatch(/No compatible Flutter build/);
     errorSpy.mockRestore();
   });
 
@@ -335,7 +341,7 @@ describe('runPipeline', () => {
     const errSpy = vi.spyOn(api, 'error');
     for (let i = 0; i < 50; i++) await Promise.resolve();
 
-    expect(errSpy).toHaveBeenCalledWith('Failed to load application');
+    expect(errSpy).toHaveBeenCalledWith(DEFAULT_STRINGS.failed, 'boom');
     expect(api.disposed).toBe(false);
     errorSpy.mockRestore();
   });
@@ -500,7 +506,7 @@ describe('runPipeline — CDN engine fallback', () => {
     const errSpy = vi.spyOn(api, 'error');
     await settle();
     expect(reloadWithLocalCanvasKit).not.toHaveBeenCalled();
-    expect(errSpy).toHaveBeenCalledWith('Failed to load application');
+    expect(errSpy).toHaveBeenCalledWith(DEFAULT_STRINGS.failed, expect.any(String));
   });
 
   it('shows the error when the app module fails, without a fallback', async () => {
@@ -514,7 +520,10 @@ describe('runPipeline — CDN engine fallback', () => {
     const errSpy = vi.spyOn(api, 'error');
     await settle();
     expect(reloadWithLocalCanvasKit).not.toHaveBeenCalled();
-    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('main.dart.mjs'));
+    expect(errSpy).toHaveBeenCalledWith(
+      DEFAULT_STRINGS.failed,
+      expect.stringContaining('main.dart.mjs'),
+    );
   });
 
   it('shows an engine/app mismatch while the CDN engine is fine', async () => {
@@ -526,7 +535,7 @@ describe('runPipeline — CDN engine fallback', () => {
     const errSpy = vi.spyOn(api, 'error');
     await settle();
     expect(reloadWithLocalCanvasKit).not.toHaveBeenCalled();
-    expect(errSpy).toHaveBeenCalledWith(mismatch);
+    expect(errSpy).toHaveBeenCalledWith(DEFAULT_STRINGS.failed, mismatch);
   });
 
   it('does not reload while offline: bootstrap.js is not cached', async () => {
@@ -566,7 +575,10 @@ describe('runPipeline — CDN engine fallback', () => {
     const errSpy = vi.spyOn(api, 'error');
     await settle();
     expect(reloadWithLocalCanvasKit).toHaveBeenCalledOnce();
-    expect(errSpy).toHaveBeenCalledWith(wasmAbort().message);
+    expect(errSpy).toHaveBeenCalledWith(
+      DEFAULT_STRINGS.failed,
+      wasmAbort().message,
+    );
   });
 
   it('does not reload for a missing Flutter loader, which no engine fixes', async () => {
@@ -580,6 +592,7 @@ describe('runPipeline — CDN engine fallback', () => {
     await settle();
     expect(reloadWithLocalCanvasKit).not.toHaveBeenCalled();
     expect(errSpy).toHaveBeenCalledWith(
+      DEFAULT_STRINGS.failed,
       expect.stringContaining('_flutter.loader not available'),
     );
   });
@@ -593,7 +606,7 @@ describe('runPipeline — CDN engine fallback', () => {
     await settle();
     expect(reloadWithLocalCanvasKit).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
-    expect(errSpy).toHaveBeenCalledWith('broken');
+    expect(errSpy).toHaveBeenCalledWith(DEFAULT_STRINGS.failed, 'broken');
   });
 
   it('does not attempt the fallback for errors before the app loads', async () => {
@@ -618,7 +631,10 @@ describe('runPipeline — CDN engine fallback', () => {
     const errSpy = vi.spyOn(api, 'error');
     await settle();
     expect(reloadWithLocalCanvasKit).toHaveBeenCalledOnce();
-    expect(errSpy).toHaveBeenCalledWith('canvaskit.wasm 403');
+    expect(errSpy).toHaveBeenCalledWith(
+      DEFAULT_STRINGS.failed,
+      'canvaskit.wasm 403',
+    );
   });
 
   it('handles one failure only once when both paths report it', async () => {
@@ -891,6 +907,75 @@ describe('runPipeline — SW progress counter', () => {
     expect(stopped).not.toHaveBeenCalled();
     send({ resourceKey: 'manifest.json' });
     expect(api.progress.message).toBe('Loaded 2 of 4 resources');
+  });
+
+  /** Audit #30, item 6.1. */
+  it('hands a worker failure to the handlers and to the page', async () => {
+    const listeners: Array<(event: MessageEvent) => void> = [];
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: {
+        controller: null,
+        addEventListener: (_type: string, fn: (event: MessageEvent) => void) =>
+          listeners.push(fn),
+        removeEventListener: () => undefined,
+      },
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const api = runPipeline(resolved());
+    const seen: unknown[] = [];
+    api.onWorkerFailure((message) => seen.push(message));
+    const onWindow = vi.fn();
+    window.addEventListener('sw-lifecycle', onWindow);
+
+    const message = {
+      type: 'sw-lifecycle',
+      timestamp: 0,
+      swVersion: 'v1',
+      phase: 'activate',
+      status: 'failed',
+      reason: 'full',
+      isQuota: true,
+    };
+    for (const fn of listeners) fn({ data: message } as MessageEvent);
+
+    expect(seen).toEqual([message]);
+    expect(onWindow).toHaveBeenCalledOnce();
+    expect(warn.mock.calls.map((c) => String(c[0])).join(' | ')).toMatch(
+      /activate failed in vv1 \(storage quota\): full/,
+    );
+    window.removeEventListener('sw-lifecycle', onWindow);
+    warn.mockRestore();
+  });
+
+  it('ignores a lifecycle report that is not a failure, beyond the event', async () => {
+    const listeners: Array<(event: MessageEvent) => void> = [];
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: {
+        controller: null,
+        addEventListener: (_type: string, fn: (event: MessageEvent) => void) =>
+          listeners.push(fn),
+        removeEventListener: () => undefined,
+      },
+    });
+    const api = runPipeline(resolved());
+    const seen: unknown[] = [];
+    api.onWorkerFailure((message) => seen.push(message));
+
+    for (const fn of listeners) {
+      fn({
+        data: {
+          type: 'sw-lifecycle',
+          timestamp: 0,
+          swVersion: 'v1',
+          phase: 'install',
+          status: 'completed',
+        },
+      } as MessageEvent);
+    }
+
+    expect(seen).toEqual([]);
   });
 
   it('stops listening once the app has its first frame', async () => {

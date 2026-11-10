@@ -10,6 +10,8 @@ import {
   UNREPORTED_STALLED_TIMEOUT_MS,
 } from '../../shared/constants';
 import { FOREIGN_RELOAD_KEY } from '../sw-registration';
+import { DEFAULT_STRINGS } from '../../shared/strings';
+import { contrastRatio } from '../color';
 
 function uiConfig(
   overrides: Partial<ResolvedConfig['ui']> = {},
@@ -22,6 +24,7 @@ function uiConfig(
     showPercentage: true,
     minProgress: 0,
     maxProgress: 90,
+    strings: { ...DEFAULT_STRINGS },
     ...overrides,
   };
 }
@@ -196,7 +199,11 @@ describe('LoadingWidget showError', () => {
       '.sw-status span:first-child',
     ) as HTMLSpanElement;
     expect(status.textContent).toBe('something broke');
-    expect(status.style.color).toBe('rgb(255, 68, 68)');
+    // Darkened from #ff4444 until it reads on the light background: 3.3:1
+    // was not enough for body text (audit #30, item 5.1).
+    expect(contrastRatio(status.style.color, '#f4fdf7')).toBeGreaterThanOrEqual(
+      4.5,
+    );
     const logo = document.querySelector('.sw-logo-container');
     expect(logo?.classList.contains('is-stalled')).toBe(true);
   });
@@ -336,7 +343,19 @@ describe('LoadingWidget reset action', () => {
     });
   }
 
+  /**
+   * Click the overlay button as a user who has already tried a plain
+   * reload: the first click only reloads now (audit #30, item 5.2), and
+   * these tests are about what the reset itself does.
+   */
   function clickReset(): void {
+    window.sessionStorage.setItem('sw-overlay-reload-tried', '1');
+    const button = document.querySelector<HTMLButtonElement>('.sw-reload-overlay');
+    button?.click();
+  }
+
+  /** The first click on a fresh overlay. */
+  function clickReload(): void {
     const button = document.querySelector<HTMLButtonElement>('.sw-reload-overlay');
     button?.click();
   }
@@ -372,6 +391,122 @@ describe('LoadingWidget reset action', () => {
     }
     window.sessionStorage.clear();
     cleanup();
+  });
+
+
+  /**
+   * Audit #30, item 5.2: the only button on the failure screen cleared a
+   * cache that was probably fine, throwing away a download the user had
+   * already paid for. The failure is far more often a connection that
+   * dropped.
+   */
+  describe('reload before reset', () => {
+    it('reloads on the first click, touching nothing', async () => {
+      const { deleted } = installCaches(['app-cache-v1']);
+      installRegistrations([settledRegistration('https://example.com/sw.js?v=1')]);
+      const w = new LoadingWidget(uiConfig(), 'sw.js');
+      w.mount();
+      w.showError('something broke');
+
+      clickReload();
+      await vi.advanceTimersByTimeAsync(RESET_TIMEOUT_MS + 1);
+
+      expect(reloadSpy).toHaveBeenCalledOnce();
+      expect(deleted).toEqual([]);
+    });
+
+    it('clears the caching layer on the click after that', async () => {
+      const { deleted } = installCaches(['app-cache-v1']);
+      installRegistrations([settledRegistration('https://example.com/sw.js?v=1')]);
+      const first = new LoadingWidget(uiConfig(), 'sw.js');
+      first.mount();
+      first.showError('something broke');
+      clickReload();
+      cleanup();
+
+      // The reload happened and the page came back still broken.
+      const second = new LoadingWidget(uiConfig(), 'sw.js');
+      second.mount();
+      second.showError('something broke');
+      clickReload();
+      await vi.advanceTimersByTimeAsync(RESET_TIMEOUT_MS + 1);
+
+      expect(deleted).toEqual(['app-cache-v1']);
+    });
+
+    it('names the button for what the next click does', () => {
+      installCaches([]);
+      const w = new LoadingWidget(uiConfig(), 'sw.js');
+      w.mount();
+      w.showError('something broke');
+      const button = document.querySelector('.sw-reload-overlay');
+      expect(button?.getAttribute('aria-label')).toBe(DEFAULT_STRINGS.reload);
+
+      window.sessionStorage.setItem('sw-overlay-reload-tried', '1');
+      w.showError('again');
+      expect(button?.getAttribute('aria-label')).toBe(DEFAULT_STRINGS.reset);
+    });
+
+    it('resets on the first click when sessionStorage is blocked', async () => {
+      // Without somewhere to remember the reload, the button does the
+      // thing that helps if anything does.
+      const { deleted } = installCaches(['app-cache-v1']);
+      installRegistrations([settledRegistration('https://example.com/sw.js?v=1')]);
+      const saved = Object.getOwnPropertyDescriptor(window, 'sessionStorage');
+      Object.defineProperty(window, 'sessionStorage', {
+        configurable: true,
+        get() {
+          throw new DOMException('blocked', 'SecurityError');
+        },
+      });
+      try {
+        const w = new LoadingWidget(uiConfig(), 'sw.js');
+        w.mount();
+        w.showError('something broke');
+
+        clickReload();
+        await vi.advanceTimersByTimeAsync(RESET_TIMEOUT_MS + 1);
+
+        expect(deleted).toEqual(['app-cache-v1']);
+      } finally {
+        if (saved) Object.defineProperty(window, 'sessionStorage', saved);
+      }
+    });
+
+    it('says it is offline instead of showing the error', () => {
+      installCaches([]);
+      const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+      const w = new LoadingWidget(uiConfig(), 'sw.js');
+      w.mount();
+      w.showError('WebAssembly.instantiate(): Import #3');
+
+      const status = document.querySelector(
+        '.sw-status span:first-child',
+      ) as HTMLSpanElement;
+      expect(status.textContent).toBe(DEFAULT_STRINGS.offline);
+      online.mockRestore();
+    });
+
+    it('uses the page’s own wording', () => {
+      installCaches([]);
+      const w = new LoadingWidget(
+        uiConfig({
+          strings: { ...DEFAULT_STRINGS, reload: 'Обновить', offline: 'Нет сети' },
+        }),
+        'sw.js',
+      );
+      w.mount();
+      const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+      w.showError('whatever');
+
+      expect(
+        document.querySelector('.sw-reload-overlay')?.getAttribute('aria-label'),
+      ).toBe('Обновить');
+      expect(
+        document.querySelector('.sw-status span:first-child')?.textContent,
+      ).toBe('Нет сети');
+      online.mockRestore();
+    });
   });
 
   it('reloads even when unregister() never settles', async () => {

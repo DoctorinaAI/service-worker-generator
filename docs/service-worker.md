@@ -232,6 +232,34 @@ of the next install, or `cleanupOldCaches`).
 |---------|--------|
 | `skipWaiting` | Call `self.skipWaiting()` to activate waiting SW |
 | `getVersion` | Respond with the SW version and, when the build has one, its Flutter `engineRevision` |
+| `getStatus` | Respond with this worker's version, engine revision, its caches and their entry counts, `navigator.storage.estimate()` and the last lifecycle failure |
+
+Both replies echo a `requestId` when the client sends one.
+
+### Lifecycle notifications
+
+Install failures, a cache swap that failed or ran out of storage, and a
+cache write that was refused used to be logged inside the worker and
+nowhere else, so a page could not tell that its caching layer had given up
+— and neither could whatever collects errors for the app. Each of them now
+also broadcasts:
+
+```typescript
+interface SWLifecycleMessage {
+  type: 'sw-lifecycle';
+  timestamp: number;
+  swVersion: string;
+  phase: 'install' | 'activate' | 'cache';
+  status: 'started' | 'completed' | 'failed';
+  reason?: string;   // the error's own message, when it failed
+  isQuota?: boolean; // the storage quota, not the deploy
+}
+```
+
+The bootstrap forwards every one of these as a `sw-lifecycle` CustomEvent
+on `window` and hands the failures to `Bootstrap.onWorkerFailure`. A page
+that loaded *after* the failure has no broadcast to catch, which is what
+`getStatus`'s `lastError` is for.
 
 ## Resilience
 

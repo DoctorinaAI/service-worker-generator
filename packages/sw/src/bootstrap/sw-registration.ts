@@ -6,6 +6,7 @@ import {
   SW_UPDATE_INSTALL_TIMEOUT_MS,
   STALLED_TIMEOUT_MS,
 } from '../shared/constants';
+import type { SWLifecycleMessage } from '../shared/types';
 import { withTimeout } from '../shared/utils';
 import { logPhase } from './console-logger';
 import { log } from '../shared/logger';
@@ -188,6 +189,38 @@ export function listenForSWMessages(
 
   navigator.serviceWorker.addEventListener('message', handler);
   return () => navigator.serviceWorker.removeEventListener('message', handler);
+}
+
+/**
+ * Forward the worker's lifecycle reports to the page, as a `sw-lifecycle`
+ * CustomEvent on `window` and a log line.
+ *
+ * Install failures, a failed cache swap and quota errors used to be logged
+ * inside the worker and nowhere else, so neither the page nor whatever
+ * collects its errors could know the caching layer had given up (audit
+ * #30, item 6.1). Installed for the life of the page: these arrive long
+ * after the loading screen is gone.
+ */
+export function forwardLifecycleEvents(
+  onFailure?: (message: SWLifecycleMessage) => void,
+): void {
+  const container = navigator.serviceWorker as
+    | ServiceWorkerContainer
+    | undefined;
+  if (typeof container?.addEventListener !== 'function') return;
+  container.addEventListener('message', (event: MessageEvent) => {
+    const data = event.data as SWLifecycleMessage | null;
+    if (data?.type !== 'sw-lifecycle') return;
+    if (data.status === 'failed') {
+      log.warn(
+        `[SW] ${data.phase} failed in v${data.swVersion}` +
+          (data.isQuota ? ' (storage quota)' : '') +
+          (data.reason ? `: ${data.reason}` : ''),
+      );
+      onFailure?.(data);
+    }
+    window.dispatchEvent(new CustomEvent('sw-lifecycle', { detail: data }));
+  });
 }
 
 /**

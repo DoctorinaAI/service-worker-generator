@@ -59,4 +59,7 @@ self.addEventListener('activate', createActivateHandler(cachePrefix, version, ma
 self.addEventListener('fetch', (event: FetchEvent) => {
   handleFetch(event, manifest, cachePrefix, version, progress);
 });
-self.addEventListener('message', createMessageHandler(version, engineRevision));
+self.addEventListener(
+  'message',
+  createMessageHandler(version, cachePrefix, engineRevision),
+);

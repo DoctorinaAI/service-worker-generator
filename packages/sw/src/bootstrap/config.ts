@@ -1,6 +1,7 @@
 import type { BootstrapConfig, BuildConfig } from '../shared/types';
 import { DEFAULT_MIN_PROGRESS, DEFAULT_MAX_PROGRESS } from '../shared/constants';
 import { log, setLogLevel } from '../shared/logger';
+import { resolveStrings, type Strings } from '../shared/strings';
 
 /**
  * The loading widget's settings, every one resolved.
@@ -8,7 +9,12 @@ import { log, setLogLevel } from '../shared/logger';
  * `logLevel` is not among them: it is applied to the logger rather than
  * rendered, so the widget never has to carry a setting it cannot use.
  */
-export type ResolvedUi = Required<Omit<BootstrapConfig, 'logLevel'>>;
+export type ResolvedUi = Required<
+  Omit<BootstrapConfig, 'logLevel' | 'strings'>
+> & {
+  /** Every string the loading screen shows, resolved. */
+  strings: Strings;
+};
 
 /**
  * Merged configuration with all defaults applied.
@@ -70,6 +76,9 @@ export function resolveConfig(
   return {
     build: buildConfig,
     ui: normalizeUi({
+      // Unknown keys and non-string values are dropped inside: this comes
+      // from `data-config`, which is untyped JSON.
+      strings: resolveStrings(userConfig.strings ?? d.strings),
       logo: userConfig.logo ?? d.logo ?? '',
       title: userConfig.title ?? d.title ?? '',
       theme: userConfig.theme ?? d.theme ?? 'auto',

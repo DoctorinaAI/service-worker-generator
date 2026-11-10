@@ -8,6 +8,7 @@ import {
 } from './cache-manager';
 import { readableVersions, workerVersion } from './registration';
 import { COUNTED_CATEGORIES, type ProgressReporter } from './progress';
+import { reportLifecycle } from './lifecycle';
 import { log } from '../shared/logger';
 
 /**
@@ -105,7 +106,11 @@ async function handleInstall(
         });
       },
     );
+    await reportLifecycle(version, 'install', 'completed');
   } catch (error) {
+    // The page's only signal that its caching layer gave up: the log line
+    // below lives in the worker, where nothing on the page can see it.
+    await reportLifecycle(version, 'install', 'failed', error);
     // The half-populated temp cache is kept on purpose: this install is
     // retried on the next page load, and `precacheResources` skips what is
     // already there, so a 30 MB wasm is not downloaded again for the sake

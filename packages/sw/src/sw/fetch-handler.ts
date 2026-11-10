@@ -23,6 +23,7 @@ import {
 } from './cache-manager';
 import { reportIfQuotaExceeded } from './quota';
 import { hasPendingWorker } from './registration';
+import { reportLifecycle } from './lifecycle';
 import type { ProgressReporter } from './progress';
 import { log } from '../shared/logger';
 
@@ -452,10 +453,13 @@ async function cacheFirst(
             new Request(resourceKey),
             response,
             expectedBodySize(resourceKey, entry),
-          ).catch((error: unknown) => {
+          ).catch(async (error: unknown) => {
             if (!reportIfQuotaExceeded(`caching ${resourceKey}`, error)) {
               log.warn(`[SW] Cache write failed for ${resourceKey}:`, error);
             }
+            // Visible to the page, which is where anything that collects
+            // errors for the app lives.
+            await reportLifecycle(version, 'cache', 'failed', error);
           }),
         );
       }

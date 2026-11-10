@@ -8,6 +8,7 @@ import {
 } from './cache-manager';
 import { reportIfQuotaExceeded } from './quota';
 import { allVersionsOrNull } from './registration';
+import { reportLifecycle } from './lifecycle';
 import { log } from '../shared/logger';
 
 declare const self: ServiceWorkerGlobalScope;
@@ -68,6 +69,7 @@ async function handleActivate(
             'and dropping the temp cache:',
           error,
         );
+        await reportLifecycle(version, 'activate', 'failed', error);
         await drop([getTempCacheName(cachePrefix, version)]);
       } else {
         // Start this version over from the network rather than trust a

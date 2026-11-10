@@ -1,11 +1,13 @@
 import type { SWProgressMessage } from '../shared/types';
 import { STAGE_PROGRESS } from '../shared/constants';
+import { format, type StringKey } from '../shared/strings';
 import type { ResolvedConfig } from './config';
 import { BootstrapAPI } from './api';
 import { LoadingWidget } from './loading-widget';
 import { logPhase } from './console-logger';
 import {
   controllerVersion,
+  forwardLifecycleEvents,
   registerServiceWorker,
   listenForSWMessages,
   reloadIfForeignController,
@@ -59,6 +61,11 @@ export function runPipeline(config: ResolvedConfig): BootstrapAPI {
   const onSwUpdate = (): void => api.notifyUpdateAvailable();
   window.addEventListener('sw-update-available', onSwUpdate);
 
+  // The worker's own failures, for the page and for anything that reports
+  // errors for the app. Installed for the life of the page: a quota error
+  // or a failed swap arrives long after the loading screen is gone.
+  forwardLifecycleEvents((message) => api.notifyWorkerFailure(message));
+
   void runPipelineWork(api, config, widget);
   return api;
 }
@@ -69,6 +76,9 @@ async function runPipelineWork(
   widget: LoadingWidget,
 ): Promise<void> {
   const { build, ui } = config;
+
+  /** What this page calls [key]; see `shared/strings.ts`. */
+  const text = (key: StringKey): string => ui.strings[key];
 
   const mapProgress = (internal: number): number =>
     ui.minProgress + (internal / 100) * (ui.maxProgress - ui.minProgress);
@@ -82,7 +92,7 @@ async function runPipelineWork(
   };
 
   // Stage 0: visible 0% beat so the console shows bootstrap started.
-  updateProgress('init', STAGE_PROGRESS.start, 'Starting');
+  updateProgress('init', STAGE_PROGRESS.start, text('starting'));
 
   // Attach the SW message listener BEFORE registering so we don't miss
   // install-time progress messages (navigator.serviceWorker does not
@@ -191,7 +201,10 @@ async function runPipelineWork(
           updateProgress(
             'assets',
             internalPercent,
-            `Loaded ${count} of ${totalResourcesCount} resources`,
+            format(text('resources'), {
+              done: count,
+              total: totalResourcesCount,
+            }),
           );
         })
       : null;
@@ -244,7 +257,7 @@ async function runPipelineWork(
     }
 
     // Stage 1: Init
-    updateProgress('init', STAGE_PROGRESS.init, 'Checking environment');
+    updateProgress('init', STAGE_PROGRESS.init, text('environment'));
     logPhase('Init', 'Detecting browser capabilities');
     const caps = detectBrowserCaps();
     logPhase(
@@ -254,7 +267,7 @@ async function runPipelineWork(
     );
 
     // Stage 2: Service Worker
-    updateProgress('sw', STAGE_PROGRESS.sw, 'Registering service worker');
+    updateProgress('sw', STAGE_PROGRESS.sw, text('worker'));
     const registration = await registerServiceWorker(
       build.swFilename,
       build.swVersion,
@@ -267,18 +280,14 @@ async function runPipelineWork(
       (await settleUpdateAtBootstrap(
         registration,
         build.engineRevision,
-        () => updateProgress('sw', STAGE_PROGRESS.sw, 'Installing update'),
+        () => updateProgress('sw', STAGE_PROGRESS.sw, text('update')),
       ))
     ) {
       return;
     }
 
     // Stage 3: CanvasKit
-    updateProgress(
-      'canvaskit',
-      STAGE_PROGRESS.canvaskit,
-      'Loading rendering engine',
-    );
+    updateProgress('canvaskit', STAGE_PROGRESS.canvaskit, text('engine'));
 
     const activeBuild = selectBuild(build.builds, caps);
     if (!activeBuild) {
@@ -304,7 +313,7 @@ async function runPipelineWork(
     );
 
     // Stage 4-5: Assets + Dart Entry
-    updateProgress('assets', STAGE_PROGRESS.canvaskit + 5, 'Loading application');
+    updateProgress('assets', STAGE_PROGRESS.canvaskit + 5, text('app'));
 
     // Everything from here is the engine and the app downloading, and the
     // only thing that reports on it is the worker serving this page. If
@@ -337,7 +346,7 @@ async function runPipelineWork(
         const reason = error instanceof Error ? error.message : String(error);
         if (reloadWithLocalCanvasKit(reason)) return;
       }
-      reportPipelineError(api, error);
+      reportPipelineError(api, ui, error);
     };
     const onAppFailure = (error: unknown): void => {
       if (appFailureHandled) return;
@@ -359,14 +368,26 @@ async function runPipelineWork(
       onAppFailure(error);
     }
   } catch (error) {
-    reportPipelineError(api, error);
+    reportPipelineError(api, ui, error);
     stopListening();
   }
 }
 
-function reportPipelineError(api: BootstrapAPI, error: unknown): void {
-  const message =
-    error instanceof Error ? error.message : 'Failed to load application';
+/**
+ * Show a failure to the user and hand the reason to whoever asked for it.
+ *
+ * The widget gets a sentence a user can act on; the engine's own message —
+ * `WebAssembly.instantiate(): Import #3 "…"` — goes to the console and to
+ * `Bootstrap.progress.detail`, where an error reporter can pick it up.
+ * Showing that text on the loading screen told the user nothing and hid
+ * what little they could do about it (audit #30, item 5.2).
+ */
+function reportPipelineError(
+  api: BootstrapAPI,
+  ui: ResolvedConfig['ui'],
+  error: unknown,
+): void {
+  const detail = error instanceof Error ? error.message : String(error);
   log.error('[Bootstrap] Pipeline error:', error);
-  api.error(message);
+  api.error(ui.strings.failed, detail);
 }

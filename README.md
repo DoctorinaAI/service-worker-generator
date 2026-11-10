@@ -241,6 +241,7 @@ Do not keep Flutter's `<script>{{flutter_bootstrap_js}}</script>`: `flutter buil
 | `minProgress`    | number  | `0`         | Minimum progress value for the bootstrap range |
 | `maxProgress`    | number  | `90`        | Maximum progress value (Dart manages the rest) |
 | `logLevel`       | string  | `--log-level` | `"silent"`, `"error"`, `"warn"` or `"info"`: how much reaches the console, overriding the generated default |
+| `strings`        | object  | English     | What the loading screen says, by key — `starting`, `environment`, `worker`, `update`, `engine`, `app`, `resources` (`{done}`/`{total}`), `initializing`, `running`, `failed`, `offline`, `reload`, `reset`. Unknown keys and non-strings are ignored |
 
 ## Local Development
 
@@ -331,7 +332,7 @@ After this sequence, `build/web/` contains exactly the artifacts that should shi
 | `--ignore`           |       | Ignore category glob overrides        | —                 |
 | `--keep-maps`        |       | Keep `.js.map`, `.js.symbols` and `.wasm.map` files | `false`           |
 | `--no-cleanup`       |       | Skip Flutter file cleanup             | `false`           |
-| `--comments`         | `-c`  | Reserved; has no effect yet           | `false`           |
+| `--comments`         | `-c`  | Deprecated; warns and has no effect   | `false`           |
 | `--config`           |       | Path to YAML config file              | `sw.yaml`         |
 | `--theme`            |       | Loading widget theme                  | `auto`            |
 | `--logo`             |       | Loading widget logo path              | —                 |
@@ -447,9 +448,11 @@ external JSObject get bootstrapProgress;
 | Method                                 | Description                                                                                                                                                 |
 | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Bootstrap.dispose()`                  | Remove loading widget, clean up listeners                                                                                                                   |
-| `Bootstrap.progress`                   | Current state: `{ phase, percent, message }`                                                                                                                |
+| `Bootstrap.progress`                   | Current state: `{ phase, percent, message }`, plus `detail` once `phase` is `error` — the raw reason, which the screen does not show                        |
 | `Bootstrap.subscribe(callback)`        | Subscribe to progress changes, returns unsubscribe function                                                                                                 |
 | `Bootstrap.onUpdateAvailable(handler)` | Runs when a newer Service Worker has installed and is waiting; notifications stay active for the whole page session, even after the loading widget is gone. |
+| `Bootstrap.onError(handler)`           | Runs when loading fails, with the `error` state; `detail` carries the engine's or the network's own message. Also reaches `subscribe` consumers as `phase: 'error'` |
+| `Bootstrap.onWorkerFailure(handler)`   | Runs when the service worker reports a failed install, a cache swap that ran out of storage, or a refused cache write. The app is loading or running — this is a degraded caching layer, not a failed load |
 | `Bootstrap.applyUpdate(reload = true)` | Activates the waiting Service Worker and reloads the page into the updated build. Resolves `true` (and reloads, by default) once the page's controller changes or the waiting worker reaches `activated`, which covers a hard-reloaded page with no controller. Resolves `false`, without reloading, if no worker is waiting, at once if it turns `redundant`, or if neither lands within 10s. |
 
 Alternatively, the loading widget auto-disposes on the `flutter-first-frame` event.
@@ -583,6 +586,12 @@ messages with `counted: true`, and only from your own `swVersion` — see
 | ------------------------ | --------------------------------------------- |
 | `'skipWaiting'`          | Immediately activate a waiting service worker |
 | `{ type: 'getVersion' }` | Respond with the SW version and engine revision |
+| `{ type: 'getStatus' }`  | Respond with the caches and their sizes, the storage estimate and the last worker failure |
+
+The worker also broadcasts `sw-lifecycle` messages when an install, a cache
+swap or a cache write fails; the bootstrap re-dispatches them as a
+`sw-lifecycle` event on `window` and calls `Bootstrap.onWorkerFailure`
+handlers with the failures.
 
 ## Architecture
 

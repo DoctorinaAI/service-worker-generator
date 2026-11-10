@@ -79,7 +79,7 @@ manifest entirely.
 |--------|---------|-------------|
 | `--keep-maps` | `false` | Keep `.js.map`, `.js.symbols` and `.wasm.map` files (removed by default) |
 | `--no-cleanup` | `false` | Leave the input tree alone: keep Flutter's files and leave `{{sw_version}}` unsubstituted (otherwise it is replaced with the HTML-escaped version) |
-| `--comments` | `false` | Reserved: accepted, but has no effect on the output yet |
+| `--comments` | `false` | Deprecated: accepted and warned about, with no effect. `sw.js` and `bootstrap.js` are built and minified before the generator sees them, so there is nothing to comment |
 | `--log-level` | `info` | How much the generated `sw.js` and `bootstrap.js` print on the browser console: `silent`, `error`, `warn` or `info` |
 | `--config` | `sw.yaml` | Path to YAML config file |
 

@@ -1,4 +1,8 @@
-import type { ProgressState, BootstrapPhase } from '../shared/types';
+import type {
+  ProgressState,
+  BootstrapPhase,
+  SWLifecycleMessage,
+} from '../shared/types';
 import type { LoadingWidget } from './loading-widget';
 import { logProgress } from './console-logger';
 import { activateWaitingSW } from './sw-registration';
@@ -6,6 +10,10 @@ import { log } from '../shared/logger';
 
 type ProgressCallback = (state: ProgressState) => void;
 type UpdateHandler = () => void | Promise<void>;
+type ErrorHandler = (state: Readonly<ProgressState>) => void | Promise<void>;
+type WorkerFailureHandler = (
+  message: Readonly<SWLifecycleMessage>,
+) => void | Promise<void>;
 
 /**
  * Global Bootstrap API exposed as window.Bootstrap.
@@ -18,6 +26,8 @@ export class BootstrapAPI {
   };
   private subscribers = new Set<ProgressCallback>();
   private updateHandlers = new Set<UpdateHandler>();
+  private errorHandlers = new Set<ErrorHandler>();
+  private workerFailureHandlers = new Set<WorkerFailureHandler>();
   private _disposed = false;
   private lastLoggedPercent = -1;
 
@@ -80,10 +90,76 @@ export class BootstrapAPI {
   }
 
   /**
-   * Show an error in the loading widget.
+   * Show a failure: in the widget, in the progress state, and to the
+   * handlers registered with [onError].
+   *
+   * [message] is what the user reads; [detail] is the raw reason — an
+   * engine message such as `WebAssembly.instantiate(): Import #3 …` — kept
+   * out of the widget and handed to consumers that report failures.
+   *
+   * The state is published even after dispose: a failure that arrives once
+   * the app is running still concerns whoever asked to hear about them.
    */
-  error(message: string): void {
+  error(message: string, detail?: string): void {
+    this._state = {
+      phase: 'error',
+      percent: this._state.percent,
+      message,
+      ...(detail ? { detail } : {}),
+    };
     this.guardWidget('showError', () => this.widget.showError(message));
+    for (const cb of this.subscribers) {
+      try {
+        cb(this._state);
+      } catch (e) {
+        log.error('[Bootstrap] Subscriber error:', e);
+      }
+    }
+    for (const handler of this.errorHandlers) {
+      try {
+        void handler(this._state);
+      } catch (e) {
+        log.error('[Bootstrap] Error handler threw:', e);
+      }
+    }
+  }
+
+  /**
+   * Internal: hand a worker lifecycle failure to the registered handlers.
+   *
+   * Not an `error()`: the app is loading or already running, and a cache
+   * the worker could not write is a degraded caching layer rather than a
+   * failed load. Handlers that report errors want to hear about it all the
+   * same.
+   */
+  notifyWorkerFailure(message: SWLifecycleMessage): void {
+    for (const handler of this.workerFailureHandlers) {
+      try {
+        void handler(message);
+      } catch (e) {
+        log.error('[Bootstrap] Worker failure handler threw:', e);
+      }
+    }
+  }
+
+  /**
+   * Subscribe to service worker failures — a failed install, a cache swap
+   * that ran out of storage, a cache write that was refused. Returns an
+   * unsubscribe function.
+   */
+  onWorkerFailure(handler: WorkerFailureHandler): () => void {
+    this.workerFailureHandlers.add(handler);
+    return () => this.workerFailureHandlers.delete(handler);
+  }
+
+  /**
+   * Subscribe to loading failures. Handlers receive the `error` state,
+   * whose `detail` carries the raw reason. Returns an unsubscribe
+   * function.
+   */
+  onError(handler: ErrorHandler): () => void {
+    this.errorHandlers.add(handler);
+    return () => this.errorHandlers.delete(handler);
   }
 
   /**
@@ -174,6 +250,8 @@ export function installGlobalAPI(api: BootstrapAPI): void {
     },
     subscribe: (cb: ProgressCallback) => api.subscribe(cb),
     onUpdateAvailable: (h: UpdateHandler) => api.onUpdateAvailable(h),
+    onError: (h: ErrorHandler) => api.onError(h),
+    onWorkerFailure: (h: WorkerFailureHandler) => api.onWorkerFailure(h),
     /**
      * Apply a waiting SW update and reload the page. Resolves to `false`
      * when no update is pending or SW is unavailable — caller can use that

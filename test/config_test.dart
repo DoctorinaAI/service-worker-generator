@@ -331,6 +331,24 @@ max-progress: 80
       });
     });
 
+    // Audit #30, section 7: the flag was documented as "reserved" and did
+    // nothing, which reads as if it does something.
+    group('--comments', () {
+      test('warns when it is switched on', () async {
+        final out = await captureOutput(
+          () => GeneratorConfig.parse(const ['--comments']),
+        );
+        expect(out.result.comments, isTrue);
+        expect(out.stderr, contains('--comments has no effect'));
+      });
+
+      test('is quiet when it is not', () async {
+        final out = await captureOutput(() => GeneratorConfig.parse(const []));
+        expect(out.result.comments, isFalse);
+        expect(out.stderr, isEmpty);
+      });
+    });
+
     group('log level', () {
       test('defaults to info', () async {
         final out = await captureOutput(() => GeneratorConfig.parse(const []));
