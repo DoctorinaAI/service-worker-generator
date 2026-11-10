@@ -245,6 +245,13 @@ async function networkFirst(
           `[SW] The origin did not answer the navigation within ` +
             `${NAVIGATION_TIMEOUT_MS}ms; booting from the cached shell`,
         );
+        // The page boots from the copy it has, and the fresh one still
+        // lands in the cache when it arrives: without this, a connection
+        // that is reliably slower than the deadline would never refresh
+        // the shell at all.
+        if (isShellRequest && !hasPendingWorker()) {
+          keepAlive(event, storeLateShell(network, cacheName, notifyIndex));
+        }
         return fallbackToCache();
       }
       response = answered;
@@ -279,6 +286,36 @@ async function networkFirst(
   }
 
   return response;
+}
+
+/**
+ * Store the shell from a navigation the cache already answered.
+ *
+ * Never rejects: the page has its response, and this is the next load's
+ * benefit. A non-ok answer is released rather than stored, as the
+ * network-first path does.
+ */
+async function storeLateShell(
+  network: Promise<Response>,
+  cacheName: string,
+  notifyIndex: (status: 'updated') => Promise<void>,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await network;
+  } catch {
+    // The origin never answered. Nothing to store, nothing to report.
+    return;
+  }
+  if (!response.ok || response.type === 'opaqueredirect' || response.status === 0) {
+    try {
+      response.body?.cancel().catch(() => undefined);
+    } catch {
+      // Nothing to release.
+    }
+    return;
+  }
+  await storeShell(cacheName, response, notifyIndex);
 }
 
 /**

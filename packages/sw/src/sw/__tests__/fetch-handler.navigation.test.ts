@@ -571,6 +571,49 @@ describe('navigation handling — the origin takes its time', () => {
     expect(spy).toHaveBeenCalledOnce();
   });
 
+  it('stores the shell that arrived after the deadline', async () => {
+    // Otherwise a connection reliably slower than the deadline would keep
+    // booting from a shell that is never refreshed.
+    const cache = await mockCaches.open(CONTENT_CACHE);
+    await cache.put(new Request('index.html'), textResponse(SHELL));
+    instantTimers();
+    let answer: (response: Response) => void = () => undefined;
+    (globalThis as unknown as { fetch: unknown }).fetch = vi.fn(
+      () => new Promise<Response>((resolve) => (answer = resolve)),
+    );
+
+    const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+
+    // The page gets the copy it has...
+    expect(await (await event._responded!).text()).toBe(SHELL);
+    // ...and the origin answers a moment later.
+    answer(textResponse('<html>fresh</html>'));
+    await event._settled();
+
+    const stored = await cache.match(new Request('index.html'));
+    expect(await stored!.text()).toBe('<html>fresh</html>');
+  });
+
+  it('stores nothing when the origin never answers', async () => {
+    const cache = await mockCaches.open(CONTENT_CACHE);
+    await cache.put(new Request('index.html'), textResponse(SHELL));
+    instantTimers();
+    let fail: (error: Error) => void = () => undefined;
+    (globalThis as unknown as { fetch: unknown }).fetch = vi.fn(
+      () => new Promise<Response>((_, reject) => (fail = reject)),
+    );
+
+    const event = makeEvent(`${ORIGIN}/`, { mode: 'navigate' });
+    handleFetch(event as unknown as FetchEvent, manifest(), 'app', 'v1', progress());
+    expect(await (await event._responded!).text()).toBe(SHELL);
+
+    fail(new TypeError('Failed to fetch'));
+    await event._settled();
+
+    expect(await (await cache.match(new Request('index.html')))!.text()).toBe(SHELL);
+  });
+
   it('still prefers the navigation preload response', async () => {
     const cache = await mockCaches.open(CONTENT_CACHE);
     await cache.put(new Request('index.html'), textResponse(SHELL));

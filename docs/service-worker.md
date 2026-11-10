@@ -96,7 +96,10 @@ into the old cache failed the body size check (#36).
   after `NAVIGATION_TIMEOUT_MS` (3 s), because the user is watching a blank
   page and the shell boots the app, which loads its own route. Without a
   cached copy there is nothing better to wait for, so the fetch gets as long
-  as it needs, exactly as a page with no worker would
+  as it needs, exactly as a page with no worker would. An answer that
+  arrives after the deadline still refreshes the cached shell in the
+  background, so a connection reliably slower than it does not keep booting
+  from a copy that is never updated
 - Only `/` and `/index.html` may *write* that cached shell. Another
   same-origin page — a static legal page, a download, an OAuth callback —
   answers a navigation with its own HTML, and storing that under the shell
