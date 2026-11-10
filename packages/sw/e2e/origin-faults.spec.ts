@@ -38,6 +38,13 @@ test.describe('origin faults', () => {
     return true;
   }
 
+  /**
+   * Answers a fault is holding back. Cleared after every test, not at the
+   * end of its body: a test that fails first would leave them to fire
+   * after `host.stop()`, inside the next test or its retry.
+   */
+  let held: NodeJS.Timeout[] = [];
+
   test.beforeEach(async () => {
     host = new Host();
     await host.start();
@@ -45,6 +52,8 @@ test.describe('origin faults', () => {
   });
 
   test.afterEach(async () => {
+    for (const timer of held) clearTimeout(timer);
+    held = [];
     await host.stop();
   });
 
@@ -88,7 +97,6 @@ test.describe('origin faults', () => {
     test.setTimeout(60_000);
     await settle(page, host.origin);
 
-    const held: NodeJS.Timeout[] = [];
     host.fault = ({ pathname }, res) => {
       if (pathname !== '/' && pathname !== '/index.html') return false;
       held.push(
@@ -110,7 +118,6 @@ test.describe('origin faults', () => {
     // nose: engines differ in when they start the preload.
     expect(waited).toBeLessThan(12_000);
     await expect(page).toHaveTitle('Service Worker');
-    for (const timer of held) clearTimeout(timer);
   });
 
   test('a navigation answered from the shell does not hold the next build back', async ({
@@ -126,22 +133,33 @@ test.describe('origin faults', () => {
     const page = await context.newPage();
     await settle(page, host.origin);
 
-    const held: NodeJS.Timeout[] = [];
+    // The real shell, told apart by its title, and read now: by the time
+    // the timer fires the test may be over and `host.root` gone.
+    const late = fs
+      .readFileSync(path.join(host.root, 'index.html'), 'utf8')
+      .replace(/<title>[^<]*<\/title>/, '<title>Late shell</title>');
+    expect(late).toContain('Late shell');
+    const HOLD_MS = 5_000;
     host.fault = ({ pathname }, res) => {
       if (pathname !== '/' && pathname !== '/index.html') return false;
       held.push(
         setTimeout(() => {
           res
             .writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' })
-            .end(fs.readFileSync(path.join(host.root, 'index.html')));
-        }, 5_000),
+            .end(late);
+        }, HOLD_MS),
       );
       return true;
     };
     // From another document: WebKit treats a load of the URL already shown
     // differently, and that one may never reach the worker's deadline.
     await page.goto('about:blank');
+    const started = Date.now();
     await page.goto(host.origin, { waitUntil: 'commit' });
+    // The deadline fired: the page committed before the origin answered,
+    // on the cached shell. Without this the test passed just as well with
+    // no deadline at all, and with no late shell to wait for.
+    expect(Date.now() - started).toBeLessThan(HOLD_MS);
     await expect(page).toHaveTitle('Service Worker');
     host.fault = undefined;
 
@@ -172,7 +190,6 @@ test.describe('origin faults', () => {
       await expect.poll(() => markerOf(next), { timeout: 30_000 }).toBe('b');
       controller = await controllerUrl(next);
     }
-    for (const timer of held) clearTimeout(timer);
     expect(controller).toContain('-b');
   });
 

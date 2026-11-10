@@ -214,6 +214,46 @@ describe('LoadingWidget showError', () => {
     w.dispose();
     expect(() => w.showError('late')).not.toThrow();
   });
+
+  it('stops looking like it is still loading', () => {
+    // The ellipsis kept animating after "could not be loaded", and the
+    // stall timer of the last update still fired on the error screen.
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const w = new LoadingWidget(uiConfig());
+      w.mount();
+      w.updateProgress(40, 'loading');
+      w.showError('something broke');
+
+      expect((document.querySelector('.sw-loading-dots') as HTMLElement).hidden).toBe(true);
+      vi.advanceTimersByTime(10 * 60_000);
+      expect(warn).not.toHaveBeenCalledWith('[Bootstrap] Loading appears stalled');
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('LoadingWidget reload button', () => {
+  afterEach(cleanup);
+
+  it('is out of reach until it is shown', () => {
+    // Transparent was not enough: an invisible button took keyboard focus,
+    // and Enter reloaded the page mid-download.
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const css = document.querySelector('style')!.textContent!;
+    const rule = (selector: string): string => {
+      const start = css.indexOf(`${selector} {`);
+      return css.slice(start, css.indexOf('}', start));
+    };
+    expect(rule('      .sw-reload-overlay')).toContain('visibility: hidden');
+    expect(rule('.sw-logo-container.is-stalled .sw-reload-overlay')).toContain(
+      'visibility: visible',
+    );
+  });
 });
 
 describe('LoadingWidget stall detection', () => {

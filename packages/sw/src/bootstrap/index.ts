@@ -11,7 +11,7 @@
 
 import type { BuildConfig } from '../shared/types';
 import { findBootstrapScript, parseDataConfig, resolveConfig } from './config';
-import { setLogLevel } from '../shared/logger';
+import { log, setLogLevel } from '../shared/logger';
 import { logVersionBanner } from './console-logger';
 import { installGlobalAPI } from './api';
 import { runPipeline } from './pipeline';
@@ -25,8 +25,23 @@ const buildConfig: BuildConfig =
 // `data-config`, which `resolveConfig` applies as soon as it is parsed.
 setLogLevel(buildConfig.logLevel);
 
+/**
+ * Set once a bootstrap has started on this page. A shell that includes
+ * `bootstrap.js` twice — a template edited by hand, a kept
+ * `flutter_bootstrap.js` beside it — otherwise ran two pipelines, two
+ * loading screens and two `_flutter.loader.load()` calls, and the second
+ * `window.Bootstrap` replaced the first.
+ */
+const STARTED = '__swBootstrapStarted';
+
 // Initialize when the DOM is ready
 function init(): void {
+  const flags = window as unknown as Record<string, unknown>;
+  if (flags[STARTED]) {
+    log.warn('[Bootstrap] bootstrap.js was loaded twice; ignoring the second copy');
+    return;
+  }
+  flags[STARTED] = true;
   const script = findBootstrapScript();
   const userConfig = parseDataConfig(script);
   const config = resolveConfig(buildConfig, userConfig);

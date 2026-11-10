@@ -292,8 +292,10 @@ jobs:
           SW_E2E_BROWSERS: all
         run: npx playwright test
 
-      - name: 📤 Upload Playwright report on failure
-        if: failure()
+      - name: 📤 Upload Playwright report
+        # Always, not only on failure: a test that passed on a retry is
+        # marked flaky there, with the trace of the attempt that failed.
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: playwright-report

@@ -317,7 +317,22 @@ describe('runPipeline', () => {
       resolved().build.builds,
       expect.any(Function),
       expect.any(Function),
+      { initializing: 'Initializing Flutter engine', running: 'Starting application' },
     );
+  });
+
+  it('hands the loader the page’s own words for its last two stages', async () => {
+    // Both are overridable in `data-config.strings`, and were ignored: the
+    // loader said them in English whatever the page asked for.
+    const load = vi.mocked(loadFlutterApp);
+    load.mockClear();
+    const cfg = resolved();
+    cfg.ui.strings = { ...cfg.ui.strings, initializing: 'Запуск движка', running: 'Запуск' };
+
+    runPipeline(cfg);
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+
+    expect(load.mock.calls[0]![5]).toEqual({ initializing: 'Запуск движка', running: 'Запуск' });
   });
 
   it('forwards the Flutter loader\'s progress into the widget range', async () => {

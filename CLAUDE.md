@@ -86,7 +86,7 @@ dart run sw:generate --input=build/web
 ## Coding Conventions
 
 ### Dart
-- SDK: >=3.11.0
+- SDK: >=3.8.0 (CI runs the analyzer and unit tests on exactly 3.8)
 - Line length: 80 characters
 - Strict analysis: strict-casts, strict-raw-types, strict-inference
 - Public API docs required

@@ -51,6 +51,12 @@ test.describe('the CanvasKit CDN', () => {
     // engine it then asks for has been fetched.
     await expect.poll(() => fromCdn.length, { timeout: 60_000 }).toBeGreaterThan(0);
     await expect.poll(() => markerOf(page), { timeout: 30_000 }).toBe('a');
+    // A request to gstatic.com alone proves nothing: the bootstrap's probe
+    // goes there whether it then succeeds or not, and a load that fell back
+    // to the local engine passed this test. The engine is running once the
+    // app has a view, and none of it may have come from the origin.
+    await expect(page.locator('flutter-view')).toBeAttached({ timeout: 60_000 });
+    expect(localEngineRequests()).toBe(0);
   });
 
   test('falls back to the engine the build ships', async ({ page }) => {

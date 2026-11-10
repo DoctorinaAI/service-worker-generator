@@ -155,22 +155,29 @@ async function reuseFromPreviousVersion(
  * previous deploy's file there is the one outcome worse than downloading
  * it again, because the swap then pairs it with this build's other files.
  *
+ * The hash is all that is checked. A copy only ever carries it once its
+ * body has been stored whole: `cache.put` streams through the size guard
+ * and stores nothing when that guard fails, and a re-encoded copy whose
+ * size cannot match was accepted deliberately (`storeAfterSizeMismatch`).
+ * Comparing `Content-Length` as well turned every copy from a host that
+ * compresses — the header then counts encoded bytes, or is absent — into a
+ * re-download, which is most hosts and exactly the large files a resumed
+ * install exists to keep.
+ *
  * A copy with no hash on it — written by a worker from before this record
- * existed — is re-fetched, which is the safe answer. So is a re-encoded
- * response, whose declared length is the encoded one.
+ * existed — is re-fetched, which is the safe answer.
  */
 async function alreadyPrecached(
   cache: Cache,
   path: string,
   entry: ResourceEntry,
 ): Promise<boolean> {
-  const expected = expectedBodySize(path, entry);
-  if (expected === undefined) return false;
+  // Not the shell: it is network-first, and rewritten by navigations.
+  if (expectedBodySize(path, entry) === undefined) return false;
   try {
     const present = await cache.match(new Request(path));
     if (!present) return false;
     if (present.headers.get(HASH_HEADER) !== entry.hash) return false;
-    if (declaredBodyLength(present) !== expected) return false;
     log.info(`[SW] ${path} is already precached, keeping it`);
     return true;
   } catch {

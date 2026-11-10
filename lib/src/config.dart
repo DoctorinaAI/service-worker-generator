@@ -98,6 +98,11 @@ class GeneratorConfig {
 
   /// Parse configuration from CLI args, optional YAML file, and env.
   /// Priority: CLI args > YAML > env > defaults.
+  ///
+  /// This is the command line's parser: given `--help`, it prints the usage
+  /// and ends the process with status 0, so a build script calling it in
+  /// process must not pass that flag through. Construct a
+  /// [GeneratorConfig] directly instead where that matters.
   // ignore: prefer_constructors_over_static_methods
   static GeneratorConfig parse(List<String> args) {
     final parser = _buildArgParser();

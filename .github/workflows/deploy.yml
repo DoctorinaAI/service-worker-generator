@@ -76,7 +76,10 @@ jobs:
         run: dart analyze --fatal-warnings lib/ bin/ test/
 
       - name: 🧪 Run Dart unit tests
-        run: dart test --exclude-tags=integration
+        # The CLI tests start a VM that compiles `bin/generate.dart` from
+        # source; on a busy runner that can pass the default 30 s, and a
+        # timeout here blocks the release until someone re-runs it.
+        run: dart test --timeout=60s --exclude-tags=integration
 
       - name: 🔍 Check what would be published
         timeout-minutes: 3
@@ -137,6 +140,10 @@ jobs:
   deploy:
     name: "Deploy to Pub.dev"
     needs: [verify, verify-oldest]
+    # Only a tag publishes. A manual run (`workflow_dispatch`) still
+    # verifies, but skips the tag comparison, so it must not publish
+    # whatever version its branch's pubspec happens to have.
+    if: github.ref_type == 'tag'
     permissions:
       id-token: write
     uses: dart-lang/setup-dart/.github/workflows/publish.yml@6afc89df92d6eb3834022f73cd65adc8cdfcb92d # v1.8.1

@@ -368,6 +368,7 @@ async function runPipelineWork(
           updateProgress('dart-entry', percent, message);
         },
         onAppFailure,
+        { initializing: text('initializing'), running: text('running') },
       );
     } catch (error) {
       onAppFailure(error);

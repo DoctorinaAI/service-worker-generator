@@ -160,15 +160,46 @@ interface BootstrapAPI {
    * Returns an unsubscribe function.
    */
   subscribe(callback: (state: ProgressState) => void): () => void;
+
+  /**
+   * Loading failed. Called once, with the `error` state, whose `detail`
+   * carries the raw reason. Returns an unsubscribe function.
+   */
+  onError(handler: (state: ProgressState) => void | Promise<void>): () => void;
+
+  /**
+   * The service worker failed at something the page cannot see: an
+   * install, a cache swap that ran out of storage, a refused cache write.
+   * Returns an unsubscribe function.
+   */
+  onWorkerFailure(
+    handler: (message: SWLifecycleMessage) => void | Promise<void>,
+  ): () => void;
+
+  /**
+   * A newer build has installed and is waiting. Lives past `dispose()`.
+   * Returns an unsubscribe function.
+   */
+  onUpdateAvailable(handler: () => void | Promise<void>): () => void;
+
+  /**
+   * Activate the waiting build and, unless [reload] is `false`, reload.
+   * Resolves `false` when nothing is waiting.
+   */
+  applyUpdate(reload?: boolean): Promise<boolean>;
 }
 
 interface ProgressState {
-  /** Current pipeline phase name */
-  phase: 'init' | 'sw' | 'canvaskit' | 'assets' | 'dart-entry' | 'dart-init';
+  /** Current pipeline phase name; `error` once loading has failed. */
+  phase:
+    | 'init' | 'sw' | 'canvaskit' | 'assets' | 'dart-entry' | 'dart-init'
+    | 'error';
   /** Progress percentage (0-100) */
   percent: number;
   /** Human-readable status message */
   message: string;
+  /** The raw reason, when `phase` is `error`; never shown to the user. */
+  detail?: string;
 }
 ```
 
@@ -272,6 +303,6 @@ the shell; replace it in `web/index.html` with
 - Log which source was used
 
 ### SW Registration Fallback
-- Timeout: 4s
+- Timeout: 10s for the whole stage (`SW_BOOTSTRAP_TIMEOUT_MS`)
 - On timeout: continue without SW (app loads normally, no caching)
 - On error: log warning, continue without SW

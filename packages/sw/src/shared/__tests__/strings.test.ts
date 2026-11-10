@@ -85,3 +85,18 @@ describe('format', () => {
     expect(resolved).toEqual({ ...DEFAULT_STRINGS });
   });
 });
+
+describe('without Object.hasOwn', () => {
+  // Safari before 15.4. The counter threw on every message, and a page
+  // with any `strings` override never started.
+  it('still resolves and formats', () => {
+    const own = Object.hasOwn;
+    try {
+      delete (Object as { hasOwn?: unknown }).hasOwn;
+      expect(resolveStrings({ reload: 'Обновить' }).reload).toBe('Обновить');
+      expect(format('{done} of {total}', { done: 1, total: 2 })).toBe('1 of 2');
+    } finally {
+      Object.hasOwn = own;
+    }
+  });
+});

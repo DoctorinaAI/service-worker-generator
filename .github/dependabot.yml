@@ -30,9 +30,13 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
 
-  # The actions the workflows run, which hold the publish token.
+  # The actions the workflows run, which hold the publish token. `/` only
+  # covers `.github/workflows/`; the composite actions under
+  # `.github/actions/` pin their own and need listing.
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /.github/actions/*
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

@@ -343,7 +343,8 @@ export async function loadCanvasKit(
 
 /**
  * Remember a failed CDN probe so later loads in this tab session skip it:
- * where gstatic.com is blocked the probe costs up to two 8 s timeouts.
+ * where gstatic.com is blocked the probe costs up to its 3 s timeout
+ * (`CANVASKIT_PROBE_TIMEOUT_MS`) on every load.
  */
 function rememberProbeFailure(reason: string): void {
   const result = pinToLocal(`CDN probe failed: ${reason}`);

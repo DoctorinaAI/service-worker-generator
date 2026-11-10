@@ -75,28 +75,48 @@ that is true, it stops using and filling its cache for the pre-cached set:
   `main.dart.js`, the browser's own HTTP cache is otherwise free to answer
   it from a heuristically fresh copy — the previous build's — and the
   bypass would quietly serve what it exists to avoid.
-- Nothing is written to this version's content cache, the app shell
-  included: the new shell next to the previous build's code is the one pair
-  that cannot boot, and the new worker's install stores the matching one.
+- Nothing is written to this version's content cache, the app shell and
+  lazily cached files included: the new shell next to the previous build's
+  code is the one pair that cannot boot, the new worker's install stores
+  the matching one, and a changed font or image fetched now has the new
+  build's bytes, which fail this manifest's size check.
 - `Optional` files (fonts, images, the engine) are still served from the
-  cache. They are not what decides which build is running, and a tab that
-  has been open since before the deploy keeps them.
-- If the network cannot answer — offline, or an origin mid-deploy — the
-  cached copy is served after all, with a warning. Old code beats no code.
-  That holds for a whole build, not for one file out of two: once this
-  worker has answered any of those files *from the network*, it stops
-  falling back to its own copies and fails the request instead (503, and
-  an `error` progress event the page can show). Half of one build linked
-  against half of another is the one combination that cannot boot, and it
-  fails inside the engine with nothing to retry.
+  cache: a tab that has been open since before the deploy keeps them. Once
+  this worker has answered a code file from the network, they come from
+  the network as well (revalidated, as above), because the new code beside
+  the previous build's icon font or translations is missing glyphs and
+  keys. When the network cannot answer, the cached copy still does: an
+  image is not linked against anything.
+- If the network cannot answer — offline, an origin mid-deploy, or a host
+  that rewrites a file it does not have yet to the app shell (`200
+  text/html`) — the cached copy is served after all, with a warning. Old
+  code beats no code. That holds for a whole build, not for one file out
+  of two:
+  - once this worker has answered any of those files *from the network*,
+    it stops falling back to its own copies and fails the request instead
+    (503, and an `error` progress event the page can show);
+  - once it has had to answer one *from its cache*, the rest come from its
+    cache too, as if nothing were pending.
+
+  Half of one build linked against half of another is the one combination
+  that cannot boot, and it fails inside the engine with nothing to retry.
 
 Only the browser creates those workers, and only for a `sw.js` whose bytes
 differ from the one it has, so the state is read from the registration on
-every fetch. One thing is remembered: that the network has already answered
-for the new build. A pending worker can go `redundant` mid-load — its own
+every fetch. One thing is remembered: which build the code has come from
+(`codeSource`). A pending worker can go `redundant` mid-load — its own
 install fails on a 404, which is final — and without that latch the next
 file would come from this cache, which is the same mixed build by another
-route.
+route. The latch is checked again when a request finishes, not only when
+it starts: `main.dart.mjs` and `main.dart.wasm` are fetched side by side,
+and one that fell back to the cache meanwhile decides for the other. It is
+decided against one pending worker; a different one (the newer build's
+install failed and the browser is trying again) decides afresh.
+
+The latch belongs to the worker, not to a tab. Once any tab has loaded the
+newer build's code, a tab still running the previous build also gets
+Optional files from the network: fonts and images are not linked against
+the code, and the previous build's tab is a reload away from the new one.
 
 The previous behaviour was to serve the cache: the first load after a deploy
 ran the previous build's `main.dart.js` inside the new build's page until
@@ -131,6 +151,11 @@ into the old cache failed the body size check (#36).
   the origin however long that takes: answering it with the app shell
   because it was slow would replace a page that was coming with the wrong
   page entirely
+- The same split decides what an error from the origin gets. On a route,
+  a `4xx` or `5xx` is answered with the cached shell, which boots the app;
+  a file-like path keeps the origin's own error page, and so does any
+  navigation with no shell cached. A `401` or `407` always reaches the
+  browser, so a site behind HTTP auth still gets its credentials prompt
 - Only `/` and `/index.html` may *write* that cached shell. Another
   same-origin page — a static legal page, a download, an OAuth callback —
   answers a navigation with its own HTML, and storing that under the shell

@@ -29,6 +29,7 @@ function setReadyState(state: DocumentReadyState): void {
 
 describe('bootstrap entry point', () => {
   beforeEach(() => {
+    delete (window as unknown as Record<string, unknown>).__swBootstrapStarted;
     runPipeline.mockClear();
     installGlobalAPI.mockClear();
     logVersionBanner.mockClear();
@@ -55,6 +56,24 @@ describe('bootstrap entry point', () => {
     document.dispatchEvent(new Event('DOMContentLoaded'));
     document.dispatchEvent(new Event('DOMContentLoaded'));
     expect(runPipeline).toHaveBeenCalledOnce();
+  });
+
+  it('starts once when bootstrap.js is on the page twice', async () => {
+    // Two pipelines meant two loading screens and two loader calls, and the
+    // second `window.Bootstrap` replaced the first.
+    setReadyState('interactive');
+    await loadEntry();
+    await loadEntry();
+    expect(runPipeline).toHaveBeenCalledOnce();
+    expect(installGlobalAPI).toHaveBeenCalledOnce();
+  });
+
+  it('falls back to the defaults for a data-config that is not an object', async () => {
+    document.body.innerHTML = `<script data-sw-bootstrap data-config='null'></script>`;
+    setReadyState('complete');
+    await loadEntry();
+    expect(runPipeline).toHaveBeenCalledOnce();
+    expect(runPipeline.mock.calls[0]![0].ui.color).toBe('#25D366');
   });
 
   it('installs the globals for the API the pipeline returned, after starting it', async () => {

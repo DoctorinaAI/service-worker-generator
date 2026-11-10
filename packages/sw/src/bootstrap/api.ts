@@ -86,7 +86,9 @@ export class BootstrapAPI {
    * or late callbacks cannot regress the displayed percent.
    */
   updateAndLog(phase: BootstrapPhase, percent: number, message: string): void {
-    if (this._disposed) return;
+    // After a failure `update` ignores this, and so must the console: a
+    // progress line printed after the error read as a load that went on.
+    if (this._disposed || this._state.phase === 'error') return;
     const prev = this.lastLoggedPercent;
     const prevMessage = this._state.message;
     const clamped = Math.max(prev, Math.min(percent, 100));

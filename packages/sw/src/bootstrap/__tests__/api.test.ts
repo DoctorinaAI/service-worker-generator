@@ -199,6 +199,17 @@ describe('BootstrapAPI', () => {
       expect(api.progress.percent).toBe(0);
     });
 
+    it('prints nothing once the load has failed', () => {
+      // A progress line after the error read as a load that went on.
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      api.error('failed');
+      logSpy.mockClear();
+      api.updateAndLog('dart-entry', 95, 'late progress');
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(api.progress.phase).toBe('error');
+      errorSpy.mockRestore();
+    });
+
     it('logs only when percent advances or message changes', () => {
       api.updateAndLog('sw', 30, 'same');
       const afterFirst = logSpy.mock.calls.length;

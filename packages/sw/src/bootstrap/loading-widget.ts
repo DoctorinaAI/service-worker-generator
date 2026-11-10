@@ -48,6 +48,8 @@ export class LoadingWidget {
    * that arrives afterwards may undo the error screen.
    */
   private errored = false;
+  /** The animated ellipsis after the status line; gone on the error screen. */
+  private dots: HTMLElement | null = null;
 
   /**
    * @param config - Widget appearance and progress range.
@@ -173,6 +175,10 @@ export class LoadingWidget {
     this.statusContainer?.setAttribute('role', 'alert');
     this.statusContainer?.setAttribute('aria-live', 'assertive');
     this.errored = true;
+    // Nothing is loading any more: no ellipsis that says otherwise, and no
+    // stall timer to report a stall on a screen that reported a failure.
+    this.clearStallTimer();
+    if (this.dots) this.dots.hidden = true;
     this.showReloadOverlay();
   }
 
@@ -389,6 +395,8 @@ export class LoadingWidget {
     this.statusText.textContent = this.text('starting');
     const dots = document.createElement('span');
     dots.className = 'sw-loading-dots';
+    dots.setAttribute('aria-hidden', 'true');
+    this.dots = dots;
     statusContainer.appendChild(this.statusText);
     statusContainer.appendChild(dots);
     container.appendChild(statusContainer);
@@ -762,12 +770,17 @@ export class LoadingWidget {
         cursor: pointer;
         opacity: 0;
         pointer-events: none;
+        /* Not just transparent: an invisible button still took keyboard
+           focus, with an invisible focus ring, and Enter reloaded the page
+           mid-download. Screen readers listed it too. */
+        visibility: hidden;
         transform: translate(-50%, -50%) scale(0.6);
         box-shadow:
           0 10px 28px rgba(0, 0, 0, 0.28),
           0 0 0 0 ${colorAlpha};
         transition:
           opacity 0.35s ease,
+          visibility 0.35s,
           transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1),
           box-shadow 0.3s ease,
           background-color 0.3s ease;
@@ -775,6 +788,7 @@ export class LoadingWidget {
       .sw-logo-container.is-stalled .sw-reload-overlay {
         opacity: 1;
         pointer-events: auto;
+        visibility: visible;
         transform: translate(-50%, -50%) scale(1);
         animation: sw-reload-pulse 2.2s ease-out infinite;
       }

@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- **Dart SDK** >= 3.11.0
+- **Dart SDK** >= 3.8.0 for the package (CI checks exactly that floor); the example app needs >= 3.11.0
 - **Node.js** >= 18.0.0
 - **Flutter** >= 3.41.0 (for building the example app)
 

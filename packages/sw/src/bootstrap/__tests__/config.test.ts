@@ -252,6 +252,13 @@ describe('resolveConfig — runtime validation', () => {
     '} * { display: none }',
     '#fff /* comment',
     '</style><script>x</script>',
+    // An unclosed function or string swallows the rest of the stylesheet,
+    // the hidden reload button's rule among it.
+    'rgb(37, 211, 102',
+    'rgb(37, 211, 102))',
+    "red'",
+    'url("x',
+    'red\\',
   ])('refuses the CSS-breaking accent %s', (value) => {
     expect(ui({ color: value }).color).toBe('#25D366');
     expect(warnSpy).toHaveBeenCalled();

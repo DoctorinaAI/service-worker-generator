@@ -207,6 +207,43 @@ describe('createInstallHandler', () => {
     expect(await stored!.text()).toBe('core');
   });
 
+  it('keeps a stored copy from a host that compresses', async () => {
+    // The stored response keeps the network's headers: on a host that
+    // gzips, `Content-Length` counts encoded bytes or is absent, so a
+    // length check rejected every copy and a resumed install downloaded
+    // everything again — the case resuming exists for.
+    const manifest: ResourceManifest = {
+      'main.dart.js': {
+        name: 'main.dart.js',
+        size: 4,
+        hash: 'h-core',
+        category: ResourceCategory.Core,
+      },
+    };
+    const temp = await mockCaches.open('app-temp-v6');
+    await temp.put(
+      new Request('main.dart.js'),
+      new Response('core', {
+        headers: { 'Content-Encoding': 'br', 'Content-Length': '3', 'x-sw-hash': 'h-core' },
+      }),
+    );
+    const spy = installMockFetch(async () => textResponse('fetched'));
+
+    const handler = createInstallHandler(
+      'app',
+      'v6',
+      manifest,
+      createProgressReporter('v6', manifest),
+    );
+    const event = makeEvent();
+    handler(event as unknown as ExtendableEvent);
+    await event._promise;
+
+    expect(spy).not.toHaveBeenCalled();
+    const stored = await temp.match(new Request('main.dart.js'));
+    expect(await stored!.text()).toBe('core');
+  });
+
   it('re-fetches an entry whose stored length is another build’s', async () => {
     // A caller that pins `--version` deploys twice under one name, so the
     // temp cache may hold the previous build's copy of the same path.
