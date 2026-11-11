@@ -329,6 +329,12 @@ jobs:
         timeout-minutes: 10
         env:
           SW_E2E_BROWSERS: all
+          # Firefox refuses to start when $HOME belongs to someone else, and
+          # in this image the job runs as root while /github/home belongs to
+          # pwuser. Chromium and WebKit do not care; Firefox fails every
+          # spec with "Running Nightly as root in a regular user's session is
+          # not supported". This is the workaround Playwright itself prints.
+          HOME: /root
         run: npx playwright test
 
       - name: 📤 Upload Playwright report
