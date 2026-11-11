@@ -220,11 +220,10 @@ jobs:
       - name: 🧪 Run unit tests
         run: dart test --platform=vm --timeout=60s --exclude-tags=integration
 
-  e2e:
-    name: "E2E (Flutter + Playwright)"
+  e2e-build:
+    name: "E2E build (Flutter + generator)"
     runs-on: ubuntu-24.04
-    # The steps inside have their own budgets, which now add up past 20.
-    timeout-minutes: 30
+    timeout-minutes: 20
     needs: [typescript]
     steps:
       - name: 📦 Checkout repository
@@ -266,30 +265,76 @@ jobs:
       - name: 🧰 Run Dart CLI on example build
         run: dart run sw:generate --input=example/build/web
 
-      # Three engines are ~500 MB of download, which has taken longer than
-      # the step's budget on a slow runner and failed the job with nothing
-      # wrong in the code. Cached per Playwright version — the browser
-      # revisions are pinned by it — and given room to download when the
-      # cache misses.
-      - name: 🎭 Cache Playwright browsers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # The generated build is everything the browser half needs, and it is
+      # the only thing it cannot produce for itself: that half runs in a
+      # container with no Flutter and no Dart in it.
+      - name: 📤 Upload the generated build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          name: example-build-web
+          path: example/build/web
+          retention-days: 1
+          include-hidden-files: true
 
-      - name: 🎭 Install Playwright browsers
-        working-directory: packages/sw
-        timeout-minutes: 15
-        # `--with-deps` installs the system libraries the engines need, which
-        # the cache does not carry; on a hit the browsers themselves are
-        # already in place and only those packages are installed.
-        run: npx playwright install --with-deps chromium firefox webkit
+  e2e:
+    # Named as it always was: a required status check is matched by name.
+    name: "E2E (Flutter + Playwright)"
+    runs-on: ubuntu-24.04
+    # Microsoft's own image, with the three engines and their system
+    # libraries already in it. This job used to install both on a bare
+    # runner, which meant ~500 MB of browsers and an apt run for ~115 MB of
+    # libraries — and on 2026-11-11 the runners could not resolve
+    # azure.archive.ubuntu.com at all ("Temporary failure resolving"), so
+    # every attempt spent its whole budget on DNS timeouts and the job
+    # failed four times in a row without running a test. Nothing on
+    # *.ubuntu.com resolved; mcr.microsoft.com did, in the same step, which
+    # is the whole argument for getting the browsers from here instead.
+    #
+    # The tag must match the `@playwright/test` version in package-lock.json.
+    # The step below fails loudly when it does not, rather than letting
+    # Playwright quietly re-download browsers the image already has.
+    container:
+      image: mcr.microsoft.com/playwright:v1.65.0-noble
+    timeout-minutes: 20
+    needs: [e2e-build]
+    steps:
+      - name: 📦 Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: 📥 Install Node dependencies
+        run: npm ci
+
+      - name: 🎭 Check the image against the pinned Playwright
+        # Explicitly bash: inside a container the default shell is `sh`, and
+        # dash has no `pipefail`.
+        shell: bash
+        run: |
+          set -euo pipefail
+          want=1.65.0
+          have=$(node -p "require('./node_modules/@playwright/test/package.json').version")
+          if [ "$have" != "$want" ]; then
+            echo "::error::package-lock.json pins Playwright $have, but this job runs mcr.microsoft.com/playwright:v$want-noble. Update the container image tag to match."
+            exit 1
+          fi
+          echo "Playwright $have, browsers from the image at ${PLAYWRIGHT_BROWSERS_PATH:-the default path}"
+
+      - name: 📥 Download the generated build
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          name: example-build-web
+          path: example/build/web
 
       - name: 🧪 Run Playwright E2E
         working-directory: packages/sw
         timeout-minutes: 10
         env:
           SW_E2E_BROWSERS: all
+          # Firefox refuses to start when $HOME belongs to someone else, and
+          # in this image the job runs as root while /github/home belongs to
+          # pwuser. Chromium and WebKit do not care; Firefox fails every
+          # spec with "Running Nightly as root in a regular user's session is
+          # not supported". This is the workaround Playwright itself prints.
+          HOME: /root
         run: npx playwright test
 
       - name: 📤 Upload Playwright report
