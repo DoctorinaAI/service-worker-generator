@@ -63,6 +63,7 @@ function resolved(): ResolvedConfig {
       theme: 'auto',
       color: '#25D366',
       showPercentage: false,
+      showWidget: true,
       minProgress: 0,
       maxProgress: 90,
       strings: { ...DEFAULT_STRINGS },
@@ -733,6 +734,82 @@ describe('runPipeline — widget failures never block the app', () => {
     expect(load).toHaveBeenCalledOnce();
     // The API state still advances for subscribers.
     expect(api.progress.phase).not.toBe('init');
+  });
+});
+
+describe('runPipeline — a page that draws its own loading screen', () => {
+  let logSpy: ReturnType<typeof vi.spyOn>;
+  let listenerTracker: ReturnType<typeof trackWindowListeners>;
+
+  function withoutWidget(): ResolvedConfig {
+    const config = resolved();
+    config.ui.showWidget = false;
+    return config;
+  }
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    document.head.innerHTML = '';
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    listenerTracker = trackWindowListeners();
+  });
+
+  afterEach(() => {
+    listenerTracker.restore();
+    logSpy.mockRestore();
+    vi.restoreAllMocks();
+  });
+
+  it('puts nothing in the document', () => {
+    runPipeline(withoutWidget());
+    expect(document.getElementById('sw-loading')).toBeNull();
+    expect(document.head.querySelector('style')).toBeNull();
+  });
+
+  it('does not even construct the widget', () => {
+    // Not "constructed and never mounted": a widget that exists arms the
+    // stall timer behind a screen nobody can see.
+    const mount = vi.spyOn(LoadingWidget.prototype, 'mount');
+    const update = vi.spyOn(LoadingWidget.prototype, 'updateProgress');
+    const api = runPipeline(withoutWidget());
+    api.update('sw', 10, 'Registering service worker');
+    expect(mount).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('still loads the app and reports every stage', async () => {
+    const load = vi.mocked(loadFlutterApp);
+    load.mockClear();
+    const api = runPipeline(withoutWidget());
+    const seen: string[] = [];
+    api.subscribe((state) => {
+      seen.push(state.phase);
+    });
+    for (let i = 0; i < 50; i++) await Promise.resolve();
+    expect(load).toHaveBeenCalledOnce();
+    expect(seen.length).toBeGreaterThan(0);
+    expect(api.progress.percent).toBeGreaterThan(0);
+  });
+
+  it('still reports a failure, and disposes without throwing', () => {
+    const api = runPipeline(withoutWidget());
+    const errors: string[] = [];
+    api.onError((state) => {
+      errors.push(state.message);
+    });
+    api.error('nope', 'raw reason');
+    expect(errors).toEqual(['nope']);
+    expect(api.progress.phase).toBe('error');
+    expect(api.progress.detail).toBe('raw reason');
+    expect(() => api.dispose()).not.toThrow();
+    expect(api.disposed).toBe(true);
+  });
+
+  it('leaves the page background alone', () => {
+    // The widget paints `html, body` as well as itself, which would be the
+    // generator overriding a page that has its own loading screen.
+    runPipeline(withoutWidget());
+    expect(document.head.innerHTML).not.toContain('sw-loading');
   });
 });
 

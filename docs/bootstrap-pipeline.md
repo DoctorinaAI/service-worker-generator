@@ -79,6 +79,12 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
 
 ## Loading Widget
 
+Optional: `--no-widget` at generation time, or `data-config='{"showWidget":false}'`
+per deployment, draws nothing at all and leaves the loading screen to the page,
+which follows the load through `window.Bootstrap`. Nothing below applies then —
+not the DOM, not the stylesheet, not the `html, body` background — and no stall
+timer runs. See [Drawing your own loading screen](../README.md#drawing-your-own-loading-screen).
+
 ### Visual Design
 - **Circular SVG progress ring** — animated, responsive
 - **Logo image** — configurable via `data-config.logo`
@@ -279,6 +285,7 @@ the shell; replace it in `web/index.html` with
 | `theme` | string | `"auto"` | `"light"`, `"dark"`, or `"auto"` |
 | `color` | string | `"#25D366"` | Accent color for progress ring |
 | `showPercentage` | boolean | `true` | Show numeric percentage |
+| `showWidget` | boolean | `true` | Draw the loading screen at all. `false` renders nothing — no DOM, no stylesheet, no page background — and the page draws its own, following `window.Bootstrap`. The generator bakes it in with `--no-widget` |
 | `minProgress` | number | `0` | Minimum progress value |
 | `maxProgress` | number | `90` | Maximum progress value (Dart manages the rest) |
 | `logLevel` | string | `--log-level` | `"silent"`, `"error"`, `"warn"` or `"info"`: how much the bootstrap prints on the console, overriding the level the generator baked in. It never changes what the bootstrap does |

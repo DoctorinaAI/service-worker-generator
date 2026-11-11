@@ -36,17 +36,19 @@ import { log } from '../shared/logger';
  */
 export function runPipeline(config: ResolvedConfig): BootstrapAPI {
   const { ui } = config;
-  const widget = new LoadingWidget(
-    ui,
-    config.build.swFilename,
-    config.build.cachePrefix,
-  );
+  // `showWidget: false` means the page draws its own loading screen and
+  // follows the load through `window.Bootstrap`. Nothing is constructed:
+  // no DOM, no stylesheet, no page background, and no stall timer behind a
+  // screen nobody can see.
+  const widget = ui.showWidget
+    ? new LoadingWidget(ui, config.build.swFilename, config.build.cachePrefix)
+    : null;
   const api = new BootstrapAPI(widget);
   // The widget is cosmetic: a page with Trusted Types, a strict CSP or an
   // unusual DOM must still get its app, so a failed mount is logged and
   // the pipeline goes on without a loading screen.
   try {
-    widget.mount();
+    widget?.mount();
   } catch (error) {
     log.error('[Bootstrap] Loading widget failed to mount; continuing without it:', error);
   }
@@ -73,7 +75,7 @@ export function runPipeline(config: ResolvedConfig): BootstrapAPI {
 async function runPipelineWork(
   api: BootstrapAPI,
   config: ResolvedConfig,
-  widget: LoadingWidget,
+  widget: LoadingWidget | null,
 ): Promise<void> {
   const { build, ui } = config;
 
@@ -146,7 +148,7 @@ async function runPipelineWork(
             sawOwnVersion = true;
             // Something is narrating this load after all, so silence means
             // a stall again.
-            widget.expectProgress();
+            widget?.expectProgress();
           }
 
           // Latch the denominator once. A single worker reports a constant
@@ -323,7 +325,7 @@ async function runPipelineWork(
     // silence is a slow link rather than a stall. The overlay's reset
     // would throw away the download in progress.
     if (controllerVersion() !== build.swVersion) {
-      widget.expectSilence();
+      widget?.expectSilence();
     }
 
     // An engine served from the CDN passed a one-byte probe of its `.js`,

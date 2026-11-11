@@ -31,7 +31,8 @@ export class BootstrapAPI {
   private _disposed = false;
   private lastLoggedPercent = -1;
 
-  constructor(private widget: LoadingWidget) {}
+  /** `null` when the page asked for no loading screen (`showWidget`). */
+  constructor(private widget: LoadingWidget | null) {}
 
   /** Current progress state (readonly). */
   get progress(): Readonly<ProgressState> {
@@ -68,7 +69,7 @@ export class BootstrapAPI {
 
     this._state = { phase, percent, message };
     this.guardWidget('updateProgress', () =>
-      this.widget.updateProgress(percent, message),
+      this.widget?.updateProgress(percent, message),
     );
 
     for (const cb of this.subscribers) {
@@ -117,7 +118,7 @@ export class BootstrapAPI {
       message,
       ...(detail ? { detail } : {}),
     };
-    this.guardWidget('showError', () => this.widget.showError(message));
+    this.guardWidget('showError', () => this.widget?.showError(message));
     for (const cb of this.subscribers) {
       try {
         cb(this._state);
@@ -242,7 +243,7 @@ export class BootstrapAPI {
   dispose(): void {
     if (this._disposed) return;
     this._disposed = true;
-    this.guardWidget('dispose', () => this.widget.dispose());
+    this.guardWidget('dispose', () => this.widget?.dispose());
     this.subscribers.clear();
   }
 }

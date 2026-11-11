@@ -368,3 +368,54 @@ describe('resolveConfig — log level', () => {
     expect('logLevel' in resolved.ui).toBe(false);
   });
 });
+
+describe('resolveConfig — showWidget', () => {
+  const build: BuildConfig = {
+    engineRevision: 'abc123',
+    swVersion: '12345',
+    swFilename: 'sw.js',
+    builds: [],
+  };
+
+  it('defaults to drawing the loading screen', () => {
+    expect(resolveConfig(build, {}).ui.showWidget).toBe(true);
+  });
+
+  it('takes the generator default baked into the artifact', () => {
+    expect(
+      resolveConfig({ ...build, uiDefaults: { showWidget: false } }, {}).ui.showWidget,
+    ).toBe(false);
+  });
+
+  it('lets the page override the generator per deployment', () => {
+    expect(
+      resolveConfig({ ...build, uiDefaults: { showWidget: false } }, { showWidget: true })
+        .ui.showWidget,
+    ).toBe(true);
+  });
+
+  it('reads "false" as false, since data-config is untyped JSON', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const ui = resolveConfig(
+      build,
+      { showWidget: 'false' as unknown as boolean },
+    ).ui;
+    expect(ui.showWidget).toBe(false);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('never lets an unusable value be what removes the screen', () => {
+    // A page that did not deliberately opt out must not end up with no
+    // loading screen because of a typo in its `data-config`.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(
+      resolveConfig(build, { showWidget: 'maybe' as unknown as boolean }).ui
+        .showWidget,
+    ).toBe(true);
+    expect(
+      resolveConfig(build, { showWidget: 1 as unknown as boolean }).ui.showWidget,
+    ).toBe(true);
+    warn.mockRestore();
+  });
+});
