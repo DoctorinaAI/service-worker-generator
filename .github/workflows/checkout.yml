@@ -305,6 +305,9 @@ jobs:
         run: npm ci
 
       - name: 🎭 Check the image against the pinned Playwright
+        # Explicitly bash: inside a container the default shell is `sh`, and
+        # dash has no `pipefail`.
+        shell: bash
         run: |
           set -euo pipefail
           want=1.65.0
