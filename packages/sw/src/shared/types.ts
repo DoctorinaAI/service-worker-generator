@@ -82,6 +82,17 @@ export interface BootstrapConfig {
   color?: string;
   /** Show numeric percentage */
   showPercentage?: boolean;
+  /**
+   * Whether to draw the loading screen at all (default `true`).
+   *
+   * `false` renders nothing: no DOM, no stylesheet, not even the page
+   * background. Everything else — the service worker, CanvasKit, the
+   * Flutter loader, `window.Bootstrap` — is unchanged, so a page that
+   * draws its own loading screen follows the load through
+   * `Bootstrap.subscribe` and `Bootstrap.onError` and is not left hiding
+   * one it cannot turn off.
+   */
+  showWidget?: boolean;
   /** Minimum progress value (default: 0) */
   minProgress?: number;
   /** Maximum progress value (default: 90) */

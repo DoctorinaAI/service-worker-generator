@@ -22,6 +22,7 @@ function uiConfig(
     theme: 'auto',
     color: '#25D366',
     showPercentage: true,
+    showWidget: true,
     minProgress: 0,
     maxProgress: 90,
     strings: { ...DEFAULT_STRINGS },

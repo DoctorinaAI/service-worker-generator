@@ -43,7 +43,7 @@ Or add as a dev dependency:
 
 ```yaml
 dev_dependencies:
-  sw: ^0.4.0
+  sw: ^0.5.0
 ```
 
 Pin the exact version in CI. `sw.js` and `bootstrap.js` are the app's boot
@@ -51,15 +51,59 @@ path, so a template change should arrive through a reviewed bump rather than
 on the next unrelated build:
 
 ```shell
-dart pub global activate sw 0.4.0
+dart pub global activate sw 0.5.0
 ```
 
 That puts an `sw` command on `PATH`; `dart pub global run sw:generate` works
 the same way without it.
 
-Note that a pre-release is not matched by a plain caret constraint — `0.5.0-dev`
-sorts *before* `0.5.0`, so it falls outside `^0.4.0`. Pin a pre-release
-exactly, or write `^0.5.0-dev` to accept it now and the release later.
+Note that a pre-release is not matched by a plain caret constraint — `0.6.0-dev`
+sorts *before* `0.6.0`, so it falls outside `^0.5.0`. Pin a pre-release
+exactly, or write `^0.6.0-dev` to accept it now and the release later.
+
+### Drawing your own loading screen
+
+`--no-widget` (or `no-widget: true` in `sw.yaml`, or
+`data-config='{"showWidget":false}'` per deployment) generates a bootstrap
+that draws nothing at all — no DOM, no stylesheet, not even the page
+background. Everything else is unchanged, and the page follows the load
+through `window.Bootstrap`:
+
+```html
+<body>
+  <div id="splash">…your own markup…</div>
+  <script defer data-sw-bootstrap src="bootstrap.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      // Deferred scripts run before DOMContentLoaded, so Bootstrap is here.
+      window.Bootstrap.subscribe(function (state) {
+        // state: { phase, percent, message }
+      });
+      window.Bootstrap.onError(function () {
+        // your failure screen; the raw reason is in Bootstrap.progress.detail
+      });
+    });
+    // The app is up. Dart calls removeLoadingIndicator() when its
+    // initialization finishes, and the engine fires flutter-first-frame when
+    // it paints — whichever comes first.
+    window.addEventListener('flutter-first-frame', function () {
+      document.getElementById('splash').remove();
+    }, { once: true });
+  </script>
+</body>
+```
+
+Markup in the HTML paints before `bootstrap.js` is even fetched, since that
+tag is deferred — a loading screen the generator draws cannot appear until
+the file has been downloaded and run.
+
+Two things the built-in screen does that a page taking this route has to
+decide for itself: when silence counts as a stall (the widget waits 30 s
+while a worker is reporting and 120 s when nothing is, because nothing
+narrates the main `.wasm` download on a page no worker is serving), and what
+a retry does (it reloads on the first click and clears this app's caches and
+unregisters its worker on the next, leaving application storage alone).
+
 
 ## Quick Start
 
@@ -238,6 +282,7 @@ Do not keep Flutter's `<script>{{flutter_bootstrap_js}}</script>`: `flutter buil
 | `theme`          | string  | `"auto"`    | Widget theme: `"light"`, `"dark"`, or `"auto"` |
 | `color`          | string  | `"#25D366"` | Accent color for the progress ring             |
 | `showPercentage` | boolean | `true`      | Show numeric percentage below status text      |
+| `showWidget`     | boolean | `true`      | Draw the loading screen at all; `false` renders nothing and leaves it to the page |
 | `minProgress`    | number  | `0`         | Minimum progress value for the bootstrap range |
 | `maxProgress`    | number  | `90`        | Maximum progress value (Dart manages the rest) |
 | `logLevel`       | string  | `--log-level` | `"silent"`, `"error"`, `"warn"` or `"info"`: how much reaches the console, overriding the generated default |
@@ -332,6 +377,7 @@ After this sequence, `build/web/` contains exactly the artifacts that should shi
 | `--ignore`           |       | Ignore category glob overrides        | —                 |
 | `--keep-maps`        |       | Keep `.js.map`, `.js.symbols` and `.wasm.map` files | `false`           |
 | `--no-cleanup`       |       | Skip Flutter file cleanup             | `false`           |
+| `--no-widget`        |       | Draw no loading screen; the page draws its own (see below) | `false`           |
 | `--comments`         | `-c`  | Deprecated; warns and has no effect   | `false`           |
 | `--config`           |       | Path to YAML config file              | `sw.yaml`         |
 | `--theme`            |       | Loading widget theme                  | `auto`            |

@@ -93,6 +93,7 @@ export function resolveConfig(
       color: userConfig.color ?? d.color ?? DEFAULT_COLOR,
       showPercentage:
         userConfig.showPercentage ?? d.showPercentage ?? true,
+      showWidget: userConfig.showWidget ?? d.showWidget ?? true,
       minProgress:
         userConfig.minProgress ?? d.minProgress ?? DEFAULT_MIN_PROGRESS,
       maxProgress:
@@ -132,6 +133,22 @@ function isUnsafeColor(color: string): boolean {
 const HEX_SHORT = /^#([0-9a-f])([0-9a-f])([0-9a-f])([0-9a-f])?$/i;
 const HEX_6 = /^#[0-9a-f]{6}$/i;
 const HEX_8 = /^#[0-9a-f]{8}$/i;
+
+/**
+ * A boolean from `data-config`, which is untyped JSON: the string "false"
+ * is truthy, and a page that writes `"showWidget": "false"` means the
+ * opposite of what `Boolean()` would give it. Anything that is not a
+ * boolean is corrected and warned about.
+ */
+function boolOption(name: string, raw: unknown): boolean {
+  if (typeof raw === 'boolean') return raw;
+  const key = typeof raw === 'string' ? raw.trim().toLowerCase() : '';
+  const value = key === 'true' ? true : key === 'false' ? false : Boolean(raw);
+  warnConfig(
+    `${name} ${JSON.stringify(raw)} is not a boolean, using ${value}`,
+  );
+  return value;
+}
 
 function warnConfig(message: string): void {
   log.warn(`[Bootstrap] Config: ${message}`);
@@ -182,19 +199,10 @@ function normalizeUi(ui: ResolvedUi): ResolvedUi {
     theme = 'light';
   }
 
-  // showPercentage: accept "true"/"false" strings ("false" is truthy).
-  let showPercentage = ui.showPercentage;
-  if (typeof raw.showPercentage !== 'boolean') {
-    const key =
-      typeof raw.showPercentage === 'string'
-        ? raw.showPercentage.trim().toLowerCase()
-        : '';
-    showPercentage =
-      key === 'true' ? true : key === 'false' ? false : Boolean(raw.showPercentage);
-    warnConfig(
-      `showPercentage ${JSON.stringify(raw.showPercentage)} is not a boolean, using ${showPercentage}`,
-    );
-  }
+  // showPercentage and showWidget: accept "true"/"false" strings, since
+  // `data-config` is untyped JSON and "false" is truthy.
+  const showPercentage = boolOption('showPercentage', raw.showPercentage);
+  const showWidget = boolOption('showWidget', raw.showWidget);
 
   // color: #rgb → #rrggbb; other formats are kept but cannot get alpha.
   let color = ui.color;
@@ -236,7 +244,15 @@ function normalizeUi(ui: ResolvedUi): ResolvedUi {
     [minProgress, maxProgress] = [maxProgress, minProgress];
   }
 
-  return { ...ui, theme, showPercentage, color, minProgress, maxProgress };
+  return {
+    ...ui,
+    theme,
+    showPercentage,
+    showWidget,
+    color,
+    minProgress,
+    maxProgress,
+  };
 }
 
 function progressBound(name: string, value: unknown, fallback: number): number {

@@ -75,6 +75,10 @@ String injectBootstrapConfig({
   if (config.color.isNotEmpty && config.color != '#25D366') {
     uiDefaults['color'] = config.color;
   }
+  // Only ever written when it is false: `true` is the bootstrap's own
+  // default, and an artifact should not carry a setting that changes
+  // nothing.
+  if (config.noWidget) uiDefaults['showWidget'] = false;
   if (config.minProgress != 0) uiDefaults['minProgress'] = config.minProgress;
   if (config.maxProgress != 90) uiDefaults['maxProgress'] = config.maxProgress;
 

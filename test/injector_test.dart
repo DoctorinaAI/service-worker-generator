@@ -282,6 +282,44 @@ void main() {
       expect(result, contains('"maxProgress":95'));
     });
 
+    test('bakes showWidget:false when the page draws its own screen', () {
+      const template = 'c="__INJECT_BOOTSTRAP_CONFIG__"';
+      const config = GeneratorConfig(
+        inputDir: 'build/web',
+        version: '1',
+        noWidget: true,
+      );
+
+      final result = injectBootstrapConfig(
+        template: template,
+        engineRevision: 'rev',
+        swVersion: '1',
+        swFilename: 'sw.js',
+        builds: const [],
+        config: config,
+      );
+
+      expect(result, contains('"showWidget":false'));
+    });
+
+    test('says nothing about showWidget when the screen is drawn', () {
+      // `true` is the bootstrap's own default; an artifact should not carry
+      // a setting that changes nothing.
+      const template = 'c="__INJECT_BOOTSTRAP_CONFIG__"';
+      const config = GeneratorConfig(inputDir: 'build/web', version: '1');
+
+      final result = injectBootstrapConfig(
+        template: template,
+        engineRevision: 'rev',
+        swVersion: '1',
+        swFilename: 'sw.js',
+        builds: const [],
+        config: config,
+      );
+
+      expect(result, isNot(contains('showWidget')));
+    });
+
     test('embeds config values as JSON that decodes back unchanged', () {
       // Quotes, backslashes, `$` sequences and line separators must not
       // break out of the literal or be read as replacement patterns.

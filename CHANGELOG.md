@@ -1,3 +1,33 @@
+## 0.5.0 — 2026-11-11
+
+### Added
+
+- **Generator / Bootstrap**: `--no-widget` (also `no-widget:` in `sw.yaml`
+  and `SW_NO_WIDGET`, and `showWidget` in a page's `data-config`) generates a
+  bootstrap that draws no loading screen. Nothing is constructed: no DOM, no
+  stylesheet, not even the `html, body` background, and no stall timer behind
+  a screen nobody can see. Everything else is unchanged — the service worker,
+  CanvasKit, the Flutter loader and `window.Bootstrap`, which is how a page
+  that draws its own loading screen follows the load:
+
+  ```js
+  window.Bootstrap.subscribe((state) => /* {phase, percent, message} */);
+  window.Bootstrap.onError(() => /* the failure screen */);
+  ```
+
+  Until now the widget was mounted unconditionally and no option turned it
+  off, so such a page had to hide it with
+  `#sw-loading { display: none !important }` — needing `!important` because
+  the widget injects its stylesheet at runtime, after the page's own — and
+  still paid for the DOM, the stylesheet and the timer. An unusable value is
+  never what removes the screen: `showWidget: "maybe"` warns and draws it, so
+  a typo in `data-config` cannot leave a page with no loading screen at all.
+  (`packages/sw/src/bootstrap/pipeline.ts`,
+  `packages/sw/src/bootstrap/config.ts`, `packages/sw/src/bootstrap/api.ts`,
+  `packages/sw/src/shared/types.ts`, `lib/src/config.dart`,
+  `lib/src/injector.dart`, `README.md`, `docs/configuration.md`,
+  `docs/bootstrap-pipeline.md`)
+
 ## 0.4.0 — 2026-11-11
 
 ### Added

@@ -21,6 +21,7 @@ class GeneratorConfig {
     this.optionalGlobs = const {},
     this.ignoreGlobs = const {},
     this.keepMaps = false,
+    this.noWidget = false,
     this.noCleanup = false,
     this.comments = false,
     this.theme = 'auto',
@@ -67,6 +68,15 @@ class GeneratorConfig {
 
   /// Keep source map files (.js.map).
   final bool keepMaps;
+
+  /// Whether to generate a bootstrap that draws no loading screen.
+  ///
+  /// The pipeline, the service worker and `window.Bootstrap` are
+  /// unchanged; only the screen is left to the page, which follows the
+  /// load through `Bootstrap.subscribe` and `Bootstrap.onError`. Baked
+  /// into the artifact as `showWidget: false`, which a page can still
+  /// override per deployment through `data-config`.
+  final bool noWidget;
 
   /// Skip Flutter file cleanup.
   final bool noCleanup;
@@ -287,6 +297,7 @@ class GeneratorConfig {
       optionalGlobs: resolveGlobs('optional', 'SW_OPTIONAL', ''),
       ignoreGlobs: resolveGlobs('ignore', 'SW_IGNORE', ''),
       keepMaps: resolveFlag('keep-maps', 'SW_KEEP_MAPS'),
+      noWidget: resolveFlag('no-widget', 'SW_NO_WIDGET'),
       noCleanup: resolveFlag('no-cleanup', 'SW_NO_CLEANUP'),
       comments: _warnDeprecatedComments(resolveFlag('comments', 'SW_COMMENTS')),
       theme: _normalizeTheme(resolve('theme', 'SW_THEME', 'auto')),
@@ -365,6 +376,13 @@ class GeneratorConfig {
     ..addOption('optional', help: 'Optional category glob overrides')
     ..addOption('ignore', help: 'Ignore category glob overrides')
     ..addFlag('keep-maps', help: 'Keep .js.map files', defaultsTo: false)
+    ..addFlag(
+      'no-widget',
+      help:
+          'Generate a bootstrap that draws no loading screen; the page '
+          'draws its own and follows window.Bootstrap',
+      defaultsTo: false,
+    )
     ..addFlag(
       'no-cleanup',
       help: 'Skip Flutter file cleanup',

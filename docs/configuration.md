@@ -78,6 +78,7 @@ manifest entirely.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--keep-maps` | `false` | Keep `.js.map`, `.js.symbols` and `.wasm.map` files (removed by default) |
+| `--no-widget` | `false` | Generate a bootstrap that draws no loading screen: no DOM, no stylesheet, no page background. The page draws its own and follows `window.Bootstrap`; see [Drawing your own loading screen](../README.md#drawing-your-own-loading-screen) |
 | `--no-cleanup` | `false` | Leave the input tree alone: keep Flutter's files and leave `{{sw_version}}` unsubstituted (otherwise it is replaced with the HTML-escaped version) |
 | `--comments` | `false` | Deprecated: accepted and warned about, with no effect. `sw.js` and `bootstrap.js` are built and minified before the generator sees them, so there is nothing to comment |
 | `--log-level` | `info` | How much the generated `sw.js` and `bootstrap.js` print on the browser console: `silent`, `error`, `warn` or `info` |
@@ -137,6 +138,7 @@ max-progress: 90
 # Behavior
 keep-maps: false
 no-cleanup: false
+no-widget: false
 log-level: info
 ```
 
@@ -189,6 +191,7 @@ warns and the run continues on CLI args, environment and defaults.
 | `SW_MAX_PROGRESS` | `--max-progress` |
 | `SW_KEEP_MAPS` | `--keep-maps` (`true`/`false`) |
 | `SW_NO_CLEANUP` | `--no-cleanup` (`true`/`false`) |
+| `SW_NO_WIDGET` | `--no-widget` (`true`/`false`) |
 | `SW_COMMENTS` | `--comments` (`true`/`false`) |
 | `SW_LOG_LEVEL` | `--log-level` |
 

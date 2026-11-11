@@ -134,6 +134,38 @@ comments: "yes"
       }
     });
 
+    test(
+      'no-widget reaches the config from YAML, the CLI and a flag',
+      () async {
+        final tempDir = await io.Directory.systemTemp.createTemp('sw-config-');
+        try {
+          expect(
+            GeneratorConfig.parse(['--input=build/web']).noWidget,
+            isFalse,
+            reason: 'the loading screen is drawn unless it is turned off',
+          );
+          expect(GeneratorConfig.parse(['--no-widget']).noWidget, isTrue);
+
+          final yaml = io.File(p.join(tempDir.path, 'sw.yaml'))
+            ..writeAsStringSync('no-widget: true\n');
+          expect(
+            GeneratorConfig.parse(['--config=${yaml.path}']).noWidget,
+            isTrue,
+          );
+          // The CLI still wins, in both directions.
+          expect(
+            GeneratorConfig.parse([
+              '--config=${yaml.path}',
+              '--no-no-widget',
+            ]).noWidget,
+            isFalse,
+          );
+        } finally {
+          await tempDir.delete(recursive: true);
+        }
+      },
+    );
+
     test('a CLI flag wins over YAML, in both directions', () async {
       final tempDir = await io.Directory.systemTemp.createTemp('sw-config-');
       try {
