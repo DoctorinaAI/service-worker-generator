@@ -250,8 +250,13 @@ describe('LoadingWidget showError', () => {
     const logo = document.querySelector('.sw-logo-container');
     expect(logo?.classList.contains('is-frozen')).toBe(true);
     const css = document.head.querySelector('style')!.textContent!;
-    const start = css.indexOf('#sw-loading.is-stalled .sw-logo-image {');
-    expect(css.slice(start, css.indexOf('}', start))).toContain('grayscale(1)');
+    const frozen = css.indexOf('.sw-logo-container.is-frozen .sw-logo-image {');
+    expect(css.slice(frozen, css.indexOf('}', frozen))).toContain('grayscale(1)');
+    // A stall is not a failure: dimmed and drained, but still moving, and
+    // the frozen rule has to come after it to win on the error screen.
+    const stalled = css.indexOf('#sw-loading.is-stalled .sw-logo-image {');
+    expect(stalled).toBeGreaterThan(-1);
+    expect(frozen).toBeGreaterThan(stalled);
   });
 
   it('no-ops after dispose', () => {

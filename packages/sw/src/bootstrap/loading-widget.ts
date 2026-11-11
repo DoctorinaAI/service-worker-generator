@@ -686,12 +686,18 @@ export class LoadingWidget {
         object-fit: contain;
         transition: filter 0.45s ease, opacity 0.45s ease;
       }
-      /* Stalled, and on the error screen, the artwork stops reading as
-         work in progress. On the error screen it is also a still frame;
-         see freezeLogo. */
+      /* A stall is not a failure: the artwork is dimmed and drained, but
+         it keeps moving, because the load may still come back. */
       #sw-loading.is-stalled .sw-logo-image {
+        filter: grayscale(0.8);
+        opacity: 0.7;
+      }
+      /* A failure is: all the way grey, and a still frame — see
+         freezeLogo, which cannot be done in CSS. Last, so it wins over the
+         stalled rule, which the error screen also sets. */
+      .sw-logo-container.is-frozen .sw-logo-image {
         filter: grayscale(1);
-        opacity: 0.6;
+        opacity: 0.55;
       }
       .sw-title {
         font-size: 2rem;
