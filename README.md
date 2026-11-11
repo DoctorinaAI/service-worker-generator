@@ -13,7 +13,7 @@ A complete **Flutter Web bootstrap replacement** that generates an optimized Ser
 ## Features
 
 - **Full Bootstrap Replacement** — Replaces Flutter's `flutter_bootstrap.js` with a controlled initialization pipeline
-- **Loading Widget** — Responsive circular progress indicator with status text, stall detection, and error handling
+- **Loading Widget** — Responsive linear progress bar with status text, stall detection, and an error screen with a retry action
 - **CanvasKit CDN Loading** — Loads CanvasKit from Google CDN with automatic local fallback
 - **Smart Resource Categorization** — Core, Required, Optional, and Ignore categories with configurable caching strategies
 - **Automatic File Scanning** — Analyzes build directory and creates resource manifest with MD5 hashes
@@ -21,7 +21,7 @@ A complete **Flutter Web bootstrap replacement** that generates an optimized Ser
 - **Retry with Backoff** — Exponential backoff retry (3 attempts, 1s/2s/4s delays) with 10s timeout per request
 - **Progress Notifications** — Real-time `sw-progress` messages from Service Worker to loading widget
 - **Version Management** — Cache versioning with atomic updates for safe deployments
-- **Stall Detection** — Shows "Reset Cache" button after 30s without progress
+- **Stall Detection** — Offers a "Try again" button after 30s without progress
 - **Console Logging** — Styled version banner and progress logging in browser console
 - **Global API** — `window.Bootstrap` for Dart integration (dispose, progress, subscribe)
 - **Update Prompt API** — Use `Bootstrap.onUpdateAvailable()` to show a "new version available" prompt, then call `Bootstrap.applyUpdate()` to activate the waiting Service Worker and reload into the new build.
@@ -43,7 +43,7 @@ Or add as a dev dependency:
 
 ```yaml
 dev_dependencies:
-  sw: ^0.4.0
+  sw: ^0.5.0
 ```
 
 Pin the exact version in CI. `sw.js` and `bootstrap.js` are the app's boot
@@ -51,15 +51,15 @@ path, so a template change should arrive through a reviewed bump rather than
 on the next unrelated build:
 
 ```shell
-dart pub global activate sw 0.4.0
+dart pub global activate sw 0.5.0
 ```
 
 That puts an `sw` command on `PATH`; `dart pub global run sw:generate` works
 the same way without it.
 
-Note that a pre-release is not matched by a plain caret constraint — `0.5.0-dev`
-sorts *before* `0.5.0`, so it falls outside `^0.4.0`. Pin a pre-release
-exactly, or write `^0.5.0-dev` to accept it now and the release later.
+Note that a pre-release is not matched by a plain caret constraint — `0.6.0-dev`
+sorts *before* `0.6.0`, so it falls outside `^0.5.0`. Pin a pre-release
+exactly, or write `^0.6.0-dev` to accept it now and the release later.
 
 ## Quick Start
 
@@ -236,12 +236,12 @@ Do not keep Flutter's `<script>{{flutter_bootstrap_js}}</script>`: `flutter buil
 | `logo`           | string  | —           | Path to logo image for the loading widget      |
 | `title`          | string  | —           | Title text displayed below the logo            |
 | `theme`          | string  | `"auto"`    | Widget theme: `"light"`, `"dark"`, or `"auto"` |
-| `color`          | string  | `"#25D366"` | Accent color for the progress ring             |
+| `color`          | string  | `"#25D366"` | Accent color for the progress bar and button   |
 | `showPercentage` | boolean | `true`      | Show numeric percentage below status text      |
 | `minProgress`    | number  | `0`         | Minimum progress value for the bootstrap range |
 | `maxProgress`    | number  | `90`        | Maximum progress value (Dart manages the rest) |
 | `logLevel`       | string  | `--log-level` | `"silent"`, `"error"`, `"warn"` or `"info"`: how much reaches the console, overriding the generated default |
-| `strings`        | object  | English     | What the loading screen says, by key — `starting`, `environment`, `worker`, `update`, `engine`, `app`, `resources` (`{done}`/`{total}`), `initializing`, `running`, `failed`, `offline`, `reload`, `reset`. Unknown keys and non-strings are ignored |
+| `strings`        | object  | English     | What the loading screen says, by key — `starting`, `environment`, `worker`, `update`, `engine`, `app`, `resources` (`{done}`/`{total}`), `initializing`, `running`, `errorTitle`, `failed`, `offline`, `reload`, `reset`. Unknown keys and non-strings are ignored |
 
 ## Local Development
 
@@ -306,7 +306,7 @@ mv build/web/index.prod.html build/web/index.html
 # 3. Generate sw.js + bootstrap.js, inject {{sw_version}} into index.html,
 #    and auto-remove flutter_bootstrap.js / flutter_service_worker.js / flutter.js
 #    (flutter.js is inlined into bootstrap.js, so it's dropped from the output).
-dart pub global activate sw 0.4.0
+dart pub global activate sw 0.5.0
 dart pub global run sw:generate --version="$(git rev-parse --short=8 HEAD)"
 ```
 

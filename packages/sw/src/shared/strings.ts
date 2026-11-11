@@ -38,14 +38,16 @@ export const DEFAULT_STRINGS = {
   initializing: 'Initializing Flutter engine',
   /** Stage 5: the app is about to run. */
   running: 'Starting application',
+  /** The error screen's headline, above whichever sentence follows. */
+  errorTitle: 'Something went wrong',
   /** Shown when loading failed; the reason goes to the console. */
-  failed: 'The application could not be loaded',
+  failed: "We couldn't load the application. Check your connection and try again.",
   /** Shown instead of [failed] when the browser reports no connection. */
-  offline: 'You appear to be offline',
-  /** The overlay button, on its first click. */
-  reload: 'Reload',
-  /** The overlay button, once a plain reload has not helped. */
-  reset: 'Clear the cache and reload',
+  offline: 'You appear to be offline. Check your connection and try again.',
+  /** The error screen's button, on its first click. */
+  reload: 'Try again',
+  /** The error screen's button, once a plain reload has not helped. */
+  reset: 'Clear the cache and try again',
 } as const;
 
 /** The name of a string the loading screen shows. */

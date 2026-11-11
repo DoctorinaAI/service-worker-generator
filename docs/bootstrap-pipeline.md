@@ -80,12 +80,20 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
 ## Loading Widget
 
 ### Visual Design
-- **Circular SVG progress ring** — animated, responsive
-- **Logo image** — configurable via `data-config.logo`
+Top to bottom: artwork, title, message box, progress bar, percentage, and —
+only once the load stalls or fails — the action.
+- **Logo image** — configurable via `data-config.logo`. Letterboxed, not
+  cropped; an animated GIF, APNG or SVG is fine, and is frozen and greyed on
+  the error screen
 - **Title text** — configurable via `data-config.title`
+- **Message box** — the failure headline (hidden until there is one) over the
+  status line, in a box three lines tall whose contents sit at the bottom, so
+  the bar under it does not move as the labels change length
 - **Status text** — shows current operation (e.g., "Downloading assets")
-- **Percentage** — numeric progress display
 - **Loading dots animation** — animated ellipsis after status text
+- **Linear progress bar** — `.sw-progress` carries the `progressbar` role;
+  `.sw-progress-fill` is the percentage, as its width
+- **Percentage** — numeric progress display
 
 ### Theming
 - `data-config.theme`: `"light"` | `"dark"` | `"auto"` (default)
@@ -93,8 +101,11 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
 - Configurable accent color via `data-config.color`
 
 ### Error Handling
-- On error: the widget shows a sentence the user can act on (`strings.failed`,
-  or `strings.offline` when the browser reports no connection). The raw reason
+- On error: the widget shows its failure screen — `strings.errorTitle` as the
+  headline, and under it a sentence the user can act on (`strings.failed`, or
+  `strings.offline` when the browser reports no connection). The progress bar
+  and the percentage are taken away, and the artwork is frozen and greyed.
+  The raw reason
   — an engine message such as `WebAssembly.instantiate(): Import #3 "…"` — goes
   to the console, to `Bootstrap.progress.detail` and to `Bootstrap.onError`
   handlers, where an error reporter can pick it up
@@ -105,7 +116,7 @@ The bootstrap pipeline replaces Flutter's `flutter_bootstrap.js` with a controll
   neither replaces the sentence on screen nor the `error` phase a reporter
   reads. It used to overwrite both, leaving a resource counter in error red
   and no trace of the failure in `Bootstrap.progress`
-- The overlay button reloads on its first click and clears the caching layer
+- The action button reloads on its first click and clears the caching layer
   only on the next one: the failure is far more often a connection that
   dropped than a cache gone bad, and the reset throws away a download the user
   has already paid for. The "already tried" flag lives in `sessionStorage` and
@@ -277,12 +288,12 @@ the shell; replace it in `web/index.html` with
 | `logo` | string | — | Path to logo image for loading widget |
 | `title` | string | — | Title text below logo |
 | `theme` | string | `"auto"` | `"light"`, `"dark"`, or `"auto"` |
-| `color` | string | `"#25D366"` | Accent color for progress ring |
+| `color` | string | `"#25D366"` | Accent color for the progress bar and button |
 | `showPercentage` | boolean | `true` | Show numeric percentage |
 | `minProgress` | number | `0` | Minimum progress value |
 | `maxProgress` | number | `90` | Maximum progress value (Dart manages the rest) |
 | `logLevel` | string | `--log-level` | `"silent"`, `"error"`, `"warn"` or `"info"`: how much the bootstrap prints on the console, overriding the level the generator baked in. It never changes what the bootstrap does |
-| `strings` | object | English | What the loading screen says, by key (see `packages/sw/src/shared/strings.ts`): `starting`, `environment`, `worker`, `update`, `engine`, `app`, `resources` (with `{done}` and `{total}`), `initializing`, `running`, `failed`, `offline`, `reload`, `reset`. Unknown keys and values that are not strings are ignored, so a typo cannot blank a label |
+| `strings` | object | English | What the loading screen says, by key (see `packages/sw/src/shared/strings.ts`): `starting`, `environment`, `worker`, `update`, `engine`, `app`, `resources` (with `{done}` and `{total}`), `initializing`, `running`, `errorTitle`, `failed`, `offline`, `reload`, `reset`. Unknown keys and values that are not strings are ignored, so a typo cannot blank a label |
 
 ## Retry Logic
 

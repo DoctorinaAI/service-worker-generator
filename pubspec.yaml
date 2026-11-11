@@ -9,7 +9,7 @@ description: >
   build: per-category caching with integrity checks, a loading screen with
   real progress, and deploys that land as one coherent build.
 
-version: 0.4.0
+version: 0.5.0
 
 homepage: https://github.com/DoctorinaAI/service-worker-generator
 repository: https://github.com/DoctorinaAI/service-worker-generator

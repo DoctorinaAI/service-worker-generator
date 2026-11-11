@@ -179,19 +179,23 @@ describe('LoadingWidget updateProgress', () => {
     expect(document.querySelector('.sw-percentage')).toBeNull();
   });
 
-  it('adjusts strokeDashoffset on the progress ring', () => {
+  it('fills the progress bar to the percentage', () => {
     const w = new LoadingWidget(uiConfig());
     w.mount();
+    const fill = document.querySelector('.sw-progress-fill') as HTMLDivElement;
+    const track = document.querySelector('.sw-progress') as HTMLDivElement;
     w.updateProgress(50, 'halfway');
-    const fill = document.querySelector('.sw-progress-ring-fill') as SVGCircleElement;
-    expect(fill.style.strokeDashoffset).not.toBe('');
+    expect(fill.style.width).toBe('50%');
+    expect(track.getAttribute('aria-valuenow')).toBe('50');
+    w.updateProgress(100, 'done');
+    expect(fill.style.width).toBe('100%');
   });
 });
 
 describe('LoadingWidget showError', () => {
   afterEach(cleanup);
 
-  it('replaces status with the error message and activates the reload overlay', () => {
+  it('replaces status with the error message and offers the action', () => {
     const w = new LoadingWidget(uiConfig());
     w.mount();
     w.showError('something broke');
@@ -199,13 +203,55 @@ describe('LoadingWidget showError', () => {
       '.sw-status span:first-child',
     ) as HTMLSpanElement;
     expect(status.textContent).toBe('something broke');
+    const root = document.getElementById('sw-loading');
+    expect(root?.classList.contains('is-error')).toBe(true);
+    expect(root?.classList.contains('is-stalled')).toBe(true);
+  });
+
+  it('colours the failed status so it reads on the background', () => {
     // Darkened from #ff4444 until it reads on the light background: 3.3:1
-    // was not enough for body text (audit #30, item 5.1).
-    expect(contrastRatio(status.style.color, '#f4fdf7')).toBeGreaterThanOrEqual(
-      4.5,
+    // was not enough for body text (audit #30, item 5.1). The colour is a
+    // rule on the error state now, not an inline style.
+    const w = new LoadingWidget(uiConfig({ theme: 'light' }));
+    w.mount();
+    w.showError('something broke');
+    const css = document.head.querySelector('style')!.textContent!;
+    const start = css.indexOf('#sw-loading.is-error .sw-status {');
+    const body = css.slice(start, css.indexOf('}', start));
+    const colour = /color:\s*([^;]+);/.exec(body)![1];
+    expect(contrastRatio(colour, '#f4fdf7')).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('shows the headline and takes the progress away', () => {
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const headline = document.querySelector('.sw-error-title') as HTMLElement;
+    expect(headline.hidden).toBe(true);
+    expect(headline.textContent).toBe(DEFAULT_STRINGS.errorTitle);
+
+    w.showError('something broke');
+    expect(headline.hidden).toBe(false);
+    // The failure is final; a bar that will never fill only invites the
+    // user to keep waiting.
+    const css = document.head.querySelector('style')!.textContent!;
+    const start = css.indexOf(
+      '#sw-loading.is-error .sw-progress,\n      #sw-loading.is-error .sw-percentage {',
     );
+    expect(start).toBeGreaterThan(-1);
+    expect(css.slice(start, css.indexOf('}', start))).toContain('display: none');
+  });
+
+  it('greys the artwork out, with or without a canvas to freeze it on', () => {
+    // jsdom has no 2D context, which is exactly the fallback path: the
+    // logo keeps animating, in grey, rather than the screen throwing.
+    const w = new LoadingWidget(uiConfig({ logo: '/logo.svg' }));
+    w.mount();
+    expect(() => w.showError('something broke')).not.toThrow();
     const logo = document.querySelector('.sw-logo-container');
-    expect(logo?.classList.contains('is-stalled')).toBe(true);
+    expect(logo?.classList.contains('is-frozen')).toBe(true);
+    const css = document.head.querySelector('style')!.textContent!;
+    const start = css.indexOf('#sw-loading.is-stalled .sw-logo-image {');
+    expect(css.slice(start, css.indexOf('}', start))).toContain('grayscale(1)');
   });
 
   it('no-ops after dispose', () => {
@@ -241,7 +287,8 @@ describe('LoadingWidget reload button', () => {
 
   it('is out of reach until it is shown', () => {
     // Transparent was not enough: an invisible button took keyboard focus,
-    // and Enter reloaded the page mid-download.
+    // and Enter reloaded the page mid-download. It is not laid out at all
+    // until the load stalls or fails.
     const w = new LoadingWidget(uiConfig());
     w.mount();
     const css = document.querySelector('style')!.textContent!;
@@ -249,10 +296,18 @@ describe('LoadingWidget reload button', () => {
       const start = css.indexOf(`${selector} {`);
       return css.slice(start, css.indexOf('}', start));
     };
-    expect(rule('      .sw-reload-overlay')).toContain('visibility: hidden');
-    expect(rule('.sw-logo-container.is-stalled .sw-reload-overlay')).toContain(
-      'visibility: visible',
+    expect(rule('      .sw-actions')).toContain('display: none');
+    expect(rule('#sw-loading.is-stalled .sw-actions')).toContain(
+      'display: flex',
     );
+  });
+
+  it('reads its own label, not only an aria-label', () => {
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const button = document.querySelector('.sw-action') as HTMLButtonElement;
+    expect(button.textContent).toBe(DEFAULT_STRINGS.reload);
+    expect(button.getAttribute('aria-label')).toBe(DEFAULT_STRINGS.reload);
   });
 });
 
@@ -271,7 +326,7 @@ describe('LoadingWidget stall detection', () => {
     const w = new LoadingWidget(uiConfig());
     w.mount();
     vi.advanceTimersByTime(STALLED_TIMEOUT_MS + 1);
-    const logo = document.querySelector('.sw-logo-container');
+    const logo = document.getElementById('sw-loading');
     expect(logo?.classList.contains('is-stalled')).toBe(true);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
@@ -299,7 +354,7 @@ describe('LoadingWidget stall detection', () => {
     w.expectSilence();
 
     vi.advanceTimersByTime(STALLED_TIMEOUT_MS + 1);
-    const logo = document.querySelector('.sw-logo-container');
+    const logo = document.getElementById('sw-loading');
     expect(logo?.classList.contains('is-stalled')).toBe(false);
     expect(warn).not.toHaveBeenCalled();
 
@@ -331,7 +386,7 @@ describe('LoadingWidget stall detection', () => {
     const w = new LoadingWidget(uiConfig());
     w.mount();
     vi.advanceTimersByTime(STALLED_TIMEOUT_MS + 1);
-    const logo = document.querySelector('.sw-logo-container');
+    const logo = document.getElementById('sw-loading');
     expect(logo?.classList.contains('is-stalled')).toBe(true);
 
     w.updateProgress(42, 'Loading application');
@@ -350,7 +405,7 @@ describe('LoadingWidget stall detection', () => {
     w.mount();
     w.updateProgress(42, 'Loading application');
     vi.advanceTimersByTime(STALLED_TIMEOUT_MS + 1);
-    const logo = document.querySelector('.sw-logo-container');
+    const logo = document.getElementById('sw-loading');
     expect(logo?.classList.contains('is-stalled')).toBe(true);
 
     w.updateProgress(42, 'Initializing Flutter engine');
@@ -367,7 +422,7 @@ describe('LoadingWidget stall detection', () => {
     w.showError('something broke');
     w.updateProgress(99, 'Loaded 5 of 5 resources');
 
-    const logo = document.querySelector('.sw-logo-container');
+    const logo = document.getElementById('sw-loading');
     expect(logo?.classList.contains('is-stalled')).toBe(true);
     warn.mockRestore();
   });
@@ -380,7 +435,7 @@ describe('LoadingWidget stall detection', () => {
     w.expectProgress();
 
     vi.advanceTimersByTime(STALLED_TIMEOUT_MS + 1);
-    expect(document.querySelector('.sw-logo-container')?.classList.contains('is-stalled')).toBe(
+    expect(document.getElementById('sw-loading')?.classList.contains('is-stalled')).toBe(
       true,
     );
     warn.mockRestore();
@@ -439,13 +494,13 @@ describe('LoadingWidget reset action', () => {
    */
   function clickReset(): void {
     window.sessionStorage.setItem('sw-overlay-reload-tried', '1');
-    const button = document.querySelector<HTMLButtonElement>('.sw-reload-overlay');
+    const button = document.querySelector<HTMLButtonElement>('.sw-action');
     button?.click();
   }
 
   /** The first click on a fresh overlay. */
   function clickReload(): void {
-    const button = document.querySelector<HTMLButtonElement>('.sw-reload-overlay');
+    const button = document.querySelector<HTMLButtonElement>('.sw-action');
     button?.click();
   }
 
@@ -528,7 +583,7 @@ describe('LoadingWidget reset action', () => {
       const w = new LoadingWidget(uiConfig(), 'sw.js');
       w.mount();
       w.showError('something broke');
-      const button = document.querySelector('.sw-reload-overlay');
+      const button = document.querySelector('.sw-action');
       expect(button?.getAttribute('aria-label')).toBe(DEFAULT_STRINGS.reload);
 
       window.sessionStorage.setItem('sw-overlay-reload-tried', '1');
@@ -589,7 +644,7 @@ describe('LoadingWidget reset action', () => {
       w.showError('whatever');
 
       expect(
-        document.querySelector('.sw-reload-overlay')?.getAttribute('aria-label'),
+        document.querySelector('.sw-action')?.getAttribute('aria-label'),
       ).toBe('Обновить');
       expect(
         document.querySelector('.sw-status span:first-child')?.textContent,
@@ -832,7 +887,7 @@ describe('LoadingWidget reset action', () => {
 describe('LoadingWidget resilience under strict pages', () => {
   afterEach(cleanup);
 
-  it('builds the reload icon without innerHTML (Trusted Types)', () => {
+  it('builds the screen without innerHTML (Trusted Types)', () => {
     const setter = vi.fn();
     const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML')!;
     Object.defineProperty(Element.prototype, 'innerHTML', {
@@ -850,11 +905,7 @@ describe('LoadingWidget resilience under strict pages', () => {
       Object.defineProperty(Element.prototype, 'innerHTML', desc);
     }
     expect(setter).not.toHaveBeenCalled();
-    const svg = document.querySelector('.sw-reload-overlay svg');
-    expect(svg).not.toBeNull();
-    expect(svg!.namespaceURI).toBe('http://www.w3.org/2000/svg');
-    expect(svg!.getAttribute('aria-hidden')).toBe('true');
-    expect(svg!.querySelectorAll('path')).toHaveLength(4);
+    expect(document.getElementById('sw-loading')).not.toBeNull();
   });
 
   it('copies the bootstrap script nonce to the injected style', () => {
@@ -941,14 +992,14 @@ describe('LoadingWidget accessibility', () => {
     expect(status.firstElementChild!.textContent).toBe('Starting application');
   });
 
-  it('turns off the fade-in, dots and ring transition under reduced motion', () => {
+  it('turns off the fade-in, dots and bar transition under reduced motion', () => {
     const w = new LoadingWidget(uiConfig());
     w.mount();
     const css = document.head.querySelector('style')!.textContent!;
     const block = css.slice(css.indexOf('@media (prefers-reduced-motion: reduce)'));
     expect(block).toMatch(/#sw-loading\s*\{[^}]*animation:\s*none/);
     expect(block).toMatch(/\.sw-loading-dots::after\s*\{[^}]*animation:\s*none/);
-    expect(block).toMatch(/\.sw-progress-ring-fill\s*\{[^}]*transition:\s*none/);
+    expect(block).toMatch(/\.sw-progress-fill\s*\{[^}]*transition:\s*none/);
   });
 
   it('lets long status text wrap on narrow screens', () => {
@@ -1012,18 +1063,34 @@ describe('LoadingWidget accessibility', () => {
     expect(body).toMatch(/overflow-y:\s*auto/);
   });
 
-  it('lets the progress ring glow past the ring', () => {
-    // The arc carries a drop-shadow glow, and an outer <svg> clips to its
-    // viewport unless told otherwise — the glow was cut off in a straight
-    // line beside and above the ring.
+  it('keeps the bar inside its rounded track', () => {
+    // The fill is a plain box: without the clip it squares off the ends of
+    // the track it sits in, and its glow spills past them.
     const w = new LoadingWidget(uiConfig());
     w.mount();
     const css = document.head.querySelector('style')!.textContent!;
-    const rule = css.slice(css.indexOf('.sw-progress-ring {'));
-    const body = rule.slice(0, rule.indexOf('}'));
-    expect(body).toMatch(/overflow:\s*visible/);
-    const fill = css.slice(css.indexOf('.sw-progress-ring-fill {'));
-    expect(fill.slice(0, fill.indexOf('}'))).toMatch(/drop-shadow/);
+    const track = css.slice(css.indexOf('.sw-progress {'));
+    const body = track.slice(0, track.indexOf('}'));
+    expect(body).toMatch(/overflow:\s*hidden/);
+    expect(body).toMatch(/border-radius:/);
+    const fill = css.slice(css.indexOf('.sw-progress-fill {'));
+    expect(fill.slice(0, fill.indexOf('}'))).toMatch(/transition:\s*width/);
+  });
+
+  it('reserves the message box for the tallest state it has to hold', () => {
+    // A one-line stage label and the three-line failure screen have to
+    // leave the bar below them in the same place, or the column jumps as
+    // the labels change length.
+    const w = new LoadingWidget(uiConfig());
+    w.mount();
+    const css = document.head.querySelector('style')!.textContent!;
+    const start = css.indexOf('.sw-message {');
+    const body = css.slice(start, css.indexOf('}', start));
+    expect(body).toMatch(/min-height:\s*calc\(3 \* 1\.45em\)/);
+    expect(body).toMatch(/line-height:\s*1\.45/);
+    // Bottom-aligned, so what is reserved opens up above the status
+    // rather than below it.
+    expect(body).toMatch(/justify-content:\s*flex-end/);
   });
 
   it('compacts the layout on a short viewport', () => {
@@ -1045,8 +1112,8 @@ describe('LoadingWidget dispose teardown', () => {
     const w = new LoadingWidget(uiConfig());
     w.mount();
     w.dispose();
-    const ring = document.querySelector('.sw-progress-ring-fill')!;
-    ring.dispatchEvent(new Event('transitionend', { bubbles: true }));
+    const fill = document.querySelector('.sw-progress-fill')!;
+    fill.dispatchEvent(new Event('transitionend', { bubbles: true }));
     expect(document.getElementById('sw-loading')).not.toBeNull();
     // The container's own transition still tears it down.
     document.getElementById('sw-loading')!.dispatchEvent(new Event('transitionend'));

@@ -47,18 +47,45 @@ test.describe('Bootstrap E2E', () => {
     expect(widget).not.toBeNull();
   });
 
-  test('the progress ring glow is not clipped to the ring', async ({ page }) => {
-    // The arc's drop-shadow reaches past the <svg>, which clips to its
-    // viewport unless told otherwise: the glow was cut off in a straight
-    // line beside and above the ring, in every engine.
+  test('the progress bar stays inside its rounded track', async ({ page }) => {
+    // The fill is a plain box inside a pill-shaped track: without the clip
+    // it squares off the ends of the track, in every engine.
     await page.goto(BASE_URL);
-    await page.waitForSelector('.sw-progress-ring', { timeout: 5000 });
-    const ring = await page.evaluate(() => ({
-      overflow: getComputedStyle(document.querySelector('.sw-progress-ring')!).overflow,
-      glow: getComputedStyle(document.querySelector('.sw-progress-ring-fill')!).filter,
-    }));
-    expect(ring.glow).toContain('drop-shadow');
-    expect(ring.overflow).toBe('visible');
+    await page.waitForSelector('.sw-progress', { timeout: 5000 });
+    const bar = await page.evaluate(() => {
+      const track = document.querySelector('.sw-progress')!;
+      const fill = document.querySelector('.sw-progress-fill')!;
+      return {
+        overflow: getComputedStyle(track).overflow,
+        radius: getComputedStyle(track).borderTopLeftRadius,
+        fillWidth: fill.getBoundingClientRect().width,
+        trackWidth: track.getBoundingClientRect().width,
+      };
+    });
+    expect(bar.overflow).toBe('hidden');
+    expect(parseFloat(bar.radius)).toBeGreaterThan(0);
+    expect(bar.fillWidth).toBeLessThanOrEqual(bar.trackWidth + 0.5);
+  });
+
+  test('the message box holds its height as the status changes', async ({
+    page,
+  }) => {
+    // The reserved box is what keeps the bar still while the stage labels
+    // change length underneath it.
+    await page.goto(BASE_URL);
+    await page.waitForSelector('.sw-progress', { timeout: 5000 });
+    const tops = await page.evaluate(() => {
+      const bar = (): number =>
+        document.querySelector('.sw-progress')!.getBoundingClientRect().top;
+      const status = document.querySelector('.sw-status span')!;
+      const seen: number[] = [];
+      for (const label of ['Starting', 'Loading rendering engine', 'Loaded 142 of 300 resources']) {
+        status.textContent = label;
+        seen.push(bar());
+      }
+      return seen;
+    });
+    expect(Math.max(...tops) - Math.min(...tops)).toBeLessThan(0.5);
   });
 
   test('data-config is parsed correctly', async ({ page }) => {

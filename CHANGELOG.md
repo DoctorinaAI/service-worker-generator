@@ -1,3 +1,49 @@
+## 0.5.0 — 2026-11-11
+
+### Changed
+
+- **Bootstrap**: the loading screen shows a linear bar instead of a ring
+  around the logo, in the order artwork, title, status, bar, percentage.
+  The ring made the artwork its own progress indicator: the logo had to
+  live inside a 140 px circle, it was clipped to a circle itself whatever
+  shape it was drawn in, and the only place left for the action after a
+  failure was on top of it. `.sw-progress` carries the `progressbar` role
+  and `.sw-progress-fill` the percentage as its width. `.sw-progress-ring`,
+  `.sw-progress-ring-bg`, `.sw-progress-ring-fill` and `.sw-logo-artwork`
+  are gone with the `<svg>` they belonged to, `.sw-reload-overlay` is now
+  `.sw-action` inside `.sw-actions`, the state class `is-stalled` moved
+  from `.sw-logo-container` to `#sw-loading`, and `.sw-logo-image` is
+  letterboxed (`object-fit: contain`) rather than cropped to a circle — an
+  animated logo, a wordmark or anything else keeps the shape its author
+  gave it. A page or a test that reaches for the old class names has to be
+  updated. (`packages/sw/src/bootstrap/loading-widget.ts`,
+  `packages/sw/e2e/bootstrap.spec.ts`)
+- **Bootstrap**: the status and the failure headline share one box of a
+  fixed minimum height — three lines — with their contents sitting at the
+  bottom of it. Every stage label the widget ships is one line on every
+  viewport and the failure screen is at most three, so the bar below them
+  does not move for the whole load, nor when the load fails. Before this
+  each change of label length moved everything under it.
+  (`packages/sw/src/bootstrap/loading-widget.ts`)
+- **Bootstrap**: a failure is its own screen rather than a status line in
+  red — a headline (`strings.errorTitle`), the sentence under it, and a
+  labelled button where the round icon used to float over the logo. The
+  bar and the percentage go: a bar frozen part way invites the user to keep
+  waiting for a load that has ended. The artwork is greyed and stopped —
+  it is drawn into a canvas and replaced by that still, so an animated GIF,
+  APNG or SVG logo stops too; where the capture cannot run (a logo that has
+  not loaded yet is captured when it does; no 2D context, or a canvas that
+  throws) the logo keeps animating, in grey.
+  (`packages/sw/src/bootstrap/loading-widget.ts`)
+- **Bootstrap**: `strings` gains `errorTitle`, and `failed`, `offline`,
+  `reload` and `reset` are reworded for a screen that now has room for a
+  sentence and a button label: "Something went wrong", "We couldn't load
+  the application. Check your connection and try again.", "You appear to be
+  offline. Check your connection and try again.", "Try again" and "Clear
+  the cache and try again". A page that overrides them keeps its own
+  wording. (`packages/sw/src/shared/strings.ts`, `README.md`,
+  `docs/bootstrap-pipeline.md`)
+
 ## 0.4.0 — 2026-11-11
 
 ### Added

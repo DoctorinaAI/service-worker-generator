@@ -12,8 +12,6 @@ import { log } from '../shared/logger';
 import { DEFAULT_STRINGS, type StringKey } from '../shared/strings';
 import { ensureContrast } from './color';
 
-const SVG_NS = 'http://www.w3.org/2000/svg';
-
 /**
  * sessionStorage key marking that the overlay's plain reload has been
  * tried in this tab, so the next click clears the caching layer instead.
@@ -22,19 +20,23 @@ const RELOAD_TRIED_KEY = 'sw-overlay-reload-tried';
 
 /** The error red, before it is checked against the background. */
 const ERROR_COLOR = '#ff4444';
-const PROGRESS_RING_RADIUS = 65;
-const CIRCUMFERENCE = 2 * Math.PI * PROGRESS_RING_RADIUS;
 
 /**
- * Loading widget with circular progress, status text, and stall detection.
+ * Loading widget with a linear progress bar, status text, and stall
+ * detection.
  */
 export class LoadingWidget {
   private container: HTMLDivElement | null = null;
   private logoContainer: HTMLDivElement | null = null;
-  private progressCircle: SVGCircleElement | null = null;
+  /** The logo as mounted; replaced by a still frame once the load fails. */
+  private logoImage: HTMLImageElement | null = null;
   private statusText: HTMLSpanElement | null = null;
   private statusContainer: HTMLDivElement | null = null;
+  private errorTitle: HTMLParagraphElement | null = null;
+  /** The progress track, which carries the progressbar role. */
   private progressBar: HTMLDivElement | null = null;
+  /** The filled part of the track, whose width is the percentage. */
+  private progressFill: HTMLDivElement | null = null;
   private percentageText: HTMLDivElement | null = null;
   private reloadButton: HTMLButtonElement | null = null;
   private styleElement: HTMLStyleElement | null = null;
@@ -87,10 +89,12 @@ export class LoadingWidget {
       this.container = null;
       this.styleElement = null;
       this.logoContainer = null;
-      this.progressCircle = null;
+      this.logoImage = null;
       this.progressBar = null;
+      this.progressFill = null;
       this.statusText = null;
       this.statusContainer = null;
+      this.errorTitle = null;
       this.percentageText = null;
       this.reloadButton = null;
       throw error;
@@ -132,12 +136,10 @@ export class LoadingWidget {
     // The load is moving again, so the stalled overlay is a lie: it used
     // to stay up — blurred logo, pulsing reload button — for the rest of
     // the load once a single slow stretch had raised it.
-    if (this.currentPercent > before) this.hideReloadOverlay();
+    if (this.currentPercent > before) this.hideAction();
 
-    if (this.progressCircle) {
-      const offset =
-        CIRCUMFERENCE - (this.currentPercent / 100) * CIRCUMFERENCE;
-      this.progressCircle.style.strokeDashoffset = String(offset);
+    if (this.progressFill) {
+      this.progressFill.style.width = `${this.currentPercent}%`;
     }
 
     this.progressBar?.setAttribute(
@@ -171,7 +173,6 @@ export class LoadingWidget {
     if (this.disposed || !this.statusText) return;
     const offline = navigator.onLine === false;
     this.statusText.textContent = offline ? this.text('offline') : error;
-    this.statusText.style.color = this.errorColor;
     this.statusContainer?.setAttribute('role', 'alert');
     this.statusContainer?.setAttribute('aria-live', 'assertive');
     this.errored = true;
@@ -179,7 +180,58 @@ export class LoadingWidget {
     // stall timer to report a stall on a screen that reported a failure.
     this.clearStallTimer();
     if (this.dots) this.dots.hidden = true;
-    this.showReloadOverlay();
+    // The headline, the error colour, the hidden progress bar and the
+    // button are all one class on the root: the error screen is a state
+    // of this widget, not a second widget built on top of it.
+    this.container?.classList.add('is-error');
+    if (this.errorTitle) this.errorTitle.hidden = false;
+    this.freezeLogo();
+    this.showAction();
+  }
+
+  /**
+   * Stop the artwork on the frame it is showing, and grey it out.
+   *
+   * The logo may be an animated GIF, APNG or SVG, and none of those can be
+   * paused from the page: the element is an image, not a player. Drawing
+   * it into a canvas captures whatever frame is on screen, and that canvas
+   * replaces it — a still, which is what the error screen is. The greying
+   * is a class, applied first, because it is the part that works even when
+   * the capture cannot: a logo that has not finished loading, a browser
+   * with no 2D context, a canvas that throws. The worst case is a logo
+   * that keeps animating, in grey.
+   */
+  private freezeLogo(): void {
+    this.logoContainer?.classList.add('is-frozen');
+    const img = this.logoImage;
+    if (!img) return;
+    if (!img.complete || img.naturalWidth === 0) {
+      // Nothing to capture yet. A failure this early is the usual case —
+      // the engine can fail before the logo's own request has come back —
+      // so the capture waits for the frame rather than giving up on it.
+      img.addEventListener('load', () => this.freezeLogo(), { once: true });
+      return;
+    }
+    try {
+      const rect = img.getBoundingClientRect();
+      const width = Math.round(rect.width) || img.naturalWidth;
+      const height = Math.round(rect.height) || img.naturalHeight;
+      // Capped: a device reporting 4 would quadruple the memory behind a
+      // still that nobody inspects closely.
+      const ratio = Math.min(Math.max(window.devicePixelRatio || 1, 1), 3);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(width * ratio));
+      canvas.height = Math.max(1, Math.round(height * ratio));
+      canvas.className = 'sw-logo-image';
+      canvas.setAttribute('aria-hidden', 'true');
+      const context = canvas.getContext('2d');
+      if (!context) return;
+      context.drawImage(img, 0, 0, canvas.width, canvas.height);
+      img.replaceWith(canvas);
+      this.logoImage = null;
+    } catch (e) {
+      log.warn('[Bootstrap] Could not freeze the logo:', e);
+    }
   }
 
   /**
@@ -239,6 +291,7 @@ export class LoadingWidget {
     const label = this.reloadWasTried()
       ? this.text('reset')
       : this.text('reload');
+    this.reloadButton.textContent = label;
     this.reloadButton.setAttribute('aria-label', label);
     this.reloadButton.title = label;
   }
@@ -277,6 +330,8 @@ export class LoadingWidget {
         this.styleElement?.remove();
         this.container = null;
         this.styleElement = null;
+        this.logoImage = null;
+        this.progressFill = null;
       };
       const onTransitionEnd = (event: Event): void => {
         if (event.target === container) teardown();
@@ -313,66 +368,20 @@ export class LoadingWidget {
     const container = document.createElement('div');
     container.id = 'sw-loading';
 
-    // Logo with progress ring
+    // Logo. Decorative: the title below says the same thing in words, and
+    // on the error screen the headline does.
     const logoContainer = document.createElement('div');
     logoContainer.className = 'sw-logo-container';
     this.logoContainer = logoContainer;
-
-    // SVG progress ring
-    const svg = document.createElementNS(SVG_NS, 'svg');
-    svg.setAttribute('class', 'sw-progress-ring');
-    svg.setAttribute('viewBox', '0 0 140 140');
-
-    const bgCircle = document.createElementNS(SVG_NS, 'circle');
-    bgCircle.setAttribute('class', 'sw-progress-ring-bg');
-    bgCircle.setAttribute('cx', '70');
-    bgCircle.setAttribute('cy', '70');
-    bgCircle.setAttribute('r', String(PROGRESS_RING_RADIUS));
-    bgCircle.setAttribute('vector-effect', 'non-scaling-stroke');
-
-    this.progressCircle = document.createElementNS(SVG_NS, 'circle');
-    this.progressCircle.setAttribute('class', 'sw-progress-ring-fill');
-    this.progressCircle.setAttribute('cx', '70');
-    this.progressCircle.setAttribute('cy', '70');
-    this.progressCircle.setAttribute('r', String(PROGRESS_RING_RADIUS));
-    this.progressCircle.setAttribute('vector-effect', 'non-scaling-stroke');
-    this.progressCircle.style.strokeDasharray = String(CIRCUMFERENCE);
-    this.progressCircle.style.strokeDashoffset = String(CIRCUMFERENCE);
-
-    svg.appendChild(bgCircle);
-    svg.appendChild(this.progressCircle);
-
-    // Artwork wrapper — blurred/dimmed when reload overlay appears
-    const artwork = document.createElement('div');
-    artwork.className = 'sw-logo-artwork';
-    artwork.setAttribute('role', 'progressbar');
-    artwork.setAttribute('aria-label', 'Loading');
-    artwork.setAttribute('aria-valuemin', '0');
-    artwork.setAttribute('aria-valuemax', '100');
-    artwork.setAttribute('aria-valuenow', '0');
-    this.progressBar = artwork;
-    artwork.appendChild(svg);
-
-    // Logo image
     if (this.config.logo) {
       const img = document.createElement('img');
       img.src = this.config.logo;
       img.className = 'sw-logo-image';
-      img.alt = 'Logo';
-      artwork.appendChild(img);
+      img.alt = '';
+      img.setAttribute('aria-hidden', 'true');
+      this.logoImage = img;
+      logoContainer.appendChild(img);
     }
-
-    logoContainer.appendChild(artwork);
-
-    // Reload icon button overlay (hidden until stall/error)
-    this.reloadButton = document.createElement('button');
-    this.reloadButton.className = 'sw-reload-overlay';
-    this.reloadButton.type = 'button';
-    this.labelReloadButton();
-    this.reloadButton.appendChild(this.createReloadIcon());
-    this.reloadButton.addEventListener('click', () => void this.onReloadClick());
-    logoContainer.appendChild(this.reloadButton);
-
     container.appendChild(logoContainer);
 
     // Title
@@ -383,7 +392,19 @@ export class LoadingWidget {
       container.appendChild(title);
     }
 
-    // Status text
+    // The message block: the failure headline, hidden until there is one,
+    // and the status line under it. See the stylesheet for why the two
+    // share a box of a fixed minimum height.
+    const message = document.createElement('div');
+    message.className = 'sw-message';
+
+    const errorTitle = document.createElement('p');
+    errorTitle.className = 'sw-error-title';
+    errorTitle.textContent = this.text('errorTitle');
+    errorTitle.hidden = true;
+    this.errorTitle = errorTitle;
+    message.appendChild(errorTitle);
+
     const statusContainer = document.createElement('div');
     statusContainer.className = 'sw-status';
     statusContainer.setAttribute('aria-live', 'polite');
@@ -399,7 +420,24 @@ export class LoadingWidget {
     this.dots = dots;
     statusContainer.appendChild(this.statusText);
     statusContainer.appendChild(dots);
-    container.appendChild(statusContainer);
+    message.appendChild(statusContainer);
+    container.appendChild(message);
+
+    // Progress track. The role lives here rather than on the artwork: this
+    // is the element whose length is the progress.
+    const progress = document.createElement('div');
+    progress.className = 'sw-progress';
+    progress.setAttribute('role', 'progressbar');
+    progress.setAttribute('aria-label', 'Loading');
+    progress.setAttribute('aria-valuemin', '0');
+    progress.setAttribute('aria-valuemax', '100');
+    progress.setAttribute('aria-valuenow', '0');
+    const fill = document.createElement('div');
+    fill.className = 'sw-progress-fill';
+    progress.appendChild(fill);
+    this.progressBar = progress;
+    this.progressFill = fill;
+    container.appendChild(progress);
 
     // Percentage
     if (this.config.showPercentage) {
@@ -409,25 +447,37 @@ export class LoadingWidget {
       container.appendChild(this.percentageText);
     }
 
+    // The action, hidden until the load stalls or fails.
+    const actions = document.createElement('div');
+    actions.className = 'sw-actions';
+    this.reloadButton = document.createElement('button');
+    this.reloadButton.className = 'sw-action';
+    this.reloadButton.type = 'button';
+    this.labelReloadButton();
+    this.reloadButton.addEventListener('click', () => void this.onReloadClick());
+    actions.appendChild(this.reloadButton);
+    container.appendChild(actions);
+
     return container;
   }
 
-  private showReloadOverlay(): void {
-    this.logoContainer?.classList.add('is-stalled');
+  /** Offer the action: the load has stalled, or it has failed. */
+  private showAction(): void {
+    this.container?.classList.add('is-stalled');
     this.labelReloadButton();
   }
 
   /**
-   * Take the stalled overlay back down.
+   * Take the offer back down.
    *
    * Only progress does this, never a message: a stage label changing while
-   * the ring stands still is exactly the stall the overlay is reporting.
-   * The error screen raises it again and nothing moves after that, so this
-   * cannot hide a failure.
+   * the bar stands still is exactly the stall being reported. The error
+   * screen raises it again and nothing moves after that, so this cannot
+   * hide a failure.
    */
-  private hideReloadOverlay(): void {
+  private hideAction(): void {
     if (this.errored) return;
-    this.logoContainer?.classList.remove('is-stalled');
+    this.container?.classList.remove('is-stalled');
   }
 
   private resetStallTimer(): void {
@@ -435,7 +485,7 @@ export class LoadingWidget {
     if (!this.disposed && this.currentPercent < 100) {
       this.stallTimer = setTimeout(() => {
         log.warn('[Bootstrap] Loading appears stalled');
-        this.showReloadOverlay();
+        this.showAction();
       }, this.stallBudgetMs);
     }
   }
@@ -467,40 +517,6 @@ export class LoadingWidget {
       clearTimeout(this.stallTimer);
       this.stallTimer = null;
     }
-  }
-
-  /**
-   * The reload icon, built node by node: assigning markup to `innerHTML`
-   * throws on pages with `require-trusted-types-for 'script'`.
-   */
-  private createReloadIcon(): SVGSVGElement {
-    const svg = document.createElementNS(SVG_NS, 'svg');
-    const attrs: Record<string, string> = {
-      viewBox: '0 0 24 24',
-      width: '28',
-      height: '28',
-      'aria-hidden': 'true',
-      focusable: 'false',
-      fill: 'none',
-      stroke: 'currentColor',
-      'stroke-width': '2.25',
-      'stroke-linecap': 'round',
-      'stroke-linejoin': 'round',
-    };
-    for (const [name, value] of Object.entries(attrs)) {
-      svg.setAttribute(name, value);
-    }
-    for (const d of [
-      'M3 12a9 9 0 0 1 15.5-6.3L21 8',
-      'M21 3v5h-5',
-      'M21 12a9 9 0 0 1-15.5 6.3L3 16',
-      'M3 21v-5h5',
-    ]) {
-      const path = document.createElementNS(SVG_NS, 'path');
-      path.setAttribute('d', d);
-      svg.appendChild(path);
-    }
-    return svg;
   }
 
   /**
@@ -609,13 +625,16 @@ export class LoadingWidget {
         window.matchMedia('(prefers-color-scheme: dark)').matches);
     const bg = isDark ? '#1a1a2e' : '#f4fdf7';
     const subtextColor = isDark ? '#b0b0b0' : '#666';
+    const headingColor = isDark ? '#ededed' : '#2b2c29';
+    const trackColor = isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)';
     // The accent is a brand colour, not a contrast ratio: the default
     // `#25D366` as the title on the light background is about 1.9:1. Text
     // gets a darkened or lightened variant that passes 4.5:1, and the
-    // button a variant its white icon has 3:1 against; the ring and the
+    // button a variant its white label has 3:1 against; the bar and the
     // glows keep the colour as given (audit #30, item 5.1).
     const titleColor = ensureContrast(color, bg);
     const buttonColor = ensureContrast(color, '#ffffff', 3);
+    const errorColor = this.errorColor;
 
     return `
       html, body {
@@ -650,76 +669,80 @@ export class LoadingWidget {
         to { opacity: 1; transform: translateY(0); }
       }
       .sw-logo-container {
-        position: relative;
-        display: inline-block;
-        width: 140px;
-        height: 140px;
-        margin-bottom: 2rem;
         flex: none;
-      }
-      .sw-logo-artwork {
-        position: absolute;
-        inset: 0;
         display: flex;
         align-items: center;
         justify-content: center;
-        transition: filter 0.45s ease, opacity 0.45s ease, transform 0.45s ease;
-      }
-      .sw-logo-container.is-stalled .sw-logo-artwork {
-        filter: blur(6px) saturate(0.8);
-        opacity: 0.55;
-        transform: scale(0.96);
-      }
-      .sw-progress-ring {
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        transform: rotate(-90deg);
-        /* An outer <svg> clips to its viewport by default, and the arc's
-           drop-shadow glow reaches past it: without this the glow was cut
-           off in a straight line beside and above the ring. */
-        overflow: visible;
-      }
-      .sw-progress-ring-bg {
-        fill: none;
-        stroke: ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)'};
-        stroke-width: 4;
-      }
-      .sw-progress-ring-fill {
-        fill: none;
-        stroke: ${color};
-        stroke-width: 4;
-        stroke-linecap: round;
-        transition: stroke-dashoffset 0.3s ease;
-        filter: drop-shadow(0 0 8px ${colorAlpha});
+        width: 96px;
+        height: 96px;
+        margin-bottom: 1.25rem;
       }
       .sw-logo-image {
-        width: 120px;
-        height: 120px;
-        border-radius: 50%;
-        box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+        width: 100%;
+        height: 100%;
+        /* The logo is whatever shape its author drew. Letterboxed inside
+           the box above rather than stretched, and not clipped to a circle:
+           the ring that used to justify that is gone. */
+        object-fit: contain;
+        transition: filter 0.45s ease, opacity 0.45s ease;
+      }
+      /* Stalled, and on the error screen, the artwork stops reading as
+         work in progress. On the error screen it is also a still frame;
+         see freezeLogo. */
+      #sw-loading.is-stalled .sw-logo-image {
+        filter: grayscale(1);
+        opacity: 0.6;
       }
       .sw-title {
         font-size: 2rem;
         font-weight: 700;
-        margin: 0 0 1rem 0;
+        margin: 0;
         color: ${titleColor};
         max-width: 100%;
         overflow-wrap: anywhere;
         text-align: center;
       }
-      .sw-status {
-        font-size: 1.1rem;
-        font-weight: 500;
-        color: ${subtextColor};
-        margin-top: 1rem;
+      /* One box for the headline and the status, tall enough for the
+         tallest thing either state puts in it — a failure headline over
+         two lines of explanation — with its contents sitting at the
+         bottom. A one-line stage label and a three-line failure therefore
+         leave the bar below them in the same place, so the column does not
+         jump as the labels change length or the error screen arrives. */
+      .sw-message {
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        align-items: center;
+        box-sizing: border-box;
+        width: 100%;
         /* 100% of the padded root, so the gutter holds on every viewport —
            90vw sat under the scrollbar on desktop. The second bound keeps
            the line length readable on a wide one. */
         max-width: min(100%, 40rem);
+        font-size: 1.1rem;
+        line-height: 1.45;
+        min-height: calc(3 * 1.45em);
+        margin-top: 0.75rem;
+      }
+      .sw-error-title {
+        font-size: 1em;
+        font-weight: 700;
+        margin: 0;
+        color: ${headingColor};
+        max-width: 100%;
         overflow-wrap: anywhere;
         text-align: center;
+      }
+      .sw-status {
+        font-size: 1em;
+        font-weight: 500;
+        color: ${subtextColor};
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        text-align: center;
+      }
+      #sw-loading.is-error .sw-status {
+        color: ${errorColor};
       }
       .sw-loading-dots::after {
         content: '...';
@@ -747,115 +770,109 @@ export class LoadingWidget {
         50% { clip-path: inset(0 0.5em 0 0); }
         75% { clip-path: inset(0 0 0 0); }
       }
+      .sw-progress {
+        flex: none;
+        box-sizing: border-box;
+        width: min(100%, 20rem);
+        height: 6px;
+        margin-top: 1rem;
+        border-radius: 999px;
+        background: ${trackColor};
+        overflow: hidden;
+      }
+      .sw-progress-fill {
+        width: 0%;
+        height: 100%;
+        border-radius: inherit;
+        background: ${color};
+        box-shadow: 0 0 8px ${colorAlpha};
+        transition: width 0.3s ease;
+      }
       .sw-percentage {
         font-size: 0.9rem;
         color: ${subtextColor};
         opacity: 0.7;
         margin-top: 0.5rem;
       }
-      .sw-reload-overlay {
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        width: 64px;
-        height: 64px;
-        padding: 0;
+      /* The failure is final: a bar frozen part-way and a percentage that
+         will never reach 100 only invite the user to keep waiting. */
+      #sw-loading.is-error .sw-progress,
+      #sw-loading.is-error .sw-percentage {
+        display: none;
+      }
+      /* Laid out only once it is offered. An invisible button still took
+         keyboard focus, with an invisible focus ring, and Enter reloaded
+         the page mid-download; screen readers listed it too. */
+      .sw-actions {
+        display: none;
+        margin-top: 1.25rem;
+      }
+      #sw-loading.is-stalled .sw-actions {
         display: flex;
-        align-items: center;
-        justify-content: center;
+      }
+      .sw-action {
+        font: inherit;
+        font-size: 1rem;
+        font-weight: 600;
+        line-height: 1.3;
+        max-width: 100%;
+        padding: 0.7rem 1.6rem;
         border: none;
-        border-radius: 50%;
+        border-radius: 999px;
         background: ${buttonColor};
         color: #fff;
         cursor: pointer;
-        opacity: 0;
-        pointer-events: none;
-        /* Not just transparent: an invisible button still took keyboard
-           focus, with an invisible focus ring, and Enter reloaded the page
-           mid-download. Screen readers listed it too. */
-        visibility: hidden;
-        transform: translate(-50%, -50%) scale(0.6);
-        box-shadow:
-          0 10px 28px rgba(0, 0, 0, 0.28),
-          0 0 0 0 ${colorAlpha};
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
         transition:
-          opacity 0.35s ease,
-          visibility 0.35s,
-          transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1),
+          transform 0.2s ease,
           box-shadow 0.3s ease,
-          background-color 0.3s ease;
+          opacity 0.2s ease;
+        animation: sw-action-in 0.35s ease-out both;
       }
-      .sw-logo-container.is-stalled .sw-reload-overlay {
-        opacity: 1;
-        pointer-events: auto;
-        visibility: visible;
-        transform: translate(-50%, -50%) scale(1);
-        animation: sw-reload-pulse 2.2s ease-out infinite;
+      @keyframes sw-action-in {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: translateY(0); }
       }
-      .sw-reload-overlay:hover {
-        transform: translate(-50%, -50%) scale(1.08);
-        box-shadow:
-          0 14px 34px rgba(0, 0, 0, 0.35),
-          0 0 0 6px ${colorAlpha};
-        animation: none;
+      .sw-action:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
       }
-      .sw-reload-overlay:active {
-        transform: translate(-50%, -50%) scale(0.94);
-        animation: none;
+      .sw-action:active {
+        transform: translateY(0) scale(0.98);
       }
-      .sw-reload-overlay:focus-visible {
+      .sw-action:focus-visible {
         outline: none;
         box-shadow:
-          0 10px 28px rgba(0, 0, 0, 0.28),
+          0 6px 18px rgba(0, 0, 0, 0.18),
           0 0 0 4px ${colorAlpha};
       }
-      .sw-reload-overlay:disabled {
+      .sw-action:disabled,
+      .sw-action.is-loading {
         cursor: wait;
-        opacity: 0.85;
-        animation: none;
-      }
-      .sw-reload-overlay svg {
-        transition: transform 0.3s ease;
-      }
-      .sw-reload-overlay:hover svg {
-        transform: rotate(-45deg);
-      }
-      .sw-reload-overlay.is-loading svg {
-        animation: sw-reload-spin 0.9s linear infinite;
-      }
-      @keyframes sw-reload-spin {
-        to { transform: rotate(360deg); }
-      }
-      @keyframes sw-reload-pulse {
-        0% { box-shadow: 0 10px 28px rgba(0,0,0,0.28), 0 0 0 0 ${colorAlpha}; }
-        70% { box-shadow: 0 10px 28px rgba(0,0,0,0.28), 0 0 0 14px transparent; }
-        100% { box-shadow: 0 10px 28px rgba(0,0,0,0.28), 0 0 0 0 transparent; }
+        opacity: 0.75;
       }
       @media (max-width: 480px) {
-        .sw-logo-container { width: 120px; height: 120px; }
-        .sw-logo-image { width: 100px; height: 100px; }
-        .sw-reload-overlay { width: 56px; height: 56px; }
+        .sw-logo-container { width: 80px; height: 80px; margin-bottom: 1rem; }
         .sw-title { font-size: 1.6rem; }
       }
       /* A phone in landscape leaves ~320px of height. Last, so it also
          trims the block above on a short *and* narrow viewport. */
       @media (max-height: 480px) {
         #sw-loading { padding: 16px; }
-        .sw-logo-container { width: 88px; height: 88px; margin-bottom: 0.75rem; }
-        .sw-logo-image { width: 72px; height: 72px; }
-        .sw-reload-overlay { width: 44px; height: 44px; }
-        .sw-reload-overlay svg { width: 20px; height: 20px; }
-        .sw-title { font-size: 1.4rem; margin-bottom: 0.5rem; }
-        .sw-status { font-size: 1rem; margin-top: 0.5rem; }
+        .sw-logo-container { width: 56px; height: 56px; margin-bottom: 0.5rem; }
+        .sw-title { font-size: 1.4rem; }
+        .sw-message { font-size: 1rem; margin-top: 0.5rem; }
+        .sw-progress { margin-top: 0.75rem; }
         .sw-percentage { margin-top: 0.25rem; }
+        .sw-actions { margin-top: 0.75rem; }
+        .sw-action { padding: 0.55rem 1.25rem; font-size: 0.95rem; }
       }
       @media (prefers-reduced-motion: reduce) {
         #sw-loading { animation: none; }
         .sw-loading-dots::after { animation: none; }
-        .sw-progress-ring-fill { transition: none; }
-        .sw-logo-container.is-stalled .sw-reload-overlay { animation: none; }
-        .sw-reload-overlay, .sw-reload-overlay svg,
-        .sw-logo-artwork { transition: none; }
+        .sw-progress-fill { transition: none; }
+        .sw-logo-image { transition: none; }
+        .sw-action { animation: none; transition: none; }
       }
     `;
   }
